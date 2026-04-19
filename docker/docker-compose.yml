@@ -1,0 +1,16 @@
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    command: start --user root --pass sovereign_pass
+    ports:
+      - "8000:8000"
+    volumes:
+      - surreal_data:/data
+    networks:
+      - sovereign-net
+
+volumes:
+  surreal_data:
+
+networks:
+  sovereign-net:

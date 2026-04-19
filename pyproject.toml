@@ -1,0 +1,14 @@
+[project]
+name = "sovereign"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.136.0",
+    "httpx>=0.28.1",
+    "pydantic>=2.13.1",
+    "pydantic-ai>=1.84.0",
+    "surrealdb>=1.0.8",
+    "uvicorn>=0.44.0",
+]
