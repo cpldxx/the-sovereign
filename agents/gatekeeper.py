@@ -1,7 +1,7 @@
-"""Gatekeeper - Blue Apple 방지 검증 에이전트.
+"""Gatekeeper - Validation agent for Blue Apple prevention.
 
-모든 데이터가 DB에 들어가기 전에 이 에이전트를 통과해야 한다.
-Pydantic AI가 LLM을 써서 논리적 정합성까지 검증.
+All data must pass through this agent before entering the DB.
+Uses Pydantic AI with LLM to verify logical consistency.
 """
 
 from pydantic import BaseModel, Field
@@ -11,46 +11,46 @@ from core.schema import SovereignNode
 
 
 class ValidationResult(BaseModel):
-    """검증 결과 (타입 강제)"""
+    """Typed validation output"""
 
     is_valid: bool
-    reason: str = Field(..., description="검증 통과/실패 이유")
+    reason: str = Field(..., description="Reason for pass/fail")
     corrected_reliability: float = Field(
-        ..., ge=0.0, le=1.0, description="보정된 신뢰도 점수"
+        ..., ge=0.0, le=1.0, description="Adjusted reliability score"
     )
 
 
 gatekeeper = Agent(
-    # TODO: Ollama 로컬 모델로 교체 (e.g. 'ollama:nemotron')
+    # TODO: Replace with Ollama local model (e.g. 'ollama:nemotron')
     "openai:gpt-4o-mini",
-    system_prompt="""너는 The Sovereign의 검문소(Gatekeeper)다.
+    system_prompt="""You are The Sovereign's Gatekeeper.
 
-너의 역할:
-1. 들어오는 데이터가 논리적으로 말이 되는지 검증
-2. "파란 사과" 같은 허위 정보를 차단
-3. 신뢰도 점수를 보정
+Your role:
+1. Verify that incoming data is logically sound
+2. Block false information (e.g. "blue apples exist naturally")
+3. Adjust reliability scores based on evidence
 
-검증 기준:
-- 출처가 명확한가?
-- 내용이 해당 도메인의 상식과 일치하는가?
-- 자기모순이 없는가?
+Criteria:
+- Is the source credible?
+- Does the content align with known facts in its domain?
+- Are there any self-contradictions?
 
-엄격하게 판단하라. 의심스러우면 차단이다.""",
+Be strict. When in doubt, reject.""",
     output_type=ValidationResult,
 )
 
 
 async def validate_node(node: SovereignNode) -> ValidationResult:
-    """노드가 DB에 들어가기 전 검증"""
-    prompt = f"""다음 지식 노드를 검증하라:
+    """Validate a node before it enters the DB"""
+    prompt = f"""Validate the following knowledge node:
 
-도메인: {node.domain}
-카테고리: {node.category}
-내용: {node.content}
-출처: {node.source}
-현재 신뢰도: {node.reliability}
+Domain: {node.domain}
+Category: {node.category}
+Content: {node.content}
+Source: {node.source}
+Current reliability: {node.reliability}
 
-이 정보가 논리적으로 타당한지, 허위 정보는 아닌지 판단하라."""
+Determine if this information is logically valid and not misinformation."""
 
     result = await gatekeeper.run(prompt)
     return result.output

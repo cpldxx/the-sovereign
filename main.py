@@ -1,11 +1,11 @@
-"""The Sovereign - 메인 진입점.
+"""The Sovereign - Main entry point.
 
-Phase 1: FastAPI 서버 + 기본 파이프라인 (Ingest → Validate → Store)
+Phase 1: FastAPI server + basic pipeline (Ingest -> Validate -> Store)
 """
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 
 from agents.gatekeeper import validate_node
@@ -15,7 +15,7 @@ from core.database import get_db, query_nodes, store_node
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """서버 시작/종료 시 DB 연결 관리"""
+    """Manage DB connection on server start/stop"""
     app.state.db = await get_db()
     yield
     await app.state.db.close()
@@ -23,7 +23,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="The Sovereign",
-    description="독립적 인공 지능 체계 - 1,000억 노드 지식 그래프",
+    description="Autonomous intelligence system - 100B node knowledge graph",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -42,14 +42,14 @@ async def root():
 
 @app.post("/ingest")
 async def ingest(request: IngestRequest):
-    """Phase 1 파이프라인: 수집 → 검증 → 저장"""
+    """Phase 1 pipeline: Ingest -> Validate -> Store"""
 
-    # Step 1: Ingestor - 원시 데이터를 노드로 변환
+    # Step 1: Ingestor - convert raw data to nodes
     nodes = await ingest_raw_data(request.raw_text, request.domain, request.source)
 
     results = []
     for node in nodes:
-        # Step 2: Gatekeeper - 각 노드 검증
+        # Step 2: Gatekeeper - validate each node
         validation = await validate_node(node)
 
         if not validation.is_valid:
@@ -60,10 +60,10 @@ async def ingest(request: IngestRequest):
             })
             continue
 
-        # 신뢰도 보정 적용
+        # Apply corrected reliability
         node.reliability = validation.corrected_reliability
 
-        # Step 3: Architect - DB에 저장
+        # Step 3: Store in DB
         stored = await store_node(app.state.db, node)
         results.append({
             "uid": node.uid,
@@ -81,7 +81,7 @@ async def ingest(request: IngestRequest):
 
 @app.get("/nodes")
 async def list_nodes(domain: str | None = None):
-    """저장된 노드 조회"""
+    """Query stored nodes"""
     nodes = await query_nodes(app.state.db, domain)
     return {"nodes": nodes}
 

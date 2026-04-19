@@ -1,6 +1,6 @@
-"""SurrealDB 연결 및 CRUD 로직"""
+"""SurrealDB connection and CRUD operations"""
 
-from surrealdb import Surreal
+from surrealdb import AsyncSurreal
 
 from core.schema import SovereignEdge, SovereignNode
 
@@ -9,22 +9,21 @@ DB_NAMESPACE = "sovereign"
 DB_DATABASE = "brain"
 
 
-async def get_db() -> Surreal:
-    db = Surreal(DB_URL)
-    await db.connect()
-    await db.use(DB_NAMESPACE, DB_DATABASE)
+async def get_db() -> AsyncSurreal:
+    db = AsyncSurreal(DB_URL)
     await db.signin({"user": "root", "pass": "sovereign_pass"})
+    await db.use(DB_NAMESPACE, DB_DATABASE)
     return db
 
 
-async def store_node(db: Surreal, node: SovereignNode) -> dict:
-    """검증된 노드를 DB에 저장"""
+async def store_node(db: AsyncSurreal, node: SovereignNode) -> dict:
+    """Store a validated node into the knowledge graph"""
     result = await db.create("knowledge_node", node.model_dump(mode="json"))
     return result
 
 
-async def store_edge(db: Surreal, edge: SovereignEdge) -> dict:
-    """노드 간 관계를 DB에 저장"""
+async def store_edge(db: AsyncSurreal, edge: SovereignEdge) -> dict:
+    """Store a relationship between two nodes"""
     result = await db.query(
         "RELATE $from_node->$relation->$to_node SET weight = $weight",
         {
@@ -37,8 +36,8 @@ async def store_edge(db: Surreal, edge: SovereignEdge) -> dict:
     return result
 
 
-async def query_nodes(db: Surreal, domain: str | None = None) -> list[dict]:
-    """노드 조회 (도메인 필터 가능)"""
+async def query_nodes(db: AsyncSurreal, domain: str | None = None) -> list[dict]:
+    """Query nodes with optional domain filter"""
     if domain:
         result = await db.query(
             "SELECT * FROM knowledge_node WHERE domain = $domain",
