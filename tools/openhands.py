@@ -15,7 +15,7 @@ from pathlib import Path
 import docker
 
 OPENHANDS_IMAGE = "ghcr.io/all-hands-ai/openhands:0.40"
-RUNTIME_IMAGE = "ghcr.io/all-hands-ai/runtime:nikolaik-python3.12-nodejs22"
+RUNTIME_IMAGE = "ghcr.io/all-hands-ai/runtime:0.40.0-nikolaik"
 CODER_MODEL = "openai/qwen2.5-coder:7b"
 TASK_TIMEOUT = 300  # seconds
 
