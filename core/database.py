@@ -1,17 +1,24 @@
 """SurrealDB connection and CRUD operations"""
 
+import os
+
+from dotenv import load_dotenv
 from surrealdb import AsyncSurreal
 
 from core.schema import SovereignEdge, SovereignNode
 
-DB_URL = "ws://localhost:8000/rpc"
-DB_NAMESPACE = "sovereign"
-DB_DATABASE = "brain"
+load_dotenv()
+
+DB_URL = os.getenv("SURREAL_URL", "ws://localhost:8000/rpc")
+DB_NAMESPACE = os.getenv("SURREAL_NS", "sovereign")
+DB_DATABASE = os.getenv("SURREAL_DB", "brain")
+DB_USER = os.getenv("SURREAL_USER", "root")
+DB_PASS = os.getenv("SURREAL_PASS", "sovereign_pass")
 
 
 async def get_db() -> AsyncSurreal:
     db = AsyncSurreal(DB_URL)
-    await db.signin({"user": "root", "pass": "sovereign_pass"})
+    await db.signin({"username": DB_USER, "password": DB_PASS})
     await db.use(DB_NAMESPACE, DB_DATABASE)
     return db
 

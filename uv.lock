@@ -2480,6 +2480,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pydantic-ai" },
+    { name = "python-dotenv" },
     { name = "surrealdb" },
     { name = "uvicorn" },
 ]
@@ -2490,6 +2491,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.13.1" },
     { name = "pydantic-ai", specifier = ">=1.84.0" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "surrealdb", specifier = ">=1.0.8" },
     { name = "uvicorn", specifier = ">=0.44.0" },
 ]

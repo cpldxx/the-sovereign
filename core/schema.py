@@ -1,7 +1,6 @@
 """The Law - Standard schema for all knowledge nodes"""
 
 from datetime import datetime
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -12,7 +11,7 @@ class SovereignNode(BaseModel):
     """
 
     uid: str = Field(..., description="Unique identifier (domain:type:hash)")
-    domain: Literal["quant", "artisanal", "academic"]
+    domain: str = Field(..., min_length=1, description="Knowledge domain (e.g. 'quant', 'artisanal', 'academic', or any custom domain)")
     category: str = Field(..., description="Sub-category (e.g. 'btc_price', 'perfume_recipe', 'optimization')")
     content: str = Field(..., min_length=1, description="Actual knowledge content")
     source: str = Field(..., description="Source (URL, paper name, API, etc.)")

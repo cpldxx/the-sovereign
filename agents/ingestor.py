@@ -1,41 +1,41 @@
 """Ingestor - Data collection agent.
 
 Extracts knowledge from raw data and converts it into SovereignNode format.
+Uses domain-specific prompts for better extraction.
 """
 
+import os
+
+from dotenv import load_dotenv
 from pydantic_ai import Agent
 
 from core.schema import SovereignNode
 
-ingestor = Agent(
-    # TODO: Replace with Ollama local model
-    "openai:gpt-4o-mini",
-    system_prompt="""You are The Sovereign's Ingestor.
+load_dotenv()
 
-Your role:
-1. Analyze raw input data
-2. Extract key knowledge
-3. Format it into SovereignNode schema
-
-Rules:
-- Multiple nodes can be extracted from a single input
-- Each node must contain exactly one clear fact
-- Source must always be specified
-- Reliability is scored based on source authority and verifiability""",
-    output_type=list[SovereignNode],
-)
+MODEL = os.getenv("OLLAMA_MODEL", "ollama:llama3.1:8b")
 
 
-async def ingest_raw_data(raw_text: str, domain: str, source: str) -> list[SovereignNode]:
+def create_ingestor(system_prompt: str) -> Agent:
+    """Create an ingestor agent with domain-specific prompt"""
+    return Agent(MODEL, system_prompt=system_prompt, output_type=list[SovereignNode], retries=5)
+
+
+async def ingest_raw_data(raw_text: str, domain_config: dict, prompts_module) -> list[SovereignNode]:
     """Convert raw data into a list of SovereignNodes"""
+    name = domain_config["name"]
+    description = domain_config["description"]
+
+    agent = create_ingestor(prompts_module.ingestor_prompt(name, description))
+
     prompt = f"""Extract knowledge nodes from the following raw data:
 
-Domain: {domain}
-Source: {source}
+Domain: {name}
+Source: provided input
 Data:
 {raw_text}
 
-Format each node's uid as '{domain}:extracted_category:serial_number'."""
+Format each node's uid as '{name}:extracted_category:serial_number'."""
 
-    result = await ingestor.run(prompt)
+    result = await agent.run(prompt)
     return result.output

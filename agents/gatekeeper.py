@@ -4,10 +4,17 @@ All data must pass through this agent before entering the DB.
 Uses Pydantic AI with LLM to verify logical consistency.
 """
 
+import os
+
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
 from core.schema import SovereignNode
+
+load_dotenv()
+
+MODEL = os.getenv("OLLAMA_MODEL", "ollama:llama3.1:8b")
 
 
 class ValidationResult(BaseModel):
@@ -20,31 +27,21 @@ class ValidationResult(BaseModel):
     )
 
 
-gatekeeper = Agent(
-    # TODO: Replace with Ollama local model (e.g. 'ollama:nemotron')
-    "openai:gpt-4o-mini",
-    system_prompt="""You are The Sovereign's Gatekeeper.
-
-Your role:
-1. Verify that incoming data is logically sound
-2. Block false information (e.g. "blue apples exist naturally")
-3. Adjust reliability scores based on evidence
-
-Criteria:
-- Is the source credible?
-- Does the content align with known facts in its domain?
-- Are there any self-contradictions?
-
-Be strict. When in doubt, reject.""",
-    output_type=ValidationResult,
-)
+def create_gatekeeper(system_prompt: str) -> Agent:
+    """Create a gatekeeper agent with domain-specific prompt"""
+    return Agent(MODEL, system_prompt=system_prompt, output_type=ValidationResult, retries=5)
 
 
-async def validate_node(node: SovereignNode) -> ValidationResult:
+async def validate_node(node: SovereignNode, domain_config: dict, prompts_module) -> ValidationResult:
     """Validate a node before it enters the DB"""
+    name = domain_config["name"]
+    description = domain_config["description"]
+
+    agent = create_gatekeeper(prompts_module.gatekeeper_prompt(name, description))
+
     prompt = f"""Validate the following knowledge node:
 
-Domain: {node.domain}
+Domain: {name}
 Category: {node.category}
 Content: {node.content}
 Source: {node.source}
@@ -52,5 +49,5 @@ Current reliability: {node.reliability}
 
 Determine if this information is logically valid and not misinformation."""
 
-    result = await gatekeeper.run(prompt)
+    result = await agent.run(prompt)
     return result.output
