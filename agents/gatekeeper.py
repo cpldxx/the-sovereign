@@ -33,7 +33,11 @@ def create_gatekeeper(system_prompt: str) -> Agent:
 
 
 async def validate_node(node: SovereignNode, domain_config: dict, prompts_module) -> ValidationResult:
-    """Validate a node before it enters the DB"""
+    """Validate a node before it enters the DB.
+
+    Never raises — if the LLM fails after all retries, returns a safe reject
+    so the pipeline keeps running and nothing enters the DB unvalidated.
+    """
     name = domain_config["name"]
     description = domain_config["description"]
 
@@ -49,5 +53,12 @@ Current reliability: {node.reliability}
 
 Determine if this information is logically valid and not misinformation."""
 
-    result = await agent.run(prompt)
-    return result.output
+    try:
+        result = await agent.run(prompt)
+        return result.output
+    except Exception as e:
+        return ValidationResult(
+            is_valid=False,
+            reason=f"Gatekeeper failed after all retries: {type(e).__name__}",
+            corrected_reliability=0.0,
+        )

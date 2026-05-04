@@ -37,5 +37,8 @@ Data:
 
 Format each node's uid as '{name}:extracted_category:serial_number'."""
 
-    result = await agent.run(prompt)
-    return result.output
+    try:
+        result = await agent.run(prompt)
+        return result.output
+    except Exception as e:
+        return []

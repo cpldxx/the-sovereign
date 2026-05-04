@@ -30,10 +30,15 @@ def create_architect(system_prompt: str) -> Agent:
 
 
 async def suggest_edges(
-    new_node_summary: str, existing_nodes_summary: str,
-    domain_config: dict, prompts_module
+    new_node_summary: str,
+    existing_nodes_summary: str,
+    domain_config: dict,
+    prompts_module,
 ) -> list[EdgeSuggestion]:
-    """Suggest relationships between nodes within the domain"""
+    """Suggest relationships between the new node and existing nodes.
+
+    Never raises — returns empty list on failure so the pipeline keeps running.
+    """
     name = domain_config["name"]
     description = domain_config["description"]
 
@@ -47,5 +52,8 @@ Existing nodes in {name} domain:
 
 Suggest meaningful relationships between these nodes."""
 
-    result = await agent.run(prompt)
-    return result.output
+    try:
+        result = await agent.run(prompt)
+        return result.output
+    except Exception:
+        return []
