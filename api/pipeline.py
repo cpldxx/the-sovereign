@@ -1,5 +1,7 @@
 """Ingest pipeline routes."""
 
+import asyncio
+import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
@@ -14,6 +16,9 @@ from tools.openhands import generate_domain_tools
 router = APIRouter(prefix="/domains", tags=["pipeline"])
 
 DOMAINS_DIR = Path(__file__).parent.parent / "domains"
+
+# In-memory job store: job_id -> {"status": ..., "domain": ..., "result": ..., "error": ...}
+_jobs: dict[str, dict] = {}
 
 
 class IngestRequest(BaseModel):
@@ -68,33 +73,53 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
     }
 
 
+async def _run_generate_job(job_id: str, domain_name: str, config: dict, tools_path: Path):
+    """Background task: run OpenHands and update job state when done."""
+    try:
+        generated_code = await generate_domain_tools(domain_name, config)
+        tools_path.write_text(generated_code)
+        _jobs[job_id] = {
+            "status": "done",
+            "domain": domain_name,
+            "lines": generated_code.count("\n") + 1,
+        }
+    except Exception as e:
+        _jobs[job_id] = {
+            "status": "failed",
+            "domain": domain_name,
+            "error": str(e)[:500],
+        }
+
+
 @router.post("/{domain_name}/generate-tools")
-async def generate_tools(domain_name: str):
+async def generate_tools(domain_name: str, background_tasks: BackgroundTasks):
     """
-    Spawn an ephemeral OpenHands container to generate domain-specific tools.py.
-    Overwrites domains/{domain_name}/tools.py with the AI-generated implementation.
+    Kick off OpenHands code generation in the background.
+    Returns immediately with a job_id. Poll /generate-tools/status/{job_id} for result.
     """
     try:
         domain = load_domain(domain_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    config = domain["config"]
     tools_path = DOMAINS_DIR / domain_name / "tools.py"
-
     if not tools_path.parent.exists():
         raise HTTPException(status_code=404, detail=f"Domain directory not found: {domain_name}")
 
-    try:
-        generated_code = await generate_domain_tools(domain_name, config)
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    job_id = str(uuid.uuid4())
+    _jobs[job_id] = {"status": "generating", "domain": domain_name}
 
-    tools_path.write_text(generated_code)
+    background_tasks.add_task(
+        _run_generate_job, job_id, domain_name, domain["config"], tools_path
+    )
 
-    return {
-        "domain": domain_name,
-        "status": "generated",
-        "path": str(tools_path),
-        "lines": generated_code.count("\n") + 1,
-    }
+    return {"status": "generating", "job_id": job_id, "domain": domain_name}
+
+
+@router.get("/generate-tools/status/{job_id}")
+async def generate_tools_status(job_id: str):
+    """Check the status of a generate-tools job."""
+    job = _jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+    return job
