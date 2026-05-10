@@ -20,7 +20,7 @@ Rules:
 - domain field must always be '{domain_name}'
 - tags must be a list of strings
 
-CRITICAL: You MUST respond with valid JSON only. No extra text, no explanations."""
+Extract all knowledge nodes. Be thorough."""
 
 
 def gatekeeper_prompt(domain_name: str, description: str) -> str:
