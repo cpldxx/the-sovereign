@@ -1,12 +1,12 @@
 """Architect - Graph builder agent.
 
-Stores validated nodes in SurrealDB and discovers relationships.
+Discovers relationships between all nodes in a single LLM call.
 """
 
 import os
 
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent
 
 load_dotenv()
@@ -15,8 +15,6 @@ MODEL = os.getenv("OLLAMA_MODEL", "ollama:llama3.1:8b")
 
 
 class EdgeSuggestion(BaseModel):
-    """Agent-suggested relationship between nodes"""
-
     from_uid: str
     to_uid: str
     relation: str
@@ -24,36 +22,53 @@ class EdgeSuggestion(BaseModel):
     reasoning: str = Field(..., description="Why this relationship exists")
 
 
-def create_architect(system_prompt: str) -> Agent:
-    """Create an architect agent with domain-specific prompt"""
-    return Agent(MODEL, system_prompt=system_prompt, output_type=list[EdgeSuggestion])
+class EdgeList(BaseModel):
+    edges: list[EdgeSuggestion]
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap(cls, v):
+        if isinstance(v, list):
+            return {"edges": v}
+        if isinstance(v, dict) and "arguments" in v:
+            args = v["arguments"]
+            if isinstance(args, list):
+                return {"edges": args}
+            return args
+        return v
 
 
-async def suggest_edges(
-    new_node_summary: str,
-    existing_nodes_summary: str,
+async def suggest_all_edges(
+    nodes: list,
     domain_config: dict,
     prompts_module,
 ) -> list[EdgeSuggestion]:
-    """Suggest relationships between the new node and existing nodes.
+    """Discover all relationships between nodes in a single LLM call.
 
-    Never raises — returns empty list on failure so the pipeline keeps running.
+    Never raises — returns empty list on failure.
     """
+    if len(nodes) < 2:
+        return []
+
     name = domain_config["name"]
     description = domain_config["description"]
 
-    agent = create_architect(prompts_module.architect_prompt(name, description))
+    agent = Agent(MODEL, system_prompt=prompts_module.architect_prompt(name, description), output_type=EdgeList)
 
-    prompt = f"""Newly added node:
-{new_node_summary}
+    nodes_text = "\n".join(
+        f"[{n.uid}] {n.category}: {n.content}"
+        for n in nodes
+    )
 
-Existing nodes in {name} domain:
-{existing_nodes_summary}
+    prompt = f"""Discover all meaningful relationships between these nodes in the {name} domain.
 
-Suggest meaningful relationships between these nodes."""
+Nodes:
+{nodes_text}
+
+Suggest edges between any pairs that have a meaningful relationship."""
 
     try:
         result = await agent.run(prompt)
-        return result.output
+        return result.output.edges
     except Exception:
         return []

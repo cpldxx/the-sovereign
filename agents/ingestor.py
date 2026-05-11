@@ -7,7 +7,7 @@ Uses domain-specific prompts for better extraction.
 import os
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from pydantic_ai import Agent
 
 from core.schema import SovereignNode
@@ -16,10 +16,19 @@ load_dotenv()
 
 MODEL = os.getenv("OLLAMA_MODEL", "ollama:llama3.1:8b")
 
-
 class NodeList(BaseModel):
-    """Wrapper so LLM can return {"nodes": [...]} without schema mismatch."""
+    """Accepts both {"nodes": [...]} and plain [...] from LLM."""
     nodes: list[SovereignNode]
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_if_list(cls, v):
+        if isinstance(v, list):
+            return {"nodes": v}
+        # Pydantic AI tool call format: {"name": "final_result", "arguments": {...}}
+        if isinstance(v, dict) and "arguments" in v:
+            return v["arguments"]
+        return v
 
 
 def create_ingestor(system_prompt: str) -> Agent:
@@ -49,5 +58,6 @@ Format each node's uid as '{name}:extracted_category:serial_number'."""
     except Exception as e:
         import traceback
         print(f"[Ingestor] failed: {type(e).__name__}: {e}")
+        print(f"[Ingestor] full cause: {getattr(e, '__cause__', None)}")
         traceback.print_exc()
         return []
