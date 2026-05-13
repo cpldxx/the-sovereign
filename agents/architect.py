@@ -11,7 +11,7 @@ from pydantic_ai import Agent
 
 load_dotenv()
 
-MODEL = os.getenv("OLLAMA_MODEL", "ollama:llama3.1:8b")
+MODEL = os.getenv("OLLAMA_MODEL_ARCHITECT", "ollama:qwen2.5:7b")
 
 
 class EdgeSuggestion(BaseModel):

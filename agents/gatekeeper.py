@@ -14,7 +14,7 @@ from core.schema import SovereignNode
 
 load_dotenv()
 
-MODEL = os.getenv("OLLAMA_MODEL", "ollama:llama3.1:8b")
+MODEL = os.getenv("OLLAMA_MODEL_GATEKEEPER", "ollama:qwen2.5:32b")
 
 
 class NodeValidation(BaseModel):
