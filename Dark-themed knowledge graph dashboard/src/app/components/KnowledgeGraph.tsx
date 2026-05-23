@@ -375,7 +375,7 @@ export function KnowledgeGraph({ domain }: { domain: string }) {
         setIsLoading(false);
       })
       .catch(() => setIsLoading(false));
-  }, [domain, mockData]);
+  }, [domain]);
 
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
     const raw = graphData?.nodes.find(n => n.id === node.id);

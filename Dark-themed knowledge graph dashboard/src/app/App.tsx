@@ -63,32 +63,25 @@ const API_BASE = 'http://localhost:8080';
 
 /* ===== App ===== */
 export default function App() {
-  const [domains, setDomains] = useState<string[]>([]);
-  const [selected, setSelected] = useState<string>('');
-  const [ready, setReady] = useState(false);
+  const [domains, setDomains] = useState<string[]>(() => loadDomains());
+  const [selected, setSelected] = useState<string>(() => loadDomains()[0] ?? '');
 
-  // Fetch domains from API, fall back to localStorage
+  // Fetch domains from API in background
   useEffect(() => {
-    fetch(`${API_BASE}/domains`)
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    fetch(`${API_BASE}/domains`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         const apiDomains: string[] = d.domains ?? [];
         if (apiDomains.length > 0) {
           setDomains(apiDomains);
-          setSelected(apiDomains[0]);
-        } else {
-          const saved = loadDomains();
-          setDomains(saved);
-          if (saved.length > 0) setSelected(saved[0]);
+          setSelected((prev: string) => prev || apiDomains[0]);
         }
       })
-      .catch(() => {
-        // API offline — use localStorage
-        const saved = loadDomains();
-        setDomains(saved);
-        if (saved.length > 0) setSelected(saved[0]);
-      })
-      .finally(() => setReady(true));
+      .catch(() => {})
+      .finally(() => clearTimeout(timeout));
+    return () => controller.abort();
   }, []);
 
   const handleCreateDomain = async (name: string) => {
@@ -107,8 +100,6 @@ export default function App() {
     saveDomains(updated);
     setSelected(name);
   };
-
-  if (!ready) return null;
 
   // New user → landing page
   if (domains.length === 0) {
