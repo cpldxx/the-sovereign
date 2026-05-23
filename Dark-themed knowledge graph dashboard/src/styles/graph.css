@@ -1,0 +1,76 @@
+/* ===== SOVEREIGN — design system ===== */
+
+:root {
+  --bg:           #07090c;
+  --bg-2:         #0a0c10;
+  --surface:      #0e1117;
+  --surface-2:    #141923;
+  --surface-3:    #1a2030;
+  --border:       #1f2632;
+  --border-2:     #2a3344;
+  --border-3:     #3a4250;
+  --text:         #e6ebf2;
+  --text-dim:     #8b94a3;
+  --text-faint:   #545b68;
+  --text-ghost:   #353c47;
+  --accent:       #f0b86e;
+  --accent-dim:   #a17b48;
+  --cyan:         #4fd1c5;
+  --cyan-dim:     #2d8c84;
+  --warn:         #fc8181;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans: "Inter", -apple-system, system-ui, sans-serif;
+  --topbar-h: 52px;
+  --statusbar-h: 26px;
+}
+
+* { box-sizing: border-box; }
+
+/* ===== REACT FLOW ===== */
+
+.react-flow__renderer { background: var(--bg-2); }
+.react-flow__attribution { display: none !important; }
+.react-flow__node { outline: none !important; cursor: pointer; }
+.react-flow__edge:focus { outline: none; }
+.react-flow__edge.selected .react-flow__edge-path { stroke: var(--accent); }
+
+.react-flow__controls {
+  box-shadow: none !important;
+  background: rgba(14,17,23,0.92) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 3px !important;
+  backdrop-filter: blur(8px);
+}
+.react-flow__controls-button {
+  background: transparent !important;
+  border: none !important;
+  border-bottom: 1px solid var(--border) !important;
+  color: var(--text-dim) !important;
+  width: 28px !important;
+  height: 28px !important;
+  fill: currentColor !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+}
+.react-flow__controls-button:last-child { border-bottom: none !important; }
+.react-flow__controls-button svg { max-width: 12px; max-height: 12px; }
+
+.react-flow__minimap {
+  background: rgba(14,17,23,0.92) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 3px !important;
+}
+
+.react-flow__background { background-color: var(--bg-2) !important; }
+
+/* edge path square caps */
+.react-flow__edge-path { stroke-linecap: square; }
+
+/* animated edge (high weight) */
+.react-flow__edge.animated .react-flow__edge-path {
+  stroke-dasharray: 6 3;
+  animation: edgedash 1s linear infinite;
+}
+@keyframes edgedash { to { stroke-dashoffset: -18; } }

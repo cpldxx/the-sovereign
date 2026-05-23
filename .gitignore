@@ -1,6 +1,13 @@
+# Python
 .venv/
 .env
 __pycache__/
 *.pyc
+
+# Frontend
+Dark-themed knowledge graph dashboard/node_modules/
+Dark-themed knowledge graph dashboard/dist/
+
+# System
 .DS_Store
 CLAUDE.md
