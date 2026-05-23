@@ -2503,13 +2503,13 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "docker", specifier = ">=7.1.0" },
-    { name = "fastapi", specifier = ">=0.136.0" },
+    { name = "fastapi", specifier = ">=0.133.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "pydantic", specifier = ">=2.13.1" },
     { name = "pydantic-ai", specifier = ">=1.84.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "surrealdb", specifier = ">=1.0.8" },
-    { name = "uvicorn", specifier = ">=0.44.0" },
+    { name = "uvicorn", specifier = ">=0.41.0" },
 ]
 
 [[package]]

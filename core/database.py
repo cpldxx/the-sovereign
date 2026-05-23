@@ -31,15 +31,7 @@ async def store_node(db: AsyncSurreal, node: SovereignNode) -> dict:
 
 async def store_edge(db: AsyncSurreal, edge: SovereignEdge) -> dict:
     """Store a relationship between two nodes"""
-    result = await db.query(
-        "RELATE $from_node->$relation->$to_node SET weight = $weight",
-        {
-            "from_node": edge.from_node,
-            "to_node": edge.to_node,
-            "relation": edge.relation,
-            "weight": edge.weight,
-        },
-    )
+    result = await db.create("knowledge_edge", edge.model_dump(mode="json"))
     return result
 
 
@@ -52,4 +44,17 @@ async def query_nodes(db: AsyncSurreal, domain: str | None = None) -> list[dict]
         )
     else:
         result = await db.query("SELECT * FROM knowledge_node")
+    return result
+
+
+async def query_edges(db: AsyncSurreal, domain: str | None = None) -> list[dict]:
+    """Query all edges from knowledge_edge table"""
+    if domain:
+        # from_node uid starts with domain name
+        result = await db.query(
+            "SELECT * FROM knowledge_edge WHERE string::starts_with(from_node, $prefix)",
+            {"prefix": domain + ":"},
+        )
+    else:
+        result = await db.query("SELECT * FROM knowledge_edge")
     return result

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from api.domains import router as domains_router
+from api.graph import router as graph_router
 from api.pipeline import router as pipeline_router
 from core.database import get_db
 
@@ -25,6 +26,7 @@ app = FastAPI(
 
 app.include_router(domains_router)
 app.include_router(pipeline_router)
+app.include_router(graph_router)
 
 
 @app.get("/")
