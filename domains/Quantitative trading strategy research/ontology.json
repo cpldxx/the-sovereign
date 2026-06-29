@@ -1,0 +1,4 @@
+{
+  "entity_types": ["technical_indicator", "price_pattern", "risk_signal", "strategy", "market_condition", "asset", "performance_metric"],
+  "relation_types": ["confirms", "contradicts", "triggers", "requires", "correlates_with", "precedes"]
+}

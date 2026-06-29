@@ -1,16 +1,16 @@
-"""Domain-specific agent prompts template."""
+"""Domain-specific agent prompts for Quantitative trading strategy research."""
 
 
 def ingestor_prompt(domain_name: str, description: str, ontology: dict | None = None) -> str:
     entity_types = ontology.get("entity_types", []) if ontology else []
-    types_str = ", ".join(entity_types) if entity_types else "any relevant category"
+    types_str = ", ".join(entity_types) if entity_types else "technical_indicator, price_pattern, risk_signal, strategy, market_condition, asset, performance_metric"
 
     return f"""You are The Sovereign's Ingestor for the "{domain_name}" domain.
 Domain description: {description}
 
 Your role:
-1. Analyze raw input data related to {domain_name}
-2. Extract key knowledge facts
+1. Analyze raw input data related to quantitative trading strategies
+2. Extract key knowledge facts about indicators, patterns, strategies, and market conditions
 3. Format each fact as a SovereignNode
 
 Rules:
@@ -28,15 +28,15 @@ Extract all knowledge nodes. Be thorough."""
 
 def gatekeeper_prompt(domain_name: str, description: str, ontology: dict | None = None) -> str:
     entity_types = ontology.get("entity_types", []) if ontology else []
-    types_str = ", ".join(entity_types) if entity_types else "any relevant category"
+    types_str = ", ".join(entity_types) if entity_types else "technical_indicator, price_pattern, risk_signal, strategy, market_condition, asset, performance_metric"
 
     return f"""You are The Sovereign's Gatekeeper for the "{domain_name}" domain.
 Domain description: {description}
 
 Your role:
-1. Verify that incoming data is logically sound within the {domain_name} domain
-2. Block false or hallucinated information
-3. Adjust reliability scores based on evidence
+1. Verify that incoming data is factual and relevant to quantitative trading
+2. Block false or hallucinated information — this is a trading system, accuracy matters
+3. Adjust reliability scores based on evidence quality
 4. REJECT any node whose 'category' is not one of: {types_str}
 
 Be strict. When in doubt, reject. Zero hallucinations allowed.
@@ -46,17 +46,17 @@ CRITICAL: You MUST respond with valid JSON only. No extra text, no explanations.
 
 def architect_prompt(domain_name: str, description: str, ontology: dict | None = None) -> str:
     relation_types = ontology.get("relation_types", []) if ontology else []
-    relations_str = ", ".join(relation_types) if relation_types else "any relevant relation"
+    relations_str = ", ".join(relation_types) if relation_types else "confirms, contradicts, triggers, requires, correlates_with, precedes"
 
     return f"""You are The Sovereign's Architect for the "{domain_name}" domain.
 Domain description: {description}
 
 Your role:
-1. Discover relationships between validated knowledge nodes
+1. Discover relationships between validated trading knowledge nodes
 2. Assess relationship strength (0.0 to 1.0)
 3. CRITICAL: 'relation' field must be EXACTLY one of: {relations_str}
    Do NOT invent new relation types.
 
-Focus on finding non-obvious patterns and connections within {domain_name}.
+Focus on finding non-obvious causal and correlative patterns in trading data.
 
 CRITICAL: You MUST respond with valid JSON only. No extra text, no explanations."""

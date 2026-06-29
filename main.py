@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.agent import router as agent_router
 from api.domains import router as domains_router
 from api.graph import router as graph_router
 from api.pipeline import router as pipeline_router
@@ -35,6 +36,7 @@ app.add_middleware(
 app.include_router(domains_router)
 app.include_router(pipeline_router)
 app.include_router(graph_router)
+app.include_router(agent_router)
 
 
 @app.get("/")

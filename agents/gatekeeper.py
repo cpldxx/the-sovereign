@@ -55,7 +55,7 @@ class ValidationResult(BaseModel):
 
 
 async def validate_nodes_batch(
-    nodes: list[SovereignNode], domain_config: dict, prompts_module
+    nodes: list[SovereignNode], domain_config: dict, prompts_module, ontology: dict | None = None
 ) -> list[NodeValidation]:
     """Validate all nodes in a single LLM call.
 
@@ -68,7 +68,7 @@ async def validate_nodes_batch(
     name = domain_config["name"]
     description = domain_config["description"]
 
-    agent = Agent(MODEL, system_prompt=prompts_module.gatekeeper_prompt(name, description), output_type=BatchValidationResult, retries=5)
+    agent = Agent(MODEL, system_prompt=prompts_module.gatekeeper_prompt(name, description, ontology), output_type=BatchValidationResult, retries=5)
 
     nodes_text = "\n\n".join(
         f"[{i+1}] uid: {n.uid}\n  category: {n.category}\n  content: {n.content}\n  source: {n.source}\n  reliability: {n.reliability}"

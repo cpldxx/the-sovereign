@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Routes, Route, useNavigate, useParams, Navigate } from 'react-router';
 import { KnowledgeGraph } from './components/KnowledgeGraph';
+import { IngestPanel } from './components/IngestPanel';
+import { ChatPanel } from './components/ChatPanel';
 import { LandingPage } from './components/LandingPage';
 import '../styles/graph.css';
 
@@ -37,11 +39,92 @@ function Landing() {
   return <LandingPage onEnter={handleEnter} />;
 }
 
+type WorkspaceTab = 'graph' | 'ingest' | 'ask';
+
+const TABS: { id: WorkspaceTab; label: string }[] = [
+  { id: 'graph', label: 'Graph' },
+  { id: 'ingest', label: 'Ingest' },
+  { id: 'ask', label: 'Ask' },
+];
+
+/* ===== Delete confirm modal ===== */
+function DeleteModal({ domain, onCancel, onConfirm }: {
+  domain: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, zIndex: 100,
+      background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+    }}
+      onClick={onCancel}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: 'var(--surface)', border: '1px solid var(--border-2)',
+          borderRadius: 4, padding: '28px 32px', width: 420,
+          fontFamily: 'var(--mono)',
+        }}
+      >
+        <div style={{ fontSize: 10, letterSpacing: '0.2em', color: 'var(--warn)', textTransform: 'uppercase', marginBottom: 14 }}>
+          Delete domain
+        </div>
+        <div style={{ fontSize: 15, fontFamily: 'var(--sans)', color: 'var(--text)', marginBottom: 8, lineHeight: 1.4 }}>
+          Delete <span style={{ color: 'var(--accent)' }}>{domain}</span>?
+        </div>
+        <div style={{ fontSize: 11.5, color: 'var(--text-dim)', marginBottom: 28, lineHeight: 1.6, fontFamily: 'var(--sans)' }}>
+          All nodes, edges, and the knowledge graph for this domain will be permanently removed. This cannot be undone.
+        </div>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '7px 18px', background: 'transparent',
+              border: '1px solid var(--border-2)', borderRadius: 2, cursor: 'pointer',
+              fontFamily: 'var(--mono)', fontSize: 10.5, letterSpacing: '0.1em',
+              color: 'var(--text-dim)', textTransform: 'uppercase', transition: 'all 150ms',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.borderColor = 'var(--border-3)')}
+            onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border-2)')}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            style={{
+              padding: '7px 18px', background: 'rgba(252,129,129,0.12)',
+              border: '1px solid var(--warn)', borderRadius: 2, cursor: 'pointer',
+              fontFamily: 'var(--mono)', fontSize: 10.5, letterSpacing: '0.1em',
+              color: 'var(--warn)', textTransform: 'uppercase', transition: 'all 150ms',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(252,129,129,0.22)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ===== Workspace ===== */
 function Workspace() {
   const navigate = useNavigate();
   const { domain: domainParam } = useParams<{ domain: string }>();
   const [domains, setDomains] = useState<string[]>(() => loadDomains());
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('graph');
+  const [graphVersion, setGraphVersion] = useState(0);
+  const [hoveredDomain, setHoveredDomain] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+  const handleIngestSuccess = () => {
+    setGraphVersion(v => v + 1);
+    setActiveTab('graph');
+  };
 
   const activeDomain = domainParam ? decodeURIComponent(domainParam) : '';
 
@@ -68,6 +151,19 @@ function Workspace() {
     return () => controller.abort();
   }, []);
 
+  const handleDeleteDomain = async (name: string) => {
+    try {
+      await fetch(`${API_BASE}/domains/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    } catch {}
+    const updated = domains.filter(d => d !== name);
+    setDomains(updated);
+    saveDomains(updated);
+    setDeleteTarget(null);
+    if (activeDomain === name) {
+      navigate(updated.length > 0 ? `/workspace/${encodeURIComponent(updated[0])}` : '/');
+    }
+  };
+
   const handleNewDomain = async () => {
     const name = prompt('Domain name:');
     if (!name?.trim()) return;
@@ -85,9 +181,17 @@ function Workspace() {
   };
 
   return (
+    <>
+    {deleteTarget && (
+      <DeleteModal
+        domain={deleteTarget}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => handleDeleteDomain(deleteTarget)}
+      />
+    )}
     <div style={{
       display: 'grid',
-      gridTemplateRows: 'var(--topbar-h) 1fr var(--statusbar-h)',
+      gridTemplateRows: 'var(--topbar-h) 36px 1fr var(--statusbar-h)',
       height: '100%',
       background: 'var(--bg)',
     }}>
@@ -122,22 +226,47 @@ function Workspace() {
         {/* Domain tabs */}
         <div style={{ display: 'flex', gap: 2, overflowX: 'auto' }}>
           {domains.map(d => (
-            <button
+            <div
               key={d}
-              onClick={() => navigate(`/workspace/${encodeURIComponent(d)}`)}
+              onMouseEnter={() => setHoveredDomain(d)}
+              onMouseLeave={() => setHoveredDomain(null)}
               style={{
-                display: 'inline-flex', alignItems: 'center', padding: '8px 14px',
-                fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em',
-                textTransform: 'uppercase', cursor: 'pointer',
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '0 6px 0 14px',
                 border: activeDomain === d ? '1px solid var(--border-2)' : '1px solid transparent',
                 borderBottom: 'none', borderRadius: '3px 3px 0 0',
-                color: activeDomain === d ? 'var(--accent)' : 'var(--text-dim)',
                 background: activeDomain === d ? 'var(--bg-2)' : 'transparent',
-                transition: 'color 120ms, background 120ms', whiteSpace: 'nowrap',
+                transition: 'background 120ms',
               }}
             >
-              {d}
-            </button>
+              <button
+                onClick={() => navigate(`/workspace/${encodeURIComponent(d)}`)}
+                style={{
+                  background: 'none', border: 'none', cursor: 'pointer', padding: '8px 0',
+                  fontFamily: 'var(--mono)', fontSize: 11, letterSpacing: '0.08em',
+                  textTransform: 'uppercase', whiteSpace: 'nowrap',
+                  color: activeDomain === d ? 'var(--accent)' : 'var(--text-dim)',
+                  transition: 'color 120ms',
+                }}
+              >
+                {d}
+              </button>
+              <button
+                onClick={e => { e.stopPropagation(); setDeleteTarget(d); }}
+                style={{
+                  width: 16, height: 16, flexShrink: 0,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: 'none', border: 'none', cursor: 'pointer', borderRadius: 2,
+                  color: 'var(--text-ghost)', fontSize: 11, lineHeight: 1,
+                  opacity: hoveredDomain === d ? 1 : 0,
+                  transition: 'opacity 120ms, color 120ms, background 120ms',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.color = 'var(--warn)'; e.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = 'var(--text-ghost)'; e.currentTarget.style.background = 'none'; }}
+              >
+                ✕
+              </button>
+            </div>
           ))}
           <button
             onClick={handleNewDomain}
@@ -161,9 +290,39 @@ function Workspace() {
         </div>
       </header>
 
+      {/* Tab bar */}
+      <div style={{
+        display: 'flex', alignItems: 'stretch',
+        borderBottom: '1px solid var(--border)',
+        background: 'var(--bg)', paddingLeft: 18,
+      }}>
+        {TABS.map(tab => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            style={{
+              padding: '0 16px',
+              fontFamily: 'var(--mono)', fontSize: 10.5, letterSpacing: '0.12em',
+              textTransform: 'uppercase', cursor: 'pointer',
+              background: 'transparent', border: 'none',
+              borderBottom: activeTab === tab.id ? '2px solid var(--accent)' : '2px solid transparent',
+              color: activeTab === tab.id ? 'var(--accent)' : 'var(--text-faint)',
+              transition: 'color 120ms, border-color 120ms',
+              marginBottom: -1,
+            }}
+            onMouseEnter={e => { if (activeTab !== tab.id) e.currentTarget.style.color = 'var(--text-dim)'; }}
+            onMouseLeave={e => { if (activeTab !== tab.id) e.currentTarget.style.color = 'var(--text-faint)'; }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
       {/* Canvas */}
       <main style={{ position: 'relative', minHeight: 0, overflow: 'hidden', background: 'var(--bg-2)' }}>
-        <KnowledgeGraph key={activeDomain} domain={activeDomain} />
+        {activeTab === 'graph' && <KnowledgeGraph key={`${activeDomain}-${graphVersion}`} domain={activeDomain} />}
+        {activeTab === 'ingest' && <IngestPanel domain={activeDomain} onSuccess={handleIngestSuccess} />}
+        {activeTab === 'ask' && <ChatPanel key={activeDomain} domain={activeDomain} />}
       </main>
 
       {/* Statusbar */}
@@ -179,6 +338,7 @@ function Workspace() {
         </span>
       </footer>
     </div>
+    </>
   );
 }
 

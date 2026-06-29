@@ -36,12 +36,12 @@ def create_ingestor(system_prompt: str) -> Agent:
     return Agent(MODEL, system_prompt=system_prompt, output_type=NodeList, retries=5)
 
 
-async def ingest_raw_data(raw_text: str, domain_config: dict, prompts_module) -> list[SovereignNode]:
+async def ingest_raw_data(raw_text: str, domain_config: dict, prompts_module, ontology: dict | None = None) -> list[SovereignNode]:
     """Convert raw data into a list of SovereignNodes"""
     name = domain_config["name"]
     description = domain_config["description"]
 
-    agent = create_ingestor(prompts_module.ingestor_prompt(name, description))
+    agent = create_ingestor(prompts_module.ingestor_prompt(name, description, ontology))
 
     prompt = f"""Extract knowledge nodes from the following raw data:
 

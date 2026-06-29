@@ -1,9 +1,10 @@
 """Domain management routes."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
-from domains.registry import create_domain, delete_domain, list_domains, load_domain
+from agents.ontologist import bootstrap_domain_ontology
+from domains.registry import DOMAINS_DIR, create_domain, delete_domain, list_domains, load_domain
 
 router = APIRouter(prefix="/domains", tags=["domains"])
 
@@ -16,13 +17,20 @@ class CreateDomainRequest(BaseModel):
 
 
 @router.post("")
-async def api_create_domain(request: CreateDomainRequest):
-    """Create a new domain workspace"""
+async def api_create_domain(request: CreateDomainRequest, background_tasks: BackgroundTasks):
+    """Create a new domain workspace and kick off ontology generation in the background."""
     try:
-        create_domain(request.name, request.description, request.data_sources, request.keywords)
-        return {"status": "created", "domain": request.name}
+        domain_dir = create_domain(request.name, request.description, request.data_sources, request.keywords)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    background_tasks.add_task(
+        bootstrap_domain_ontology,
+        DOMAINS_DIR / request.name,
+        request.name,
+        request.description,
+    )
+    return {"status": "created", "domain": request.name}
 
 
 @router.get("")

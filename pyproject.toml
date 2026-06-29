@@ -3,13 +3,16 @@ name = "sovereign"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "docker>=7.1.0",
     "fastapi>=0.133.1",
+    "hermes-agent>=0.16.0",
     "httpx>=0.28.1",
     "pydantic>=2.13.1",
-    "pydantic-ai>=1.84.0",
+    # Capped <1.80: hermes-agent pins openai==2.24.0, but pydantic-ai>=1.80
+    # requires openai>=2.29.0 (incompatible). 1.40–1.79 floor openai at 2.11.0.
+    "pydantic-ai>=1.40.0,<1.80.0",
     "python-dotenv>=1.2.2",
     "surrealdb>=1.0.8",
     "uvicorn>=0.41.0",

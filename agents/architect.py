@@ -42,6 +42,7 @@ async def suggest_all_edges(
     nodes: list,
     domain_config: dict,
     prompts_module,
+    ontology: dict | None = None,
 ) -> list[EdgeSuggestion]:
     """Discover all relationships between nodes in a single LLM call.
 
@@ -53,7 +54,7 @@ async def suggest_all_edges(
     name = domain_config["name"]
     description = domain_config["description"]
 
-    agent = Agent(MODEL, system_prompt=prompts_module.architect_prompt(name, description), output_type=EdgeList)
+    agent = Agent(MODEL, system_prompt=prompts_module.architect_prompt(name, description, ontology), output_type=EdgeList)
 
     nodes_text = "\n".join(
         f"[{n.uid}] {n.category}: {n.content}"

@@ -12,7 +12,7 @@ from agents.ingestor import ingest_raw_data
 from core.database import store_edge, store_node
 from core.schema import SovereignEdge, SovereignNode
 from domains.registry import load_domain
-from tools.openhands import generate_domain_tools
+from integrations.openhands import generate_domain_tools
 
 router = APIRouter(prefix="/domains", tags=["pipeline"])
 
@@ -40,15 +40,16 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
 
     config = domain["config"]
     prompts = domain["prompts"]
+    ontology = domain.get("ontology")
     db = req.app.state.db
 
     # Step 1: Ingestor — 1 LLM call → all nodes
-    nodes = await ingest_raw_data(request.raw_text, config, prompts)
+    nodes = await ingest_raw_data(request.raw_text, config, prompts, ontology)
     if not nodes:
         return {"domain": domain_name, "total": 0, "stored": 0, "rejected": 0, "edges_created": 0, "details": []}
 
     # Step 2: Gatekeeper — 1 LLM call → validate all nodes at once
-    validations = await validate_nodes_batch(nodes, config, prompts)
+    validations = await validate_nodes_batch(nodes, config, prompts, ontology)
 
     stored_nodes: list[SovereignNode] = []
     results = []
@@ -66,7 +67,7 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
     # Step 3: Architect — 1 LLM call → all edges at once
     edges_created = 0
     if len(stored_nodes) > 1:
-        suggestions = await suggest_all_edges(stored_nodes, config, prompts)
+        suggestions = await suggest_all_edges(stored_nodes, config, prompts, ontology)
         for s in suggestions:
             edge = SovereignEdge(
                 from_node=s.from_uid,

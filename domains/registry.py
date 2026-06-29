@@ -1,11 +1,17 @@
 """Domain registry - creates and loads domain workspaces."""
 
 import importlib
+import json
 import shutil
 from pathlib import Path
 
 DOMAINS_DIR = Path(__file__).parent
 TEMPLATE_DIR = DOMAINS_DIR / "_template"
+
+_DEFAULT_ONTOLOGY = {
+    "entity_types": ["concept", "method", "tool", "finding", "event", "metric", "entity"],
+    "relation_types": ["supports", "contradicts", "derived_from", "related_to", "precedes", "enables"],
+}
 
 
 def create_domain(name: str, description: str, data_sources: list[str] = None, keywords: list[str] = None) -> Path:
@@ -46,10 +52,14 @@ def load_domain(name: str) -> dict:
     tools_module = importlib.import_module(f"domains.{name}.tools")
     prompts_module = importlib.import_module(f"domains.{name}.prompts")
 
+    ontology_path = domain_dir / "ontology.json"
+    ontology = json.loads(ontology_path.read_text()) if ontology_path.exists() else _DEFAULT_ONTOLOGY
+
     return {
         "config": config_module.DOMAIN_CONFIG,
         "tools": tools_module,
         "prompts": prompts_module,
+        "ontology": ontology,
     }
 
 
