@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, model_validator
 from pydantic_ai import Agent
 
+from core.ontology import normalize_type
 from core.schema import SovereignNode
 
 load_dotenv()
@@ -37,7 +38,9 @@ def create_ingestor(system_prompt: str) -> Agent:
     return Agent(MODEL, system_prompt=system_prompt, output_type=NodeList, retries=5)
 
 
-async def ingest_raw_data(raw_text: str, domain_config: dict, prompts_module, ontology: dict | None = None) -> list[SovereignNode]:
+async def ingest_raw_data(
+    raw_text: str, domain_config: dict, prompts_module, ontology: dict | None = None, source: str = "user_input"
+) -> list[SovereignNode]:
     """Convert raw data into a list of SovereignNodes"""
     name = domain_config["name"]
     description = domain_config["description"]
@@ -47,7 +50,7 @@ async def ingest_raw_data(raw_text: str, domain_config: dict, prompts_module, on
     prompt = f"""Extract knowledge nodes from the following raw data:
 
 Domain: {name}
-Source: provided input
+Source: {source}
 Data:
 {raw_text}
 
@@ -60,11 +63,13 @@ Format each node's uid as '{name}:extracted_category:serial_number'."""
         # unique uid index, so the uid and domain are assigned here, not by the LLM.
         for node in nodes:
             node.domain = name
+            node.source = node.source.strip() or source
+            node.category = normalize_type(node.category)
             node.uid = f"{name}:{node.category}:{uuid.uuid4().hex[:12]}"
         return nodes
     except Exception as e:
         import traceback
-        print(f"[Ingestor] failed: {type(e).__name__}: {e}")
-        print(f"[Ingestor] full cause: {getattr(e, '__cause__', None)}")
+        print(f"[Ingestor] failed: {type(e).__name__}: {e}", flush=True)
+        print(f"[Ingestor] full cause: {getattr(e, '__cause__', None)}", flush=True)
         traceback.print_exc()
         return []

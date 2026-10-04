@@ -6,7 +6,7 @@
 
 ## What Is This?
 
-The Sovereign is a multi-tenant platform where users create **domain-specific AI workspaces**. Each domain spawns an autonomous agent hierarchy that continuously collects, validates, and stores knowledge into a growing knowledge graph — then reasons over that graph to take real-world actions.
+The Sovereign is a multi-tenant platform where users create **domain-specific AI workspaces**. Each domain gets its own knowledge graph and an agent hierarchy that continuously collects, validates, and stores knowledge into it — then reasons over that graph to take real-world actions.
 
 Think of it as building a domain expert from scratch. You give it a topic. It researches, learns, organizes, and eventually makes decisions — getting smarter every day.
 
@@ -36,230 +36,154 @@ The gap widens as the knowledge graph grows deeper.
 
 ---
 
-## How It Works
+## Architecture
 
-### 1. Create a Domain
-You give it a name and a short description. That's it.
-
-```
-Domain: "Quant Trading"
-Description: "Algorithmic trading strategies, technical analysis, market signals"
-```
-
-### 2. System Bootstraps Itself (one-time, runs in background)
-```
-Deer-flow researches the domain
-  → reads papers, news, web sources
-  → Head Agent builds ontology.json from real data
-  → 5 specialized agents spawned based on domain plan
-  → System is ready
-```
-
-The ontology defines the "grammar" of the knowledge graph for this domain — what entity types exist, what relationships are valid. Built from real research, not LLM imagination.
-
-### 3. Agents Run Autonomously
-```
-Data Agent    → scrapes web, RSS feeds, papers, APIs (continuously)
-Analyst Agent → extracts entities + relationships (ontology-constrained)
-Head Agent    → reviews all extractions, approves KG writes
-Coder Agent   → writes domain-specific tools via OpenHands
-Action Agent  → executes real-world actions on Head's decision
-```
-
-Everything is traced via LangFuse. Every 24 hours, a Daily Report summarizes what happened.
-
-### 4. You Talk to It (Voice, Jarvis-style)
-Not a chatbot. Voice conversation with the Head Agent, which has full access to the knowledge graph.
+"Sovereign" is the whole system — three independent parts:
 
 ```
-You:  "What happened today?"
-Head: "We added 47 new nodes. RSI patterns for NVDA are showing
-       overbought conditions similar to the March 2024 correction..."
-
-You:  "Should I reduce my NVDA position?"
-Head: "Based on 3 historical patterns in the KG, probability of
-       a 5%+ pullback in the next 2 weeks is high. Recommend reducing
-       by 30%. Want me to execute?"
-
-You:  "Do it."
-Head: → Action Agent executes the trade
+┌──────────────────────── Sovereign ────────────────────────┐
+│                                                           │
+│  frontend/  — dashboard, KG visualization, Ask panel      │
+│        │ REST                         │ REST (/ask)       │
+│        ▼                              ▼                   │
+│  kg/  Sovereign KG API  ◀── MCP ──  hermes/  Hermes agents│
+│   - query (vector + graph)            Head Agent (CEO)    │
+│   - ingest pipeline                   (Data / Analyst /   │
+│   - ontology, domains                  Coder / Action next)│
+│        │                                                  │
+│        ▼                                                  │
+│  ArcadeDB — one database per domain                       │
+│   graph (nodes/edges) + vectors (embeddings)              │
+└───────────────────────────────────────────────────────────┘
 ```
 
----
+- **Agents never touch the database.** Every KG read and write goes through the KG API, which is where ontology checks and validation are enforced — in code, not in prompts.
+- **REST is the core; MCP is a thin adapter.** The same functions back both. Hermes discovers the KG tools over MCP with no glue code.
+- **Each part has its own dependencies.** Hermes pins its dependencies exactly, so it lives in its own venv and never shares one with the KG.
 
-## Agent Hierarchy
+### Ingest pipeline (3 LLM calls + 1 embedding call, regardless of node count)
 
 ```
-User (You)
-  └── Head Agent
-        ├── Reads entire KG
-        ├── Only agent that can modify the ontology
-        ├── Final approval on all KG writes
-        ├── Talks to you via voice
-        └── Coordinates:
-              ├── Data Agent      — data collection
-              ├── Analyst Agent   — knowledge extraction
-              ├── Coder Agent     — writes tools (OpenHands)
-              └── Action Agent    — real-world execution
+Raw text
+  → Ingestor     (1 LLM call)  extract all facts as nodes; uid assigned in code
+  → Ontology gate (code)       categories outside the ontology are rejected
+  → Gatekeeper   (1 LLM call)  validate all nodes, adjust reliability
+  → Embedder     (1 call)      embed accepted nodes
+  → ArcadeDB                   store nodes + vectors
+  → Architect    (1 LLM call)  discover edges; only ontology relations are kept
 ```
 
-Agents run sequentially, not in parallel. Head dispatches → one agent works → returns to Head. This keeps the system coherent and the Head in control.
+### Query (Graph RAG)
 
-### LLM per Role
 ```
-Head Agent    → qwen3.6:35b (or Claude API)   — reasoning, decisions
-Analyst Agent → qwen2.5:14b                   — structured extraction
-Data Agent    → qwen2.5:7b                    — simple fetch + format
-Coder Agent   → qwen2.5-coder:32b             — code generation
-Action Agent  → small model + tool calls      — execution only
+Question → embed → vector search (k closest nodes) → expand 1 hop through the graph
 ```
 
----
+### The ontology
 
-## The Ontology System
-
-The ontology is the grammar of the knowledge graph. Generated **once** when a domain is created, from real research data.
+The ontology is the grammar of a domain's KG — which node categories and relationships exist. It is generated once when a domain is created and is **enforced in code**: anything outside it never enters the graph. Only the Head Agent may change it.
 
 ```json
 {
-  "entity_types": [
-    "technical_indicator",
-    "price_pattern",
-    "risk_signal",
-    "strategy",
-    "market_condition"
-  ],
-  "relation_types": [
-    "confirms",
-    "contradicts",
-    "triggers",
-    "requires",
-    "correlates_with"
-  ]
+  "entity_types": ["crypto_asset", "macro_indicator", "policy_action", "systemic_liquidity", "market_regime"],
+  "relation_types": ["controls_liquidity_supply", "shapes_market_regime", "drives_valuation_trend"]
 }
 ```
 
-Without ontology: same concept gets tagged differently every time → graph becomes inconsistent.
-
-With ontology: every node uses consistent types → graph is queryable, comparable, meaningful.
-
-Only the Head Agent can update the ontology — and only based on evidence from accumulated data.
-
 ---
 
-## Knowledge Graph
+## Quick Start
 
-- **Database**: SurrealDB (native graph, RELATE statements)
-- **One namespace per domain** — fully isolated
-- **Node**: uid, domain, category, content, source, tags, reliability score
-- **Edge**: from_node, to_node, relation type, weight
-- **Schema enforced by Pydantic AI** — if LLM output doesn't match schema, it never enters the DB
+Requirements: Docker, [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node.js. Python 3.12 is installed by uv.
 
----
+Run each step from the repo root, steps 2–4 each in their own terminal.
 
-## Ingest Pipeline (3 LLM calls, regardless of node count)
+```bash
+# 0. Models (every model is an env var — see kg/.env.example and hermes/.env.example)
+ollama pull qwen2.5:32b              # Ingestor / Gatekeeper / Architect
+ollama pull qwen3.6:35b              # Ontologist + Head Agent (Hermes needs >=64K context)
+ollama pull nomic-embed-text-v2-moe  # embeddings
 
-```
-Raw data (text, URL, paper, news)
-  → Ingestor          (1 LLM call) → extract all nodes at once
-  → Gatekeeper        (1 LLM call) → validate all nodes at once
-  → Head Agent approval
-  → SurrealDB store
-  → Architect         (1 LLM call) → discover all edges at once
-  → Knowledge graph updated
+# 1. ArcadeDB  → Studio at http://localhost:2480 (root / sovereign_pass)
+docker compose up -d
+
+# 2. KG API  → http://localhost:8080  (OpenAPI docs at /docs, MCP at /mcp)
+cd kg && cp .env.example .env && uv sync && uv run python main.py
+
+# 3. Hermes (Head Agent)  → http://localhost:8090
+cd hermes && cp .env.example .env && uv sync && uv run python server.py
+
+# 4. Frontend  → http://localhost:5173
+cd frontend && npm install && npm run dev
 ```
 
 ---
 
-## Observability
+## API
 
-All agent activity traced via **LangFuse**:
-- Which agent called which, with what input/output
-- Token usage and latency per agent
-- Full conversation traces between agents
+### KG API (`kg/`, port 8080)
 
-**Daily Report** (every 24h):
-- LangFuse traces → LLM summarizes → delivered to user via voice
-- "Today: 47 nodes added, 3 ontology updates, 2 trade signals identified"
+| Method | Path | What |
+|---|---|---|
+| `GET` | `/domains` | List domain ids |
+| `POST` | `/domains` | Create a domain `{name, description}` → `{domain: "<id>"}` (id is derived: `"Quant Trading"` → `quant_trading`). Creates its database and generates its ontology in the background |
+| `GET` / `DELETE` | `/domains/{domain}` | Domain config / delete domain and its database |
+| `POST` | `/domains/{domain}/ingest` | Run the ingest pipeline `{raw_text, source}` |
+| `POST` | `/domains/{domain}/query` | Graph RAG query `{query, k}` → `matches`, `neighbors`, `edges` |
+| `GET` / `PUT` | `/domains/{domain}/ontology` | Read / replace the ontology |
+| `POST` | `/domains/{domain}/ontology/generate` | Re-generate the ontology (background) |
+| `GET` | `/graph/{domain}`, `/graph` | Nodes + edges for visualization |
+| `POST` | `/domains/{domain}/generate-tools` | OpenHands writes domain tools (background job) |
+| MCP | `/mcp` | Tools: `list_domains`, `query_knowledge_graph`, `ingest_data`, `get_ontology`, `update_ontology` |
+
+### Hermes (`hermes/`, port 8090)
+
+| Method | Path | What |
+|---|---|---|
+| `POST` | `/domains/{domain}/ask` | One turn with the Head Agent `{message, history?}` → `{answer}` |
 
 ---
 
 ## Tech Stack
 
-| Component | Technology |
-|---|---|
-| Schema enforcement | Pydantic AI |
-| Knowledge graph DB | SurrealDB |
-| Autonomous coding | OpenHands |
-| Deep research + ontology bootstrap | Deer-flow |
-| Local LLM | Ollama (qwen family) |
-| Production LLM | Claude API (Anthropic) |
-| Observability | LangFuse |
-| API layer | FastAPI |
-| Voice interface | TBD |
-| Frontend + graph visualization | TBD (React Flow / Cytoscape.js) |
+| Component | Technology | License |
+|---|---|---|
+| Agent framework | Hermes Agent (Nous Research) | MIT |
+| Knowledge graph + vector DB | ArcadeDB (Cypher over HTTP) | Apache 2.0 |
+| Schema enforcement | Pydantic AI 2.x | MIT |
+| API + MCP | FastAPI + MCP Python SDK | MIT |
+| Local LLMs + embeddings | Ollama (qwen family, nomic-embed) | — |
+| Autonomous coding | OpenHands | MIT |
+| Frontend | React + Vite + React Flow | — |
+| Deep research (planned) | Deer-flow | — |
+| Observability (planned) | LangFuse | — |
+| Voice (planned) | Hermes TTS | — |
 
 ---
 
 ## Roadmap
 
-### ✅ Phase 1 — Foundation (complete)
-- Core schema (SovereignNode, SovereignEdge)
-- SurrealDB knowledge graph
-- Agent pipeline: Ingestor → Gatekeeper → Architect
-- Batch processing (3 LLM calls total, not N)
-- OpenHands integration (autonomous code generation)
-- Domain template system
-- End-to-end pipeline confirmed
+### ✅ Phase 1 — Foundation
+Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands integration.
 
-### 🔨 Phase 2 — Visible Product
-- Ontology system (Deer-flow bootstrapped at domain creation)
-- Graph API (nodes + edges as JSON)
-- Frontend + knowledge graph visualization
-- Daily report generation (LangFuse → summary)
+### ✅ Phase 2 — Platform Reset
+- Repo split into `kg/`, `hermes/`, `frontend/`
+- SurrealDB → ArcadeDB (one database per domain, real edge types)
+- Vector search + Graph RAG query
+- Ontology enforced in code; ontology API
+- MCP adapter; Head Agent on Hermes, connected over MCP
+- Pydantic AI 2.x
 
-### Phase 3 — Agent Hierarchy
-- Head Agent (KG-aware, ontology gatekeeper, coordinates all)
-- Data Agent (autonomous scraping + collection)
-- Action Agent (real-world execution)
-- LangFuse full integration
+### Phase 3 — Visible Product
+- Ontology grounded in Deer-flow research (currently LLM-only)
+- Deer-flow integration (domain bootstrap + ongoing research)
+- Daily report (LangFuse traces → summary)
+
+### Phase 4 — Agent Hierarchy
+- Data Agent (scraping, RSS, APIs), Action Agent (real-world execution)
+- LangFuse tracing
 - Voice interface (Jarvis-style)
 
-### Phase 4 — SaaS Platform
+### Phase 5 — SaaS Platform
 - User auth + multi-tenant
 - Per-user domain isolation
-- Domain management from UI
-- Claude API upgrade for Head Agent
-
----
-
-## Dev Setup
-
-```bash
-# Requirements: Docker, Ollama, uv, Python 3.12
-
-# 1. Clone and install
-git clone https://github.com/cpldxx/the-sovereign
-cd sovereign
-uv sync
-
-# 2. Start SurrealDB
-docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:latest \
-  start --user root --pass sovereign_pass memory
-
-# 3. Pull models
-ollama pull qwen2.5:14b
-
-# 4. Configure
-cp .env.example .env
-
-# 5. Run
-uv run python main.py
-# → http://localhost:8080
-```
-
----
-
-## Status
-
-Active development. Phase 1 complete, Phase 2 in progress.

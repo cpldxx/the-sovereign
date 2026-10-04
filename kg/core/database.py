@@ -15,6 +15,7 @@ import re
 import httpx
 from dotenv import load_dotenv
 
+from core.ontology import normalize_type
 from core.schema import SovereignEdge, SovereignNode
 
 load_dotenv()
@@ -57,7 +58,7 @@ def db_name(domain: str) -> str:
 
 def edge_type(relation: str) -> str:
     """Relation -> edge type name. Sanitized because it is spliced into Cypher."""
-    name = _NON_IDENT.sub("_", relation.strip().lower()).strip("_")
+    name = normalize_type(relation)
     if not name or name[0].isdigit():
         raise ValueError(f"Invalid relation type: {relation!r}")
     return name

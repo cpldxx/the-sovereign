@@ -6,16 +6,24 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.domains import router as domains_router
+from api import mcp as kg_mcp
 from api.graph import router as graph_router
+from api.ontology import router as ontology_router
 from api.pipeline import router as pipeline_router
 from api.query import router as query_router
 from core.database import get_db
 
 
+# Built at import time: the MCP session manager only exists after this call.
+mcp_app = kg_mcp.mcp.streamable_http_app()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.db = await get_db()
-    yield
+    app.state.db = kg_mcp.db = await get_db()
+    # A mounted app's own lifespan never runs, so the host enters the MCP session manager.
+    async with kg_mcp.mcp.session_manager.run():
+        yield
     await app.state.db.close()
 
 
@@ -37,6 +45,7 @@ app.include_router(domains_router)
 app.include_router(pipeline_router)
 app.include_router(graph_router)
 app.include_router(query_router)
+app.include_router(ontology_router)
 
 
 @app.get("/")
@@ -44,7 +53,12 @@ async def root():
     return {"status": "The Sovereign is alive", "version": "0.1.0"}
 
 
+# MCP endpoint for agents at /mcp. Mounted last: Mount("/") matches every path,
+# so it only receives requests no route above claimed.
+app.mount("/", mcp_app)
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8080, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)

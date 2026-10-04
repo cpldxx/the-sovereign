@@ -6,7 +6,7 @@ import { ChatPanel } from './components/ChatPanel';
 import { LandingPage } from './components/LandingPage';
 import '../styles/graph.css';
 
-const API_BASE = 'http://localhost:8080';
+import { KG_API, createDomain } from './api';
 
 /* ===== Domain storage ===== */
 const STORAGE_KEY = 'sovereign_domains';
@@ -23,17 +23,19 @@ function Landing() {
   const navigate = useNavigate();
 
   const handleEnter = async (name: string) => {
+    let domain: string;
     try {
-      await fetch(`${API_BASE}/domains`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description: name }),
-      });
-    } catch {}
-    const existing = loadDomains();
-    const updated = existing.includes(name) ? existing : [name, ...existing];
-    saveDomains(updated);
-    navigate(`/workspace/${encodeURIComponent(name)}`);
+      domain = await createDomain(name);
+    } catch (e) {
+      // Already exists → enter it; anything else → tell the user.
+      const msg = e instanceof Error ? e.message : String(e);
+      const existing = msg.match(/Domain '([a-z0-9_]+)' already exists/);
+      if (!existing) { alert(`Could not create domain: ${msg}`); return; }
+      domain = existing[1];
+    }
+    const known = loadDomains();
+    saveDomains(known.includes(domain) ? known : [domain, ...known]);
+    navigate(`/workspace/${encodeURIComponent(domain)}`);
   };
 
   return <LandingPage onEnter={handleEnter} />;
@@ -120,6 +122,8 @@ function Workspace() {
   const [graphVersion, setGraphVersion] = useState(0);
   const [hoveredDomain, setHoveredDomain] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  // Domains come from the API; until that answers, localStorage is only a guess.
+  const [synced, setSynced] = useState(false);
 
   const handleIngestSuccess = () => {
     setGraphVersion(v => v + 1);
@@ -128,32 +132,34 @@ function Workspace() {
 
   const activeDomain = domainParam ? decodeURIComponent(domainParam) : '';
 
-  // If no domains or invalid domain param, back to landing
+  // No domains at all → back to landing (only once the API has been asked)
   useEffect(() => {
-    if (domains.length === 0) navigate('/');
-  }, [domains, navigate]);
+    if (synced && domains.length === 0) navigate('/');
+  }, [synced, domains, navigate]);
 
   // Sync domains from API
   useEffect(() => {
+    let cancelled = false;  // set on unmount; a timeout abort still counts as synced
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
-    fetch(`${API_BASE}/domains`, { signal: controller.signal })
+    fetch(`${KG_API}/domains`, { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         const api: string[] = d.domains ?? [];
-        if (api.length > 0) {
-          setDomains(api);
-          saveDomains(api);
-        }
+        setDomains(api);
+        saveDomains(api);
       })
-      .catch(() => {})
-      .finally(() => clearTimeout(timeout));
-    return () => controller.abort();
+      .catch(() => {})  // API down → keep the localStorage list
+      .finally(() => {
+        clearTimeout(timeout);
+        if (!cancelled) setSynced(true);
+      });
+    return () => { cancelled = true; controller.abort(); };
   }, []);
 
   const handleDeleteDomain = async (name: string) => {
     try {
-      await fetch(`${API_BASE}/domains/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      await fetch(`${KG_API}/domains/${encodeURIComponent(name)}`, { method: 'DELETE' });
     } catch {}
     const updated = domains.filter(d => d !== name);
     setDomains(updated);
@@ -167,17 +173,17 @@ function Workspace() {
   const handleNewDomain = async () => {
     const name = prompt('Domain name:');
     if (!name?.trim()) return;
+    let domain: string;
     try {
-      await fetch(`${API_BASE}/domains`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), description: name.trim() }),
-      });
-    } catch {}
-    const updated = domains.includes(name.trim()) ? domains : [name.trim(), ...domains];
+      domain = await createDomain(name.trim());
+    } catch (e) {
+      alert(`Could not create domain: ${e instanceof Error ? e.message : e}`);
+      return;
+    }
+    const updated = domains.includes(domain) ? domains : [domain, ...domains];
     setDomains(updated);
     saveDomains(updated);
-    navigate(`/workspace/${encodeURIComponent(name.trim())}`);
+    navigate(`/workspace/${encodeURIComponent(domain)}`);
   };
 
   return (

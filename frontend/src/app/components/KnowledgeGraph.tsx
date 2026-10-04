@@ -15,6 +15,7 @@ import {
 import '@xyflow/react/dist/style.css';
 import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'lucide-react';
+import { KG_API } from '../api';
 
 /* ===== Types ===== */
 interface GraphNode {
@@ -353,7 +354,6 @@ function buildEdges(gEdges: GraphEdge[]): Edge[] {
 }
 
 /* ===== Main component ===== */
-const API_BASE = 'http://localhost:8080';
 
 export function KnowledgeGraph({ domain }: { domain: string }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -366,7 +366,7 @@ export function KnowledgeGraph({ domain }: { domain: string }) {
     setIsLoading(true);
     setSelectedNode(null);
 
-    fetch(`${API_BASE}/graph/${encodeURIComponent(domain)}`)
+    fetch(`${KG_API}/graph/${encodeURIComponent(domain)}`)
       .then(r => r.json())
       .then((data: GraphData) => {
         setGraphData(data);

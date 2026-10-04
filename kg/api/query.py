@@ -7,8 +7,7 @@ plus the edges touching them and the nodes on the other side of those edges.
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core.database import neighborhood, search_nodes
-from core.embeddings import embed
+from core import kg
 from domains.registry import load_domain
 
 router = APIRouter(prefix="/domains", tags=["query"])
@@ -33,19 +32,4 @@ async def query_kg(domain_name: str, request: QueryRequest, req: Request):
         load_domain(domain_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-    db = req.app.state.db
-    try:
-        [vector] = await embed([request.query])
-        matches = await search_nodes(db, domain_name, vector, request.k)
-        neighbors, edges = await neighborhood(db, domain_name, [m["uid"] for m in matches])
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"KG query failed: {type(e).__name__}: {e}")
-
-    return {
-        "domain": domain_name,
-        "query": request.query,
-        "matches": matches,
-        "neighbors": neighbors,
-        "edges": edges,
-    }
+    return await kg.query(req.app.state.db, domain_name, request.query, request.k)

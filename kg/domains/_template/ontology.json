@@ -1,4 +1,0 @@
-{
-  "entity_types": ["concept", "method", "tool", "finding", "event", "metric", "entity"],
-  "relation_types": ["supports", "contradicts", "derived_from", "related_to", "precedes", "enables"]
-}

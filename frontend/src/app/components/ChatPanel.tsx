@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
+import { HERMES_API } from '../api';
 
-const API_BASE = 'http://localhost:8080';
 
 interface Msg {
   role: 'user' | 'head';
@@ -26,16 +26,24 @@ export function ChatPanel({ domain }: { domain: string }) {
     setInput('');
     setBusy(true);
     try {
-      const res = await fetch(`${API_BASE}/domains/${encodeURIComponent(domain)}/ask`, {
+      // Prior turns give the Head Agent conversational context.
+      const history = messages.map(m => ({
+        role: m.role === 'user' ? 'user' : 'assistant',
+        content: m.text,
+      }));
+      const res = await fetch(`${HERMES_API}/domains/${encodeURIComponent(domain)}/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, history }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail ?? `HTTP ${res.status}`);
       setMessages(m => [...m, { role: 'head', text: data.answer ?? '(no answer)' }]);
-    } catch {
-      setMessages(m => [...m, { role: 'head', text: '⚠ Head Agent unreachable — is the backend running?' }]);
+    } catch (e) {
+      const reason = e instanceof TypeError
+        ? 'Head Agent unreachable — is the Hermes service (port 8090) running?'
+        : String(e instanceof Error ? e.message : e);
+      setMessages(m => [...m, { role: 'head', text: `⚠ ${reason}` }]);
     } finally {
       setBusy(false);
       setTimeout(() => inputRef.current?.focus(), 50);

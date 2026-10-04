@@ -4,99 +4,34 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from agents.architect import suggest_all_edges
-from agents.gatekeeper import validate_nodes_batch
-from agents.ingestor import ingest_raw_data
-from core.database import store_edge, store_node
-from core.embeddings import embed
-from core.schema import SovereignEdge, SovereignNode
-from domains.registry import load_domain
+from core import kg
+from domains.registry import DOMAINS_DIR, load_domain
 from integrations.openhands import generate_domain_tools
 
 router = APIRouter(prefix="/domains", tags=["pipeline"])
-
-DOMAINS_DIR = Path(__file__).parent.parent / "domains"
 
 # In-memory job store
 _jobs: dict[str, dict] = {}
 
 
 class IngestRequest(BaseModel):
-    raw_text: str
+    raw_text: str = Field(..., min_length=1)
     source: str = "user_input"
 
 
 @router.post("/{domain_name}/ingest")
 async def ingest(domain_name: str, request: IngestRequest, req: Request):
     """
-    Full pipeline: Ingest → Batch Validate → Store → Discover all edges
-    3 LLM calls total regardless of node count.
+    Full pipeline: Ingest → Ontology gate → Batch Validate → Embed → Store → Discover all edges
+    3 LLM calls + 1 embedding call total regardless of node count.
     """
     try:
-        domain = load_domain(domain_name)
+        load_domain(domain_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-
-    config = domain["config"]
-    prompts = domain["prompts"]
-    ontology = domain.get("ontology")
-    db = req.app.state.db
-
-    # Step 1: Ingestor — 1 LLM call → all nodes
-    nodes = await ingest_raw_data(request.raw_text, config, prompts, ontology)
-    if not nodes:
-        return {"domain": domain_name, "total": 0, "stored": 0, "rejected": 0, "edges_created": 0, "embedded": 0, "details": []}
-
-    # Step 2: Gatekeeper — 1 LLM call → validate all nodes at once
-    validations = await validate_nodes_batch(nodes, config, prompts, ontology)
-
-    # Embed all accepted nodes in one call. Without vectors the nodes are still
-    # stored, just invisible to semantic search.
-    accepted = [n for n, v in zip(nodes, validations) if v.is_valid]
-    try:
-        vectors = dict(zip((n.uid for n in accepted), await embed([n.content for n in accepted])))
-    except Exception as e:
-        print(f"[Pipeline] embedding failed, storing without vectors: {type(e).__name__}: {e}")
-        vectors = {}
-
-    stored_nodes: list[SovereignNode] = []
-    results = []
-
-    for node, validation in zip(nodes, validations):
-        if not validation.is_valid:
-            results.append({"uid": node.uid, "status": "rejected", "reason": validation.reason})
-            continue
-
-        node.reliability = validation.corrected_reliability
-        await store_node(db, domain_name, node, vectors.get(node.uid))
-        stored_nodes.append(node)
-        results.append({"uid": node.uid, "status": "stored", "reliability": node.reliability})
-
-    # Step 3: Architect — 1 LLM call → all edges at once
-    edges_created = 0
-    if len(stored_nodes) > 1:
-        suggestions = await suggest_all_edges(stored_nodes, config, prompts, ontology)
-        for s in suggestions:
-            edge = SovereignEdge(
-                from_node=s.from_uid,
-                to_node=s.to_uid,
-                relation=s.relation,
-                weight=s.weight,
-            )
-            if await store_edge(db, domain_name, edge):
-                edges_created += 1
-
-    return {
-        "domain": domain_name,
-        "total": len(nodes),
-        "stored": sum(1 for r in results if r["status"] == "stored"),
-        "rejected": sum(1 for r in results if r["status"] == "rejected"),
-        "edges_created": edges_created,
-        "embedded": sum(1 for n in stored_nodes if n.uid in vectors),
-        "details": results,
-    }
+    return await kg.ingest(req.app.state.db, domain_name, request.raw_text, request.source)
 
 
 async def _run_generate_job(job_id: str, domain_name: str, config: dict, tools_path: Path):

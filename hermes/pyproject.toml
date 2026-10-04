@@ -5,6 +5,10 @@ description = "Sovereign orchestration — Hermes agents that reach the KG only 
 requires-python = ">=3.12,<3.14"
 dependencies = [
     # Kept in its own venv: hermes-agent pins ~120 deps with == (e.g. openai==2.24.0).
-    "hermes-agent>=0.19.0",
+    # The mcp extra adds its MCP client, used to reach the Sovereign KG.
+    "hermes-agent[mcp]>=0.19.0",
+    "fastapi>=0.133.1",
     "httpx>=0.28.1",
+    "python-dotenv>=1.2.2",
+    "uvicorn>=0.41.0",
 ]

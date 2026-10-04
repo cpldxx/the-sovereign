@@ -4,13 +4,13 @@ Generates entity_types and relation_types from domain name + description.
 Called once at domain creation; result saved as ontology.json.
 """
 
-import json
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
-from pydantic import BaseModel
 from pydantic_ai import Agent
+
+from core.ontology import Ontology, save_ontology
+from domains.registry import ontology_path
 
 load_dotenv()
 
@@ -28,17 +28,6 @@ Rules:
 - relation_types should be directional verbs or verb phrases"""
 
 
-class Ontology(BaseModel):
-    entity_types: list[str]
-    relation_types: list[str]
-
-
-DEFAULT_ONTOLOGY = {
-    "entity_types": ["concept", "method", "tool", "finding", "event", "metric", "entity"],
-    "relation_types": ["supports", "contradicts", "derived_from", "related_to", "precedes", "enables"],
-}
-
-
 async def generate_ontology(domain_name: str, description: str) -> Ontology:
     agent = Agent(MODEL, system_prompt=SYSTEM_PROMPT, output_type=Ontology, retries=3)
     result = await agent.run(
@@ -47,15 +36,19 @@ async def generate_ontology(domain_name: str, description: str) -> Ontology:
     return result.output
 
 
-async def bootstrap_domain_ontology(domain_dir: Path, domain_name: str, description: str) -> None:
-    """Generate and save ontology.json for a domain. Never raises."""
-    ontology_path = domain_dir / "ontology.json"
-    if ontology_path.exists():
-        return
+async def bootstrap_domain_ontology(domain: str, description: str, *, overwrite: bool = False) -> None:
+    """Generate and save ontology.json for a domain. Never raises.
+
+    Slow (minutes on a large local model), so it runs as a background task. On
+    failure nothing is written: the domain keeps its current ontology (or the
+    default) and generation can be retried via POST /domains/{domain}/ontology/generate.
+    """
     try:
-        ontology = await generate_ontology(domain_name, description)
-        ontology_path.write_text(json.dumps(ontology.model_dump(), indent=2))
-        print(f"[Ontologist] '{domain_name}' → {ontology.entity_types}")
+        if ontology_path(domain).exists() and not overwrite:
+            return
+        ontology = await generate_ontology(domain, description)
+        save_ontology(domain, ontology)
     except Exception as e:
-        print(f"[Ontologist] Failed for '{domain_name}': {e} — using default")
-        ontology_path.write_text(json.dumps(DEFAULT_ONTOLOGY, indent=2))
+        print(f"[Ontologist] Failed for '{domain}': {type(e).__name__}: {e}", flush=True)
+        return
+    print(f"[Ontologist] '{domain}' → {ontology.entity_types}", flush=True)

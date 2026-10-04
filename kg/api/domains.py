@@ -1,17 +1,17 @@
 """Domain management routes."""
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from agents.ontologist import bootstrap_domain_ontology
 from core.database import drop_domain_db, ensure_domain_db
-from domains.registry import DOMAINS_DIR, create_domain, delete_domain, list_domains, load_domain
+from domains.registry import create_domain, delete_domain, list_domains, load_domain
 
 router = APIRouter(prefix="/domains", tags=["domains"])
 
 
 class CreateDomainRequest(BaseModel):
-    name: str
+    name: str = Field(..., description="Display name; the domain id is derived from it ('Quant Trading' -> 'quant_trading')")
     description: str
     data_sources: list[str] = []
     keywords: list[str] = []
@@ -21,23 +21,18 @@ class CreateDomainRequest(BaseModel):
 async def api_create_domain(request: CreateDomainRequest, background_tasks: BackgroundTasks, req: Request):
     """Create a new domain workspace + its ArcadeDB database, then generate the ontology in the background."""
     try:
-        create_domain(request.name, request.description, request.data_sources, request.keywords)
+        domain = create_domain(request.name, request.description, request.data_sources, request.keywords)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     try:
-        await ensure_domain_db(req.app.state.db, request.name)
+        await ensure_domain_db(req.app.state.db, domain)
     except Exception as e:
-        delete_domain(request.name)
+        delete_domain(domain)
         raise HTTPException(status_code=500, detail=f"Domain database creation failed: {e}")
 
-    background_tasks.add_task(
-        bootstrap_domain_ontology,
-        DOMAINS_DIR / request.name,
-        request.name,
-        request.description,
-    )
-    return {"status": "created", "domain": request.name}
+    background_tasks.add_task(bootstrap_domain_ontology, domain, request.description)
+    return {"status": "created", "domain": domain}
 
 
 @router.get("")

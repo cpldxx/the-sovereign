@@ -114,7 +114,7 @@ def _cleanup_runtime_containers(client: docker.DockerClient) -> None:
 
 async def _run_openhands(workspace_path: Path, state_path: Path, task: str) -> str:
     """Run the OpenHands container and return the generated tools.py content."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
 
     def _blocking_run() -> str:
         client = docker.from_env()

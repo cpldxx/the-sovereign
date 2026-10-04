@@ -7,10 +7,10 @@ dependencies = [
     "docker>=7.1.0",
     "fastapi>=0.133.1",
     "httpx>=0.28.1",
+    "mcp>=2.3.0",
     "pydantic>=2.13.1",
-    # Still capped <1.80 from when hermes-agent shared this venv; Hermes now
-    # lives in ../hermes, so this cap is lifted in the pydantic-ai 2.x upgrade step.
-    "pydantic-ai>=1.40.0,<1.80.0",
+    # slim + openai extra: Ollama is reached through its OpenAI-compatible API.
+    "pydantic-ai-slim[openai]>=2.0.0",
     "python-dotenv>=1.2.2",
     "uvicorn>=0.41.0",
 ]

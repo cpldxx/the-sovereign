@@ -7,7 +7,7 @@ services:
       # Keep the heap modest so Ollama keeps most of the RAM.
       ARCADEDB_OPTS_MEMORY: -Xms512m -Xmx2g
     ports:
-      - "2480:2480"   # HTTP API + Studio
+      - "127.0.0.1:2480:2480"   # HTTP API + Studio (localhost only)
     volumes:
       - arcadedb_data:/home/arcadedb/databases
     networks:

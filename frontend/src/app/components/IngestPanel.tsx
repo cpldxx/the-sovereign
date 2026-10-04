@@ -1,6 +1,6 @@
 import { useState } from 'react';
+import { KG_API } from '../api';
 
-const API_BASE = 'http://localhost:8080';
 
 interface IngestResult {
   domain: string;
@@ -25,7 +25,7 @@ export function IngestPanel({ domain, onSuccess }: { domain: string; onSuccess?:
     setResult(null);
     try {
       const res = await fetch(
-        `${API_BASE}/domains/${encodeURIComponent(domain)}/ingest`,
+        `${KG_API}/domains/${encodeURIComponent(domain)}/ingest`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

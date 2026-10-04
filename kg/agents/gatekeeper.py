@@ -40,22 +40,12 @@ class BatchValidationResult(BaseModel):
         return v
 
 
-# Keep for pipeline.py batch retry compatibility
-class ValidationResult(BaseModel):
-    is_valid: bool
-    reason: str = Field(..., description="Reason for pass/fail")
-    corrected_reliability: float = Field(ge=0.0, le=1.0)
-
-    @model_validator(mode="before")
-    @classmethod
-    def unwrap_tool_call(cls, v):
-        if isinstance(v, dict) and "arguments" in v:
-            return v["arguments"]
-        return v
-
-
 async def validate_nodes_batch(
-    nodes: list[SovereignNode], domain_config: dict, prompts_module, ontology: dict | None = None
+    nodes: list[SovereignNode],
+    domain_config: dict,
+    prompts_module,
+    ontology: dict | None = None,
+    source_text: str = "",
 ) -> list[NodeValidation]:
     """Validate all nodes in a single LLM call.
 
@@ -77,6 +67,11 @@ async def validate_nodes_batch(
 
     prompt = f"""Validate ALL of the following knowledge nodes for the {name} domain.
 Return one validation result per node, using each node's exact uid.
+
+Source text the nodes were extracted from:
+\"\"\"
+{source_text}
+\"\"\"
 
 Nodes to validate:
 {nodes_text}"""

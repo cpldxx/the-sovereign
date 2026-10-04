@@ -11,3 +11,6 @@ frontend/dist/
 # System
 .DS_Store
 CLAUDE.md
+
+# Hermes runtime state (sessions, logs, memory)
+hermes/.hermes-home/
