@@ -5,5 +5,4 @@ DOMAIN_CONFIG = {
     "description": "string",
     "data_sources": [],
     "keywords": [],
-    "surreal_namespace": "string",
 }

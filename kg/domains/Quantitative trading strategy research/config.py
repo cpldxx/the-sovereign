@@ -5,5 +5,4 @@ DOMAIN_CONFIG = {
     "description": "Quantitative trading strategy research",
     "data_sources": [],
     "keywords": [],
-    "surreal_namespace": "Quantitative trading strategy research",
 }

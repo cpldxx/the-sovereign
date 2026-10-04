@@ -33,7 +33,6 @@ DOMAIN_CONFIG = {{
     "description": "{description}",
     "data_sources": {data_sources or []},
     "keywords": {keywords or []},
-    "surreal_namespace": "{name}",
 }}
 ''')
 

@@ -12,6 +12,5 @@ dependencies = [
     # lives in ../hermes, so this cap is lifted in the pydantic-ai 2.x upgrade step.
     "pydantic-ai>=1.40.0,<1.80.0",
     "python-dotenv>=1.2.2",
-    "surrealdb>=1.0.8",
     "uvicorn>=0.41.0",
 ]

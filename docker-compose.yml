@@ -1,16 +1,20 @@
 services:
-  surrealdb:
-    image: surrealdb/surrealdb:latest
-    command: start --user root --pass sovereign_pass
+  arcadedb:
+    image: arcadedata/arcadedb:26.9.1
+    environment:
+      ARCADEDB_SETTINGS: >-
+        -Darcadedb.server.rootPassword=${ARCADEDB_PASS:-sovereign_pass}
+      # Keep the heap modest so Ollama keeps most of the RAM.
+      ARCADEDB_OPTS_MEMORY: -Xms512m -Xmx2g
     ports:
-      - "8000:8000"
+      - "2480:2480"   # HTTP API + Studio
     volumes:
-      - surreal_data:/data
+      - arcadedb_data:/home/arcadedb/databases
     networks:
       - sovereign-net
 
 volumes:
-  surreal_data:
+  arcadedb_data:
 
 networks:
   sovereign-net:

@@ -60,7 +60,7 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
             continue
 
         node.reliability = validation.corrected_reliability
-        await store_node(db, node)
+        await store_node(db, domain_name, node)
         stored_nodes.append(node)
         results.append({"uid": node.uid, "status": "stored", "reliability": node.reliability})
 
@@ -75,8 +75,8 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
                 relation=s.relation,
                 weight=s.weight,
             )
-            await store_edge(db, edge)
-            edges_created += 1
+            if await store_edge(db, domain_name, edge):
+                edges_created += 1
 
     return {
         "domain": domain_name,

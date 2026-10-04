@@ -5,6 +5,7 @@ Uses domain-specific prompts for better extraction.
 """
 
 import os
+import uuid
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, model_validator
@@ -54,7 +55,13 @@ Format each node's uid as '{name}:extracted_category:serial_number'."""
 
     try:
         result = await agent.run(prompt)
-        return result.output.nodes
+        nodes = result.output.nodes
+        # LLM serials (":1", ":2") repeat across ingests and would collide on the
+        # unique uid index, so the uid and domain are assigned here, not by the LLM.
+        for node in nodes:
+            node.domain = name
+            node.uid = f"{name}:{node.category}:{uuid.uuid4().hex[:12]}"
+        return nodes
     except Exception as e:
         import traceback
         print(f"[Ingestor] failed: {type(e).__name__}: {e}")

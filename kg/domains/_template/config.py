@@ -7,5 +7,4 @@ DOMAIN_CONFIG = {
     "description": "",           # e.g. "Cryptocurrency trading & analysis"
     "data_sources": [],          # e.g. ["kraken_api", "binance_api"]
     "keywords": [],              # e.g. ["trading", "price", "volume"]
-    "surreal_namespace": "",     # auto-filled by registry
 }
