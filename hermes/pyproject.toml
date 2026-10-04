@@ -1,0 +1,10 @@
+[project]
+name = "sovereign-hermes"
+version = "0.1.0"
+description = "Sovereign orchestration — Hermes agents that reach the KG only through the Sovereign KG API"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # Kept in its own venv: hermes-agent pins ~120 deps with == (e.g. openai==2.24.0).
+    "hermes-agent>=0.19.0",
+    "httpx>=0.28.1",
+]

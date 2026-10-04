@@ -5,8 +5,8 @@ __pycache__/
 *.pyc
 
 # Frontend
-Dark-themed knowledge graph dashboard/node_modules/
-Dark-themed knowledge graph dashboard/dist/
+frontend/node_modules/
+frontend/dist/
 
 # System
 .DS_Store
