@@ -12,6 +12,7 @@ def _viz_node(n: dict) -> dict:
     return {
         "id": n.get("uid", ""),
         "label": n.get("content", "")[:80],
+        "content": n.get("content", ""),
         "category": n.get("category", ""),
         "domain": n.get("domain", ""),
         "source": n.get("source", ""),

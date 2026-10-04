@@ -9,7 +9,9 @@ Every tool takes the domain explicitly, so agents for different domains can run
 side by side without rebinding anything global.
 """
 
+import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -32,6 +34,10 @@ HEAD_MODEL = os.getenv("OLLAMA_MODEL_HEAD", "qwen3.6:35b").removeprefix("ollama:
 
 MCP_SERVER = "sovereign"
 KG_TOOLSET = f"mcp-{MCP_SERVER}"
+_TOOL_PREFIX = f"mcp__{MCP_SERVER}__"
+
+# Progress events for live UIs: {"type": "tool_start" | "tool_end" | "delta", ...}
+EventSink = Callable[[dict], None]
 
 
 class DomainNotFound(LookupError):
@@ -82,7 +88,65 @@ How you work:
 5. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
 
 
-def create_head_agent(domain: str, *, max_iterations: int = 8) -> AIAgent:
+def _unwrap(raw):
+    """Tool result → parsed JSON. Hermes wraps MCP text content as {"result": "<json text>"}."""
+    data = raw
+    for _ in range(3):
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except ValueError:
+                return data
+        if isinstance(data, dict) and set(data) == {"result"}:
+            data = data["result"]
+        else:
+            return data
+    return data
+
+
+def _touched_uids(tool: str, data) -> list[str]:
+    """KG node uids a tool call read or wrote — lets a UI highlight them in the graph."""
+    if not isinstance(data, dict):
+        return []
+    if tool == "query_knowledge_graph":
+        return [n["uid"] for n in data.get("matches", []) + data.get("neighbors", []) if "uid" in n]
+    if tool == "ingest_data":
+        return [d["uid"] for d in data.get("details", []) if d.get("status") == "stored"]
+    return []
+
+
+def _progress_callbacks(on_event: EventSink) -> dict:
+    """Hermes callbacks → plain JSON-able events (tool names without the MCP prefix)."""
+
+    def name(tool: str) -> str:
+        return tool.removeprefix(_TOOL_PREFIX)
+
+    def args(raw) -> dict | str:
+        return raw if isinstance(raw, dict) else str(raw)
+
+    def tool_end(call_id, tool, _args, raw) -> None:
+        tool = name(tool)
+        data = _unwrap(raw)
+        text = data if isinstance(data, str) else json.dumps(data, default=str)
+        on_event({
+            "type": "tool_end",
+            "id": call_id,
+            "name": tool,
+            "uids": _touched_uids(tool, data),
+            "result": text if len(text) <= 2000 else text[:2000] + "…",
+        })
+
+    return {
+        "tool_start_callback": lambda call_id, tool, a: on_event(
+            {"type": "tool_start", "id": call_id, "name": name(tool), "args": args(a)}
+        ),
+        "tool_complete_callback": tool_end,
+        # None marks the end of a streamed message; only text is forwarded.
+        "stream_delta_callback": lambda text: text and on_event({"type": "delta", "text": text}),
+    }
+
+
+def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSink | None = None) -> AIAgent:
     """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools."""
     description, ontology = _domain_context(domain)
     connect_kg()
@@ -98,11 +162,22 @@ def create_head_agent(domain: str, *, max_iterations: int = 8) -> AIAgent:
         tool_delay=0.0,
         quiet_mode=True,
         skip_context_files=True,
+        **(_progress_callbacks(on_event) if on_event else {}),
     )
 
 
-def ask_head(domain: str, message: str, history: list[dict] | None = None, *, max_iterations: int = 8) -> str:
-    """One turn with the Head Agent. `history` is prior [{role, content}] turns, oldest first."""
-    agent = create_head_agent(domain, max_iterations=max_iterations)
+def ask_head(
+    domain: str,
+    message: str,
+    history: list[dict] | None = None,
+    *,
+    max_iterations: int = 8,
+    on_event: EventSink | None = None,
+) -> str:
+    """One turn with the Head Agent. `history` is prior [{role, content}] turns, oldest first.
+
+    `on_event` (optional) receives live progress events while the agent works.
+    """
+    agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event)
     result = agent.run_conversation(message, conversation_history=history or None)
     return result["final_response"]

@@ -53,6 +53,12 @@ async def root():
     return {"status": "The Sovereign is alive", "version": "0.1.0"}
 
 
+@app.get("/health")
+async def health():
+    """KG API liveness plus ArcadeDB readiness."""
+    return {"kg": True, "arcadedb": await app.state.db.ready()}
+
+
 # MCP endpoint for agents at /mcp. Mounted last: Mount("/") matches every path,
 # so it only receives requests no route above claimed.
 app.mount("/", mcp_app)

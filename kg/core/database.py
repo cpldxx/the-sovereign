@@ -97,6 +97,14 @@ class ArcadeDB:
     async def cypher(self, domain: str, query: str, **params) -> list[dict]:
         return await self.command(domain, "cypher", query, params)
 
+    async def ready(self) -> bool:
+        """True when the ArcadeDB server answers its readiness probe."""
+        try:
+            r = await self._http.get("/ready")
+            return r.status_code == 204
+        except httpx.HTTPError:
+            return False
+
     async def exists(self, domain: str) -> bool:
         r = await self._http.get(f"/exists/{db_name(domain)}")
         r.raise_for_status()
@@ -236,3 +244,17 @@ async def neighborhood(db: ArcadeDB, domain: str, uids: list[str]) -> tuple[list
         domain, f"MATCH (n:{NODE_TYPE}) WHERE n.uid IN $uids RETURN n {{.*}} AS n", uids=far
     )
     return [_public(r["n"]) for r in rows], edges
+
+
+async def domain_stats(db: ArcadeDB, domain: str) -> dict:
+    """Node/edge counts and nodes per category."""
+    if not await db.exists(domain):
+        return {"node_count": 0, "edge_count": 0, "categories": {}}
+    rows = await db.cypher(domain, f"MATCH (n:{NODE_TYPE}) RETURN n.category AS category, count(n) AS n")
+    edges = await db.cypher(domain, f"MATCH (:{NODE_TYPE})-[r]->(:{NODE_TYPE}) RETURN count(r) AS n")
+    categories = {r["category"]: r["n"] for r in rows}
+    return {
+        "node_count": sum(categories.values()),
+        "edge_count": edges[0]["n"] if edges else 0,
+        "categories": categories,
+    }

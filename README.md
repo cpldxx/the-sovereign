@@ -43,7 +43,7 @@ The gap widens as the knowledge graph grows deeper.
 ```
 ┌──────────────────────── Sovereign ────────────────────────┐
 │                                                           │
-│  frontend/  — dashboard, KG visualization, Ask panel      │
+│  frontend/  — graph, Head Agent chat, ingest, search, ontology│
 │        │ REST                         │ REST (/ask)       │
 │        ▼                              ▼                   │
 │  kg/  Sovereign KG API  ◀── MCP ──  hermes/  Hermes agents│
@@ -117,6 +117,19 @@ cd hermes && cp .env.example .env && uv sync && uv run python server.py
 cd frontend && npm install && npm run dev
 ```
 
+### Frontend (`frontend/`, port 5173)
+
+One screen per domain: the knowledge graph on the left, tools on the right.
+
+- **Graph** — force layout, colored by ontology category, sized by reliability; click a node for its full text, source, reliability and relations. Refreshes by itself when agents add knowledge.
+- **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph. Optional voice in (mic) and out (read answers aloud), using the browser's speech APIs.
+- **Ingest** — paste text + source; shows what was stored and why anything was rejected.
+- **Search** — Graph RAG: closest facts by meaning plus their 1-hop neighborhood, highlighted in the graph.
+- **Ontology** — the domain's grammar with per-type counts; edit it or have the Ontologist regenerate it.
+- **Status** — KG API / ArcadeDB / Hermes health in the sidebar.
+
+Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_URL` (see `frontend/.env.example`).
+
 ---
 
 ## API
@@ -133,6 +146,7 @@ cd frontend && npm install && npm run dev
 | `GET` / `PUT` | `/domains/{domain}/ontology` | Read / replace the ontology |
 | `POST` | `/domains/{domain}/ontology/generate` | Re-generate the ontology (background) |
 | `GET` | `/graph/{domain}`, `/graph` | Nodes + edges for visualization |
+| `GET` | `/health` | KG API + ArcadeDB status |
 | `POST` | `/domains/{domain}/generate-tools` | OpenHands writes domain tools (background job) |
 | MCP | `/mcp` | Tools: `list_domains`, `query_knowledge_graph`, `ingest_data`, `get_ontology`, `update_ontology` |
 
@@ -141,6 +155,8 @@ cd frontend && npm install && npm run dev
 | Method | Path | What |
 |---|---|---|
 | `POST` | `/domains/{domain}/ask` | One turn with the Head Agent `{message, history?}` → `{answer}` |
+| `POST` | `/domains/{domain}/ask/stream` | Same, as Server-Sent Events: `tool_start`, `tool_end` (with the node `uids` it read/stored), `delta`, then `answer` or `error` |
+| `GET` | `/health` | Hermes status + Head model |
 
 ---
 
@@ -154,7 +170,7 @@ cd frontend && npm install && npm run dev
 | API + MCP | FastAPI + MCP Python SDK | MIT |
 | Local LLMs + embeddings | Ollama (qwen family, nomic-embed) | — |
 | Autonomous coding | OpenHands | MIT |
-| Frontend | React + Vite + React Flow | — |
+| Frontend | React 19 + Vite + Tailwind + Cytoscape.js | — |
 | Deep research (planned) | Deer-flow | — |
 | Observability (planned) | LangFuse | — |
 | Voice (planned) | Hermes TTS | — |
@@ -173,6 +189,7 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - Ontology enforced in code; ontology API
 - MCP adapter; Head Agent on Hermes, connected over MCP
 - Pydantic AI 2.x
+- New frontend: graph + streaming Head Agent chat (with voice) + ingest + search + ontology
 
 ### Phase 3 — Visible Product
 - Ontology grounded in Deer-flow research (currently LLM-only)
