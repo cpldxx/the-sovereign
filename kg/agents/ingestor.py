@@ -15,7 +15,7 @@ from core.schema import SovereignNode
 
 load_dotenv()
 
-MODEL = os.getenv("OLLAMA_MODEL_INGESTOR", "ollama:qwen2.5:7b")
+MODEL = os.getenv("OLLAMA_MODEL_INGESTOR", "ollama:qwen2.5:32b")
 
 class NodeList(BaseModel):
     """Accepts both {"nodes": [...]} and plain [...] from LLM."""

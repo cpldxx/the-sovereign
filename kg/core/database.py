@@ -4,6 +4,9 @@ One ArcadeDB database per domain. Nodes are `Node` vertices; every ontology
 relation is its own edge type, so Cypher reads naturally:
 
     MATCH (a:Node)-[:confirms]->(b:Node) RETURN a, b
+
+Nodes may carry an `embedding` (LSM_VECTOR index, cosine) for semantic search.
+Embeddings are internal: reads strip them from returned nodes.
 """
 
 import os
@@ -21,6 +24,7 @@ DB_USER = os.getenv("ARCADEDB_USER", "root")
 DB_PASS = os.getenv("ARCADEDB_PASS", "sovereign_pass")
 
 NODE_TYPE = "Node"
+VECTOR_INDEX = f"{NODE_TYPE}[embedding]"
 
 _NON_IDENT = re.compile(r"[^A-Za-z0-9_]+")
 
@@ -30,6 +34,12 @@ _SCHEMA = f"""
 CREATE VERTEX TYPE {NODE_TYPE} IF NOT EXISTS;
 CREATE PROPERTY {NODE_TYPE}.uid IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON {NODE_TYPE} (uid) UNIQUE;
+"""
+
+# Created on the first embedded write, when the vector dimension is known.
+_VECTOR_SCHEMA = """
+CREATE PROPERTY {node}.embedding IF NOT EXISTS ARRAY_OF_FLOATS;
+CREATE INDEX IF NOT EXISTS ON {node} (embedding) LSM_VECTOR METADATA {{dimensions: {dims}, similarity: 'COSINE'}};
 """
 
 
@@ -61,6 +71,7 @@ class ArcadeDB:
             base_url=f"{url}/api/v1", auth=(user, password), timeout=httpx.Timeout(30.0)
         )
         self._ready: set[str] = set()  # domain databases known to exist with schema
+        self._vector_ready: set[str] = set()  # domain databases known to have the vector index
 
     async def close(self) -> None:
         await self._http.aclose()
@@ -107,18 +118,32 @@ async def ensure_domain_db(db: ArcadeDB, domain: str) -> None:
     db._ready.add(domain)
 
 
+async def ensure_vector_index(db: ArcadeDB, domain: str, dims: int) -> None:
+    """Create the embedding property + vector index if missing. Idempotent."""
+    if domain in db._vector_ready:
+        return
+    await db.command(domain, "sqlscript", _VECTOR_SCHEMA.format(node=NODE_TYPE, dims=dims))
+    db._vector_ready.add(domain)
+
+
 async def drop_domain_db(db: ArcadeDB, domain: str) -> None:
     db._ready.discard(domain)
+    db._vector_ready.discard(domain)
     if await db.exists(domain):
         await db.server(f"drop database {db_name(domain)}")
 
 
 # ── Writes ─────────────────────────────────────────────────────────────────
 
-async def store_node(db: ArcadeDB, domain: str, node: SovereignNode) -> None:
-    """Upsert a validated node (keyed by uid)."""
+async def store_node(
+    db: ArcadeDB, domain: str, node: SovereignNode, embedding: list[float] | None = None
+) -> None:
+    """Upsert a validated node (keyed by uid), with its embedding when given."""
     await ensure_domain_db(db, domain)
     props = node.model_dump(mode="json", exclude={"uid"})
+    if embedding:
+        await ensure_vector_index(db, domain, len(embedding))
+        props["embedding"] = embedding
     await db.cypher(
         domain,
         f"MERGE (n:{NODE_TYPE} {{uid: $uid}}) SET n += $props",
@@ -148,12 +173,18 @@ async def store_edge(db: ArcadeDB, domain: str, edge: SovereignEdge) -> bool:
 
 # ── Reads ──────────────────────────────────────────────────────────────────
 
+def _public(node: dict) -> dict:
+    """Drop internal fields (the embedding vector) from a node dict."""
+    node.pop("embedding", None)
+    return node
+
+
 async def query_nodes(db: ArcadeDB, domain: str) -> list[dict]:
     """All nodes of a domain, as plain SovereignNode-shaped dicts."""
     if not await db.exists(domain):
         return []
     rows = await db.cypher(domain, f"MATCH (n:{NODE_TYPE}) RETURN n {{.*}} AS n")
-    return [r["n"] for r in rows]
+    return [_public(r["n"]) for r in rows]
 
 
 async def query_edges(db: ArcadeDB, domain: str) -> list[dict]:
@@ -165,3 +196,42 @@ async def query_edges(db: ArcadeDB, domain: str) -> list[dict]:
         f"MATCH (a:{NODE_TYPE})-[r]->(b:{NODE_TYPE}) "
         "RETURN a.uid AS from_node, b.uid AS to_node, type(r) AS relation, r.weight AS weight",
     )
+
+
+async def search_nodes(db: ArcadeDB, domain: str, vector: list[float], k: int = 5) -> list[dict]:
+    """The k nodes closest to `vector` (cosine), each with its `distance` (lower = closer)."""
+    if not await db.exists(domain):
+        return []
+    indexes = await db.command(
+        domain, "sql", "SELECT name FROM schema:indexes WHERE name = :name", {"name": VECTOR_INDEX}
+    )
+    if not indexes:  # nothing embedded in this domain yet
+        return []
+    rows = await db.command(
+        domain,
+        "sql",
+        "SELECT expand(vector.neighbors(:index, :vector, :k))",
+        {"index": VECTOR_INDEX, "vector": vector, "k": k},
+    )
+    fields = SovereignNode.model_fields
+    return [{**{f: r.get(f) for f in fields}, "distance": r.get("distance")} for r in rows]
+
+
+async def neighborhood(db: ArcadeDB, domain: str, uids: list[str]) -> tuple[list[dict], list[dict]]:
+    """Edges touching `uids` plus the nodes on their far side (1 hop)."""
+    if not uids:
+        return [], []
+    edges = await db.cypher(
+        domain,
+        f"MATCH (a:{NODE_TYPE})-[r]->(b:{NODE_TYPE}) WHERE a.uid IN $uids OR b.uid IN $uids "
+        "RETURN a.uid AS from_node, b.uid AS to_node, type(r) AS relation, r.weight AS weight",
+        uids=uids,
+    )
+    seeds = set(uids)
+    far = sorted({e[end] for e in edges for end in ("from_node", "to_node")} - seeds)
+    if not far:
+        return [], edges
+    rows = await db.cypher(
+        domain, f"MATCH (n:{NODE_TYPE}) WHERE n.uid IN $uids RETURN n {{.*}} AS n", uids=far
+    )
+    return [_public(r["n"]) for r in rows], edges

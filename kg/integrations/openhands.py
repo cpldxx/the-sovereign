@@ -1,7 +1,7 @@
 """OpenHands Docker integration.
 
 Spins up an ephemeral OpenHands container per domain generation request.
-The container uses qwen2.5-coder:7b via Ollama to write domain-specific tools.py.
+The container uses OLLAMA_MODEL_CODER via Ollama to write domain-specific tools.py.
 Container is destroyed after the task completes.
 """
 
@@ -16,7 +16,8 @@ import docker
 
 OPENHANDS_IMAGE = "ghcr.io/all-hands-ai/openhands:0.40"
 RUNTIME_IMAGE = "ghcr.io/all-hands-ai/runtime:0.40.0-nikolaik"
-CODER_MODEL = "openai/qwen2.5-coder:32b"
+# LiteLLM model string; the container reaches Ollama via host.docker.internal.
+CODER_MODEL = os.getenv("OLLAMA_MODEL_CODER", "openai/qwen2.5-coder:32b")
 TASK_TIMEOUT = 900  # seconds (OpenHands needs time to spin up its sandbox + run LLM)
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "domains" / "_template"

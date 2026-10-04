@@ -10,6 +10,7 @@ from agents.architect import suggest_all_edges
 from agents.gatekeeper import validate_nodes_batch
 from agents.ingestor import ingest_raw_data
 from core.database import store_edge, store_node
+from core.embeddings import embed
 from core.schema import SovereignEdge, SovereignNode
 from domains.registry import load_domain
 from integrations.openhands import generate_domain_tools
@@ -46,10 +47,19 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
     # Step 1: Ingestor — 1 LLM call → all nodes
     nodes = await ingest_raw_data(request.raw_text, config, prompts, ontology)
     if not nodes:
-        return {"domain": domain_name, "total": 0, "stored": 0, "rejected": 0, "edges_created": 0, "details": []}
+        return {"domain": domain_name, "total": 0, "stored": 0, "rejected": 0, "edges_created": 0, "embedded": 0, "details": []}
 
     # Step 2: Gatekeeper — 1 LLM call → validate all nodes at once
     validations = await validate_nodes_batch(nodes, config, prompts, ontology)
+
+    # Embed all accepted nodes in one call. Without vectors the nodes are still
+    # stored, just invisible to semantic search.
+    accepted = [n for n, v in zip(nodes, validations) if v.is_valid]
+    try:
+        vectors = dict(zip((n.uid for n in accepted), await embed([n.content for n in accepted])))
+    except Exception as e:
+        print(f"[Pipeline] embedding failed, storing without vectors: {type(e).__name__}: {e}")
+        vectors = {}
 
     stored_nodes: list[SovereignNode] = []
     results = []
@@ -60,7 +70,7 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
             continue
 
         node.reliability = validation.corrected_reliability
-        await store_node(db, domain_name, node)
+        await store_node(db, domain_name, node, vectors.get(node.uid))
         stored_nodes.append(node)
         results.append({"uid": node.uid, "status": "stored", "reliability": node.reliability})
 
@@ -84,6 +94,7 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
         "stored": sum(1 for r in results if r["status"] == "stored"),
         "rejected": sum(1 for r in results if r["status"] == "rejected"),
         "edges_created": edges_created,
+        "embedded": sum(1 for n in stored_nodes if n.uid in vectors),
         "details": results,
     }
 

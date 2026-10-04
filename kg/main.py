@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.domains import router as domains_router
 from api.graph import router as graph_router
 from api.pipeline import router as pipeline_router
+from api.query import router as query_router
 from core.database import get_db
 
 
@@ -35,6 +36,7 @@ app.add_middleware(
 app.include_router(domains_router)
 app.include_router(pipeline_router)
 app.include_router(graph_router)
+app.include_router(query_router)
 
 
 @app.get("/")

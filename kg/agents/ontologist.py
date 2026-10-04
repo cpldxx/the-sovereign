@@ -14,7 +14,7 @@ from pydantic_ai import Agent
 
 load_dotenv()
 
-MODEL = os.getenv("OLLAMA_MODEL_HEAD", "ollama:qwen2.5:32b")
+MODEL = os.getenv("OLLAMA_MODEL_ONTOLOGIST", "ollama:qwen2.5:32b")
 
 SYSTEM_PROMPT = """You are The Sovereign's Ontologist. Your job is to define the grammar of a knowledge graph.
 
