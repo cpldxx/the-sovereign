@@ -4,17 +4,15 @@ Generates entity_types and relation_types from domain name + description.
 Called once at domain creation; result saved as ontology.json.
 """
 
-import os
 
-from dotenv import load_dotenv
 from pydantic_ai import Agent
 
+from core.llm import model_for, model_settings
 from core.ontology import Ontology, save_ontology
 from domains.registry import ontology_path
 
-load_dotenv()
 
-MODEL = os.getenv("OLLAMA_MODEL_ONTOLOGIST", "ollama:qwen2.5:32b")
+MODEL = model_for("ontologist")
 
 SYSTEM_PROMPT = """You are The Sovereign's Ontologist. Your job is to define the grammar of a knowledge graph.
 
@@ -29,7 +27,7 @@ Rules:
 
 
 async def generate_ontology(domain_name: str, description: str) -> Ontology:
-    agent = Agent(MODEL, system_prompt=SYSTEM_PROMPT, output_type=Ontology, retries=3)
+    agent = Agent(MODEL, model_settings=model_settings(), system_prompt=SYSTEM_PROMPT, output_type=Ontology, retries=3)
     result = await agent.run(
         f"Domain: {domain_name}\nDescription: {description}\n\nGenerate the ontology."
     )

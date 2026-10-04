@@ -205,7 +205,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
             ) : (
               <p className="flex items-center gap-2 text-xs text-faint">
                 <Loader2 size={12} className="animate-spin" /> thinking… {elapsed}s
-                {elapsed > 20 && <span>(local 35B model — answers take 1–4 min)</span>}
+                {elapsed > 30 && <span>(longer with thinking on or many tool calls)</span>}
               </p>
             )}
           </div>

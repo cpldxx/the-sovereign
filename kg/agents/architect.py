@@ -3,15 +3,14 @@
 Discovers relationships between all nodes in a single LLM call.
 """
 
-import os
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent
 
-load_dotenv()
+from core.llm import model_for, model_settings
 
-MODEL = os.getenv("OLLAMA_MODEL_ARCHITECT", "ollama:qwen2.5:32b")
+
+MODEL = model_for("architect")
 
 
 class EdgeSuggestion(BaseModel):
@@ -54,7 +53,7 @@ async def suggest_all_edges(
     name = domain_config["name"]
     description = domain_config["description"]
 
-    agent = Agent(MODEL, system_prompt=prompts_module.architect_prompt(name, description, ontology), output_type=EdgeList)
+    agent = Agent(MODEL, model_settings=model_settings(), system_prompt=prompts_module.architect_prompt(name, description, ontology), output_type=EdgeList)
 
     nodes_text = "\n".join(
         f"[{n.uid}] {n.category}: {n.content}"

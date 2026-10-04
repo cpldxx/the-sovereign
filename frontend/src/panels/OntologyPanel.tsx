@@ -132,7 +132,7 @@ export function OntologyPanel({ domain, ontology, generated, counts, onChanged }
               title="Ask the Ontologist to design the grammar again from the domain description"
             >
               <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} />
-              {regenerating ? 'Regenerating… (a few min)' : 'Regenerate'}
+              {regenerating ? 'Regenerating…' : 'Regenerate'}
             </button>
           </div>
         </>

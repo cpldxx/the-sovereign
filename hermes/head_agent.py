@@ -28,9 +28,10 @@ from tools.mcp_tool import register_mcp_servers  # noqa: E402
 
 KG_URL = os.getenv("SOVEREIGN_KG_URL", "http://localhost:8080").rstrip("/")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+# "<provider>:<model>" like the KG agents: ollama:qwen3.6:35b or anthropic:claude-sonnet-5-5.
 # Hermes requires a >=64K context window (qwen2.5:32b's 32K is rejected).
-# Hermes takes a bare model name, so any "ollama:" prefix is stripped.
-HEAD_MODEL = os.getenv("OLLAMA_MODEL_HEAD", "qwen3.6:35b").removeprefix("ollama:")
+HEAD_MODEL = os.getenv("HEAD_MODEL", "ollama:qwen3.6:35b")
+HEAD_THINKING = os.getenv("HEAD_THINKING", "false").strip().lower() in ("1", "true", "yes", "on")
 
 MCP_SERVER = "sovereign"
 KG_TOOLSET = f"mcp-{MCP_SERVER}"
@@ -146,16 +147,33 @@ def _progress_callbacks(on_event: EventSink) -> dict:
     }
 
 
+def _model_kwargs() -> dict:
+    """AIAgent connection settings for HEAD_MODEL (Ollama or Anthropic)."""
+    provider, _, model = HEAD_MODEL.partition(":")
+    if provider == "anthropic":
+        return {"provider": "anthropic", "model": model, "api_key": os.getenv("ANTHROPIC_API_KEY")}
+    if provider != "ollama":
+        raise ValueError(f"HEAD_MODEL must start with ollama: or anthropic:, got {HEAD_MODEL!r}")
+    kwargs = {
+        "provider": "openai",
+        "api_mode": "chat_completions",
+        "base_url": OLLAMA_BASE_URL,
+        "api_key": "ollama",
+        "model": model,
+    }
+    if not HEAD_THINKING:
+        # Ollama's OpenAI-compatible API turns Qwen3 reasoning fully off with this
+        # (Hermes merges request_overrides into every chat request).
+        kwargs["request_overrides"] = {"reasoning_effort": "none"}
+    return kwargs
+
+
 def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSink | None = None) -> AIAgent:
     """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools."""
     description, ontology = _domain_context(domain)
     connect_kg()
     return AIAgent(
-        base_url=OLLAMA_BASE_URL,
-        api_key="ollama",
-        provider="openai",
-        api_mode="chat_completions",
-        model=HEAD_MODEL,
+        **_model_kwargs(),
         enabled_toolsets=[KG_TOOLSET],
         ephemeral_system_prompt=_system_prompt(domain, description, ontology),
         max_iterations=max_iterations,

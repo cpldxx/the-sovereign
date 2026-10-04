@@ -52,7 +52,7 @@ export function DomainForm({ onCreate, onBusy }: {
           className="mt-1 w-full resize-none rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-gold/60"
         />
         <span className="mt-1 block text-[10.5px] text-faint">
-          The Ontologist turns this into the domain's grammar (entity and relation types) — takes a few minutes.
+          The Ontologist turns this into the domain's grammar (entity and relation types) — usually under a minute.
         </span>
       </label>
       {error && <p className="text-xs text-bad">{error}</p>}

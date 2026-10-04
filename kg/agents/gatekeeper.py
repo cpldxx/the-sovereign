@@ -4,17 +4,15 @@ All data must pass through this agent before entering the DB.
 Batch validates all nodes in a single LLM call.
 """
 
-import os
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent
 
+from core.llm import model_for, model_settings
 from core.schema import SovereignNode
 
-load_dotenv()
 
-MODEL = os.getenv("OLLAMA_MODEL_GATEKEEPER", "ollama:qwen2.5:32b")
+MODEL = model_for("gatekeeper")
 
 
 class NodeValidation(BaseModel):
@@ -58,7 +56,7 @@ async def validate_nodes_batch(
     name = domain_config["name"]
     description = domain_config["description"]
 
-    agent = Agent(MODEL, system_prompt=prompts_module.gatekeeper_prompt(name, description, ontology), output_type=BatchValidationResult, retries=5)
+    agent = Agent(MODEL, model_settings=model_settings(), system_prompt=prompts_module.gatekeeper_prompt(name, description, ontology), output_type=BatchValidationResult, retries=5)
 
     nodes_text = "\n\n".join(
         f"[{i+1}] uid: {n.uid}\n  category: {n.category}\n  content: {n.content}\n  source: {n.source}\n  reliability: {n.reliability}"

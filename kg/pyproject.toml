@@ -9,8 +9,8 @@ dependencies = [
     "httpx>=0.28.1",
     "mcp>=2.3.0",
     "pydantic>=2.13.1",
-    # slim + openai extra: Ollama is reached through its OpenAI-compatible API.
-    "pydantic-ai-slim[openai]>=2.0.0",
+    # slim + providers we use: openai (also Ollama's OpenAI-compatible API) and anthropic (Claude via env).
+    "pydantic-ai-slim[openai,anthropic]>=2.0.0",
     "python-dotenv>=1.2.2",
     "uvicorn>=0.41.0",
 ]

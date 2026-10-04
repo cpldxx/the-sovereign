@@ -4,19 +4,17 @@ Extracts knowledge from raw data and converts it into SovereignNode format.
 Uses domain-specific prompts for better extraction.
 """
 
-import os
 import uuid
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, model_validator
 from pydantic_ai import Agent
 
+from core.llm import model_for, model_settings
 from core.ontology import normalize_type
 from core.schema import SovereignNode
 
-load_dotenv()
 
-MODEL = os.getenv("OLLAMA_MODEL_INGESTOR", "ollama:qwen2.5:32b")
+MODEL = model_for("ingestor")
 
 class NodeList(BaseModel):
     """Accepts both {"nodes": [...]} and plain [...] from LLM."""
@@ -35,7 +33,7 @@ class NodeList(BaseModel):
 
 def create_ingestor(system_prompt: str) -> Agent:
     """Create an ingestor agent with domain-specific prompt"""
-    return Agent(MODEL, system_prompt=system_prompt, output_type=NodeList, retries=5)
+    return Agent(MODEL, model_settings=model_settings(), system_prompt=system_prompt, output_type=NodeList, retries=5)
 
 
 async def ingest_raw_data(

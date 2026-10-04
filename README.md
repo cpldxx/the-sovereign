@@ -100,9 +100,9 @@ Run each step from the repo root, steps 2–4 each in their own terminal.
 
 ```bash
 # 0. Models (every model is an env var — see kg/.env.example and hermes/.env.example)
-ollama pull qwen2.5:32b              # Ingestor / Gatekeeper / Architect
-ollama pull qwen3.6:35b              # Ontologist + Head Agent (Hermes needs >=64K context)
+ollama pull qwen3.6:35b              # every agent (MoE, fast); thinking off by default
 ollama pull nomic-embed-text-v2-moe  # embeddings
+# Claude instead: set LLM_MODEL / HEAD_MODEL=anthropic:<model> + ANTHROPIC_API_KEY in kg/.env and hermes/.env
 
 # 1. ArcadeDB  → Studio at http://localhost:2480 (root / sovereign_pass)
 docker compose up -d
@@ -168,7 +168,7 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 | Knowledge graph + vector DB | ArcadeDB (Cypher over HTTP) | Apache 2.0 |
 | Schema enforcement | Pydantic AI 2.x | MIT |
 | API + MCP | FastAPI + MCP Python SDK | MIT |
-| Local LLMs + embeddings | Ollama (qwen family, nomic-embed) | — |
+| LLMs + embeddings | Ollama (qwen3.6:35b, nomic-embed) by default; Claude via env | — |
 | Autonomous coding | OpenHands | MIT |
 | Frontend | React 19 + Vite + Tailwind + Cytoscape.js | — |
 | Deep research (planned) | Deer-flow | — |
