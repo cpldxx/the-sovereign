@@ -16,74 +16,129 @@ export interface Ontology {
   relation_types: string[];
 }
 
+export interface DomainStats {
+  entity_count: number;
+  fact_count: number;
+  invalid_fact_count: number;
+  episode_count: number;
+  pending_reviews: number;
+  categories: Record<string, number>;
+}
+
 export interface DomainDetail {
   domain: string;
   config: { name: string; description: string };
   ontology_generated: boolean;
-  stats: { node_count: number; edge_count: number; categories: Record<string, number> };
+  stats: DomainStats;
 }
 
-export interface KGNode {
+/** A neuron: one real-world thing. */
+export interface Entity {
   uid: string;
-  domain: string;
-  category: string;
-  content: string;
-  source: string;
-  tags: string[];
-  reliability: number;
+  name: string;
+  type: string;
+  summary: string;
+  aliases: string[] | null;
+  mentions: number | null;
   created_at?: string;
+  updated_at?: string;
+  similarity?: number;
 }
 
-export interface KGEdge {
-  from_node: string;
-  to_node: string;
+/** A synapse: a sourced statement connecting two entities (or one, for has_state). */
+export interface Fact {
+  uid: string;
   relation: string;
+  fact: string;
+  source_uid: string;
+  source_name: string;
+  target_uid: string;
+  target_name: string;
   weight: number;
+  evidence: number;
+  sources: string[];
+  valid: boolean;
+  invalid_at?: string | null;
+  invalid_reason?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  similarity?: number;
 }
 
-export interface GraphNode {
-  id: string;
-  label: string;
-  content: string;
-  category: string;
-  domain: string;
+/** A memory: one ingested source. */
+export interface Episode {
+  uid: string;
   source: string;
-  tags: string[];
-  reliability: number;
-}
-
-export interface GraphEdge {
-  from: string;
-  to: string;
-  relation: string;
-  weight: number;
+  title: string;
+  content_status: 'full' | 'partial' | string;
+  created_at: string;
+  snippet?: string;
+  entities?: number;
 }
 
 export interface Graph {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
+  entities: Entity[];
+  facts: Fact[];
 }
 
-export interface IngestDetail {
-  uid: string;
-  status: 'stored' | 'rejected';
+export interface EntityDetail {
+  entity: Entity;
+  facts: Fact[];
+  episodes: Episode[];
+}
+
+export interface IngestEntityItem {
+  name: string;
+  type: string;
+  uid?: string;
+  status: 'created' | 'matched' | 'dropped';
   reason?: string;
-  reliability?: number;
+}
+
+export interface IngestFactItem {
+  fact: string;
+  relation: string;
+  source: string;
+  target: string;
+  uid?: string;
+  status: 'created' | 'strengthened' | 'rejected' | 'review';
+  reason?: string;
+  weight?: number;
+  evidence?: number;
+  invalidated?: string[];
 }
 
 export interface IngestResult {
-  total: number;
-  stored: number;
-  rejected: number;
-  edges_created: number;
-  embedded: number;
-  details: IngestDetail[];
+  episode_uid: string;
+  duplicate: boolean;
+  entities_created: number;
+  entities_matched: number;
+  entities_dropped: number;
+  facts_created: number;
+  facts_strengthened: number;
+  facts_invalidated: number;
+  facts_rejected: number;
+  facts_review: number;
+  review_items: number;
+  touched_uids: string[];
+  entities: IngestEntityItem[];
+  facts: IngestFactItem[];
 }
 
 export interface QueryResult {
-  matches: (KGNode & { distance: number })[];
-  neighbors: KGNode[];
-  edges: KGEdge[];
+  entities: Entity[];
+  facts: Fact[];
+  episodes: Episode[];
+}
+
+export interface Review {
+  uid: string;
+  kind: 'fact' | 'merge' | 'link';
+  status: 'pending' | 'approved' | 'rejected';
+  summary: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  resolution?: string;
 }
 
 export interface Turn {
@@ -139,8 +194,19 @@ export const kg = {
 
   graph: (id: string) => request<Graph>(KG_API, `/graph/${encodeURIComponent(id)}`),
 
-  ingest: (id: string, raw_text: string, source: string) =>
-    request<IngestResult>(KG_API, `${d(id)}/ingest`, json({ raw_text, source })),
+  ingest: (id: string, raw_text: string, source: string, title?: string, content_status: 'full' | 'partial' = 'full') =>
+    request<IngestResult>(KG_API, `${d(id)}/ingest`, json({ raw_text, source, title, content_status })),
+
+  entity: (id: string, uid: string) => request<EntityDetail>(KG_API, `${d(id)}/entities/${encodeURIComponent(uid)}`),
+
+  episodes: (id: string, limit = 50) =>
+    request<{ episodes: Episode[] }>(KG_API, `${d(id)}/episodes?limit=${limit}`).then(r => r.episodes),
+
+  reviews: (id: string, status: 'pending' | 'approved' | 'rejected' = 'pending') =>
+    request<{ reviews: Review[] }>(KG_API, `${d(id)}/reviews?status=${status}`).then(r => r.reviews),
+
+  decide: (id: string, uid: string, approve: boolean, note = '') =>
+    request<{ resolution: string }>(KG_API, `${d(id)}/reviews/${encodeURIComponent(uid)}`, json({ approve, note })),
 
   query: (id: string, query: string, k: number) =>
     request<QueryResult>(KG_API, `${d(id)}/query`, json({ query, k })),
@@ -166,11 +232,12 @@ export const hermes = {
     history: Turn[],
     onEvent: (e: AgentEvent) => void,
     signal?: AbortSignal,
+    maxIterations = 8,
   ): Promise<void> {
     let res: Response;
     try {
       res = await fetch(`${HERMES_API}${d(id)}/ask/stream`, {
-        ...json({ message, history }),
+        ...json({ message, history, max_iterations: maxIterations }),
         headers: { 'Content-Type': 'application/json' },
         signal,
       });

@@ -11,6 +11,7 @@ side by side without rebinding anything global.
 
 import json
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -32,6 +33,13 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
 # Hermes requires a >=64K context window (qwen2.5:32b's 32K is rejected).
 HEAD_MODEL = os.getenv("HEAD_MODEL", "ollama:qwen3.6:35b")
 HEAD_THINKING = os.getenv("HEAD_THINKING", "false").strip().lower() in ("1", "true", "yes", "on")
+
+# A reply that is nothing but a written-out call like `query_knowledge_graph(domain="x", ...)`.
+_TEXT_TOOL_CALL = re.compile(
+    r"^\s*`*(query_knowledge_graph|get_entity|ingest_data|get_ontology|update_ontology|list_reviews|"
+    r"resolve_review|list_domains)\s*\(.*\)\s*`*\s*$",
+    re.S,
+)
 
 MCP_SERVER = "sovereign"
 KG_TOOLSET = f"mcp-{MCP_SERVER}"
@@ -76,17 +84,28 @@ def _system_prompt(domain: str, description: str, ontology: dict) -> str:
     return f"""You are the Head Agent of The Sovereign — an autonomous domain expert for the "{domain}" domain.
 Domain: {description}
 
-You are not a generic assistant. You are the CEO of a knowledge operation:
-- You have a growing knowledge graph (KG) of validated, structured facts about this domain.
-- The KG ontology — entity types [{entity_types}] and relations [{relation_types}] — is the grammar of everything you know.
+You are the CEO of a knowledge operation. Your memory is a knowledge graph:
+- ENTITIES (types: {entity_types}) are the things this domain is about.
+- FACTS connect entities (relations: {relation_types}, plus has_state for a fact about one entity). Each fact
+  has a weight from 0 to 1 that grows as independent sources confirm it, an evidence count, and its source
+  episodes. Superseded facts are kept with valid=false — they are history, not current truth.
 - Every KG tool takes a `domain` argument. Your domain is always "{domain}".
 
 How you work:
-1. BEFORE answering any substantive question, call query_knowledge_graph to ground yourself in what the system actually knows. Never answer domain questions from imagination when the KG can inform you. If the KG has nothing relevant, say so plainly.
-2. When the user gives you new factual information worth keeping (or says "ingest this"), call ingest_data to persist it. It is validated and ontology-constrained before storage; report what was stored and rejected.
-3. Cite KG evidence (node uids, reliability) when you reason. Reliability matters — flag low-confidence knowledge.
-4. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current grammar cannot express it. Never for a single fact.
-5. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
+1. BEFORE answering a substantive question, call query_knowledge_graph; use get_entity to see everything known
+   about one entity. Never answer domain questions from imagination when the graph can inform you. If the
+   graph has nothing relevant, say so plainly.
+2. Ground every claim in facts: cite the fact, its weight and evidence count, and its source when it matters.
+   Treat weight < 0.5 as a weak signal and say so. Use superseded facts only to explain how things changed.
+3. When the user gives you new information worth keeping (or says "ingest this"), call ingest_data and report
+   what was stored, strengthened, superseded, rejected or sent to review.
+4. Review queue: ambiguous writes wait for you (list_reviews). Decide each with resolve_review and a short
+   note: approve a weak fact only if it is worth keeping as a signal; approve a merge only if both names
+   are the same real-world thing; approve a link only if the new fact truly restates or replaces the old.
+   Use get_entity / query_knowledge_graph to check before deciding.
+5. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
+   grammar cannot express it (e.g. many facts rejected for the same missing relation). Never for one fact.
+6. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
 
 
 def _unwrap(raw):
@@ -106,14 +125,17 @@ def _unwrap(raw):
 
 
 def _touched_uids(tool: str, data) -> list[str]:
-    """KG node uids a tool call read or wrote — lets a UI highlight them in the graph."""
+    """Entity uids a tool call read or wrote — lets a UI highlight them in the graph."""
     if not isinstance(data, dict):
         return []
-    if tool == "query_knowledge_graph":
-        return [n["uid"] for n in data.get("matches", []) + data.get("neighbors", []) if "uid" in n]
     if tool == "ingest_data":
-        return [d["uid"] for d in data.get("details", []) if d.get("status") == "stored"]
-    return []
+        return list(data.get("touched_uids", []))
+    uids = [e["uid"] for e in data.get("entities", []) if "uid" in e]
+    if tool == "get_entity" and isinstance(data.get("entity"), dict):
+        uids.append(data["entity"]["uid"])
+    for f in data.get("facts", []):
+        uids += [f.get("source_uid"), f.get("target_uid")]
+    return list(dict.fromkeys(u for u in uids if u))
 
 
 def _progress_callbacks(on_event: EventSink) -> dict:
@@ -197,5 +219,11 @@ def ask_head(
     `on_event` (optional) receives live progress events while the agent works.
     """
     agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event)
-    result = agent.run_conversation(message, conversation_history=history or None)
-    return result["final_response"]
+    answer = agent.run_conversation(message, conversation_history=history or None)["final_response"]
+    if _TEXT_TOOL_CALL.match(answer or ""):
+        # With reasoning off, local models occasionally write a tool call as plain text instead of
+        # calling it. Retry once on a fresh agent with a nudge.
+        agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event)
+        nudge = f"{message}\n\n(Call the tools through the tool-calling interface — do not write them as text.)"
+        answer = agent.run_conversation(nudge, conversation_history=history or None)["final_response"]
+    return answer

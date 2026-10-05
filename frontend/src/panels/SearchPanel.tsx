@@ -1,32 +1,8 @@
 import { useState } from 'react';
-import { Loader2, Search } from 'lucide-react';
-import { kg, type KGNode, type QueryResult } from '../lib/api';
+import { ExternalLink, Loader2, Search } from 'lucide-react';
+import { kg, type QueryResult } from '../lib/api';
 import { categoryColor } from '../lib/colors';
-
-function NodeRow({ node, entityTypes, onSelect, score }: {
-  node: KGNode;
-  entityTypes: string[];
-  onSelect: (uid: string) => void;
-  score?: number;
-}) {
-  return (
-    <button onClick={() => onSelect(node.uid)} className="w-full rounded-md px-2.5 py-2 text-left hover:bg-panel-2">
-      <div className="mb-0.5 flex items-center gap-2">
-        <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: categoryColor(node.category, entityTypes) }} />
-        <span className="font-mono text-[10.5px] text-faint">{node.category}</span>
-        {score !== undefined && (
-          <span className="ml-auto flex items-center gap-1.5">
-            <span className="h-1 w-14 rounded bg-line">
-              <span className="block h-1 rounded bg-gold" style={{ width: `${Math.max(0, 1 - score) * 100}%` }} />
-            </span>
-            <span className="font-mono text-[10px] text-faint">{(1 - score).toFixed(2)}</span>
-          </span>
-        )}
-      </div>
-      <p className="text-[12.5px] leading-snug text-ink">{node.content}</p>
-    </button>
-  );
-}
+import { FactRow } from '../components/FactRow';
 
 export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
   domain: string;
@@ -47,7 +23,7 @@ export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
     try {
       const r = await kg.query(domain, query.trim(), k);
       setResult(r);
-      onHighlight(new Set([...r.matches, ...r.neighbors].map(n => n.uid)));
+      onHighlight(new Set(r.entities.map(x => x.uid)));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -55,8 +31,7 @@ export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
     }
   }
 
-  const known = new Map([...(result?.matches ?? []), ...(result?.neighbors ?? [])].map(n => [n.uid, n.content]));
-  const label = (uid: string) => known.get(uid) ?? uid;
+  const hits = result?.entities.filter(e => e.similarity !== undefined) ?? [];
 
   return (
     <div className="flex h-full flex-col">
@@ -64,7 +39,7 @@ export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
         <input
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Search by meaning…"
+          placeholder="Ask the graph by meaning…"
           className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] outline-none focus:border-gold/60"
         />
         <select
@@ -84,38 +59,41 @@ export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
         {error && <p className="p-2 text-xs text-bad">{error}</p>}
         {!result && !error && (
           <p className="p-3 text-xs leading-relaxed text-faint">
-            Semantic search over the graph (Graph RAG): finds the closest facts by meaning, then follows their edges one
-            hop. This is the same read path the Head Agent uses.
+            Graph RAG: finds the entities and facts closest to your question by meaning, then the strongest facts
+            around them, with the sources behind them. This is the same read path the Head Agent uses.
           </p>
         )}
         {result && (
           <>
-            <h3 className="px-2.5 pt-1 pb-1 font-mono text-[10px] tracking-widest text-faint uppercase">
-              Matches · similarity
-            </h3>
-            {result.matches.length === 0 && <p className="px-2.5 text-xs text-faint">Nothing embedded in this domain yet.</p>}
-            {result.matches.map(n => (
-              <NodeRow key={n.uid} node={n} score={n.distance} entityTypes={entityTypes} onSelect={onSelect} />
-            ))}
-            {result.neighbors.length > 0 && (
-              <>
-                <h3 className="px-2.5 pt-4 pb-1 font-mono text-[10px] tracking-widest text-faint uppercase">
-                  Connected (1 hop)
-                </h3>
-                {result.neighbors.map(n => (
-                  <NodeRow key={n.uid} node={n} entityTypes={entityTypes} onSelect={onSelect} />
+            {hits.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 px-2.5 pt-1 pb-2">
+                {hits.map(e => (
+                  <button
+                    key={e.uid}
+                    onClick={() => onSelect(e.uid)}
+                    className="flex items-center gap-1.5 rounded-full border border-line-2 px-2.5 py-1 text-[11.5px] hover:border-gold/60"
+                    title={`similarity ${e.similarity}`}
+                  >
+                    <span className="h-2 w-2 rounded-full" style={{ background: categoryColor(e.type, entityTypes) }} />
+                    {e.name}
+                  </button>
                 ))}
-              </>
+              </div>
             )}
-            {result.edges.length > 0 && (
+            <h3 className="px-2.5 pt-1 pb-1 font-mono text-[10px] tracking-widest text-faint uppercase">Facts</h3>
+            {result.facts.length === 0 && <p className="px-2.5 text-xs text-faint">Nothing relevant in this graph yet.</p>}
+            {result.facts.map(f => <FactRow key={f.uid} fact={f} onSelect={onSelect} />)}
+            {result.episodes.length > 0 && (
               <>
-                <h3 className="px-2.5 pt-4 pb-1 font-mono text-[10px] tracking-widest text-faint uppercase">Relations</h3>
-                <ul className="space-y-2 px-2.5 pb-3 text-[11px] text-dim">
-                  {result.edges.map((e, i) => (
-                    <li key={i}>
-                      <div className="truncate">{label(e.from_node)}</div>
-                      <div className="font-mono text-[10.5px] text-gold">↳ {e.relation}</div>
-                      <div className="truncate">{label(e.to_node)}</div>
+                <h3 className="px-2.5 pt-4 pb-1 font-mono text-[10px] tracking-widest text-faint uppercase">Sources</h3>
+                <ul className="space-y-1 px-2.5 pb-3">
+                  {result.episodes.map(ep => (
+                    <li key={ep.uid} className="text-[11px]">
+                      {/^https?:\/\//.test(ep.source) ? (
+                        <a href={ep.source} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-dim hover:text-ink">
+                          <ExternalLink size={10} className="shrink-0" /><span className="truncate">{ep.title || ep.source}</span>
+                        </a>
+                      ) : <span className="text-dim">{ep.title || ep.source}</span>}
                     </li>
                   ))}
                 </ul>

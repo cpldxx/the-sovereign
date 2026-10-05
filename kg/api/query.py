@@ -1,7 +1,7 @@
-"""KG query route — semantic search over a domain, expanded one hop through the graph.
+"""KG query route — Graph RAG over a domain's neuron graph.
 
-This is the read path agents use (Graph RAG): the closest nodes by embedding,
-plus the edges touching them and the nodes on the other side of those edges.
+This is the read path agents use: the entities and facts closest to the question by
+embedding, the strongest valid facts around them, and the sources behind those facts.
 """
 
 from fastapi import APIRouter, HTTPException, Request
@@ -21,11 +21,10 @@ class QueryRequest(BaseModel):
 @router.post("/{domain_name}/query")
 async def query_kg(domain_name: str, request: QueryRequest, req: Request):
     """
-    Response shape:
     {
-      "matches":   [{...node, "distance": 0.12}],   # closest first
-      "neighbors": [{...node}],                     # 1 hop from matches
-      "edges":     [{"from_node", "to_node", "relation", "weight"}]
+      "entities": [{...entity, "similarity"?}],      # closest entities (with similarity) + fact endpoints
+      "facts":    [{...fact, "similarity"?}],         # closest facts first, then strongest facts around them
+      "episodes": [{"uid", "source", "title", ...}]   # sources behind the facts
     }
     """
     try:

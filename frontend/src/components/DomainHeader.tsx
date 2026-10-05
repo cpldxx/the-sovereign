@@ -30,9 +30,10 @@ export function DomainHeader({ detail, onDelete }: { detail: DomainDetail; onDel
       )}
 
       <div className="flex gap-5 max-sm:hidden">
-        <Stat label="nodes" value={stats.node_count} />
-        <Stat label="edges" value={stats.edge_count} />
-        <Stat label="types" value={Object.keys(stats.categories).length} />
+        <Stat label="entities" value={stats.entity_count} />
+        <Stat label="facts" value={stats.fact_count} />
+        <Stat label="sources" value={stats.episode_count} />
+        {stats.invalid_fact_count > 0 && <Stat label="superseded" value={stats.invalid_fact_count} />}
       </div>
 
       {confirm ? (

@@ -61,22 +61,32 @@ The gap widens as the knowledge graph grows deeper.
 - **REST is the core; MCP is a thin adapter.** The same functions back both. Hermes discovers the KG tools over MCP with no glue code.
 - **Each part has its own dependencies.** Hermes pins its dependencies exactly, so it lives in its own venv and never shares one with the KG.
 
-### Ingest pipeline (3 LLM calls + 1 embedding call, regardless of node count)
+### The knowledge graph: neurons, synapses, memories
 
 ```
-Raw text
-  → Ingestor     (1 LLM call)  extract all facts as nodes; uid assigned in code
-  → Ontology gate (code)       categories outside the ontology are rejected
-  → Gatekeeper   (1 LLM call)  validate all nodes, adjust reliability
-  → Embedder     (1 call)      embed accepted nodes
-  → ArcadeDB                   store nodes + vectors
-  → Architect    (1 LLM call)  discover edges; only ontology relations are kept
+(Entity)  neuron   one real-world thing — TSMC, CoWoS, HBM3E — with its aliases and summary
+  │ fact  synapse  "TSMC plans to triple CoWoS capacity in 2026" — weight grows as independent
+  ▼                sources confirm it; superseded facts are kept as history, not deleted
+(Entity)
+(Episode) memory   the raw source text it all came from, linked to every entity it mentions
+```
+
+### Ingest (usually 2 LLM calls + 1 embedding call per ~8k chars)
+
+```
+Source text → Episode
+  → Extractor   entities + facts (one call)
+  → code gates  ontology types, entity really in the text, valid endpoints
+  → Validator   each fact supported by the text? reliability? (one call)
+  → Resolver    same entity as an existing one? name keys first, LLM only when ambiguous
+  → Linker      restates an existing fact → strengthen it; newer value → supersede the old one
+  → ambiguous (weak facts, unsure merges/links) → Head review queue
 ```
 
 ### Query (Graph RAG)
 
 ```
-Question → embed → vector search (k closest nodes) → expand 1 hop through the graph
+Question → entity + fact vector search → strongest facts around them → their sources
 ```
 
 ### The ontology
@@ -121,10 +131,11 @@ cd frontend && npm install && npm run dev
 
 One screen per domain: the knowledge graph on the left, tools on the right.
 
-- **Graph** — force layout, colored by ontology category, sized by reliability; click a node for its full text, source, reliability and relations. Refreshes by itself when agents add knowledge.
+- **Graph** — entities colored by type and sized by mentions; edges thicken as facts gain evidence; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
 - **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph. Optional voice in (mic) and out (read answers aloud), using the browser's speech APIs.
-- **Ingest** — paste text + source; shows what was stored and why anything was rejected.
-- **Search** — Graph RAG: closest facts by meaning plus their 1-hop neighborhood, highlighted in the graph.
+- **Ingest** — paste text + source; shows new/known entities and created/strengthened/superseded/rejected facts with reasons.
+- **Search** — Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources.
+- **Review** — the Head review queue: approve/dismiss yourself, or let the Head Agent decide everything.
 - **Ontology** — the domain's grammar with per-type counts; edit it or have the Ontologist regenerate it.
 - **Status** — KG API / ArcadeDB / Hermes health in the sidebar.
 
@@ -141,14 +152,17 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 | `GET` | `/domains` | List domain ids |
 | `POST` | `/domains` | Create a domain `{name, description}` → `{domain: "<id>"}` (id is derived: `"Quant Trading"` → `quant_trading`). Creates its database and generates its ontology in the background |
 | `GET` / `DELETE` | `/domains/{domain}` | Domain config / delete domain and its database |
-| `POST` | `/domains/{domain}/ingest` | Run the ingest pipeline `{raw_text, source}` |
-| `POST` | `/domains/{domain}/query` | Graph RAG query `{query, k}` → `matches`, `neighbors`, `edges` |
+| `POST` | `/domains/{domain}/ingest` | Ingest `{raw_text, source, title?, content_status?}` → what was created / strengthened / superseded / sent to review |
+| `POST` | `/domains/{domain}/query` | Graph RAG `{query, k}` → `entities`, `facts`, `episodes` |
 | `GET` / `PUT` | `/domains/{domain}/ontology` | Read / replace the ontology |
 | `POST` | `/domains/{domain}/ontology/generate` | Re-generate the ontology (background) |
-| `GET` | `/graph/{domain}`, `/graph` | Nodes + edges for visualization |
+| `GET` | `/graph/{domain}` | Entities + facts (superseded ones marked `valid: false`) |
+| `GET` | `/domains/{domain}/entities/{uid}` | One entity: facts (with history) + source episodes |
+| `GET` | `/domains/{domain}/episodes` | Ingested sources, newest first |
+| `GET` / `POST` | `/domains/{domain}/reviews`, `/reviews/{uid}` | Head review queue / decide `{approve, note}` |
 | `GET` | `/health` | KG API + ArcadeDB status |
 | `POST` | `/domains/{domain}/generate-tools` | OpenHands writes domain tools (background job) |
-| MCP | `/mcp` | Tools: `list_domains`, `query_knowledge_graph`, `ingest_data`, `get_ontology`, `update_ontology` |
+| MCP | `/mcp` | Tools: `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review` |
 
 ### Hermes (`hermes/`, port 8090)
 
@@ -182,7 +196,7 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 ### ✅ Phase 1 — Foundation
 Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands integration.
 
-### ✅ Phase 2 — Platform Reset
+### ✅ Phase 2 — Platform Reset (+ Phase A/B)
 - Repo split into `kg/`, `hermes/`, `frontend/`
 - SurrealDB → ArcadeDB (one database per domain, real edge types)
 - Vector search + Graph RAG query
@@ -190,17 +204,19 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - MCP adapter; Head Agent on Hermes, connected over MCP
 - Pydantic AI 2.x
 - New frontend: graph + streaming Head Agent chat (with voice) + ingest + search + ontology
+- LLM unification: qwen3.6:35b, thinking off, Claude via env (ontology 164 s → 17 s, Head 60–240 s → 17 s)
+- Neuron KG: entities, weighted facts with history, episodes, entity resolution, Head review queue
 
-### Phase 3 — Visible Product
-- Ontology grounded in Deer-flow research (currently LLM-only)
-- Deer-flow integration (domain bootstrap + ongoing research)
-- Daily report (LangFuse traces → summary)
+### Next — Phase C: DeerFlow collection
+- DeerFlow (MIT) as a 4th service: domain bootstrap research → ontology from real sources → first episodes
+- Nightly "what's new" missions per domain and Head-assigned missions; the raw pages it opened are ingested (never its LLM-written report); access failures are logged, nothing is bypassed
 
-### Phase 4 — Agent Hierarchy
-- Data Agent (scraping, RSS, APIs), Action Agent (real-world execution)
-- LangFuse tracing
-- Voice interface (Jarvis-style)
+### Phase D — Observability + daily report
+- LangFuse tracing; 24h report (collected, new entities, strengthened/superseded facts, failures); nightly entity summary refresh
 
-### Phase 5 — SaaS Platform
-- User auth + multi-tenant
-- Per-user domain isolation
+### Phase E — Agents + action (the fast path)
+- Per-role tools, Coder Agent writes per-domain live-data tools, nightly playbooks from the graph
+- Action Agent: dry-run first; external actions only after user confirmation
+
+### Phase F — Voice · Phase G — SaaS
+- Hermes TTS / always-on voice · auth, multi-tenant, per-user isolation

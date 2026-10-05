@@ -6,11 +6,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.domains import router as domains_router
+from api.entities import router as entities_router
 from api import mcp as kg_mcp
 from api.graph import router as graph_router
 from api.ontology import router as ontology_router
 from api.pipeline import router as pipeline_router
 from api.query import router as query_router
+from api.reviews import router as reviews_router
 from core.database import get_db
 
 
@@ -46,6 +48,8 @@ app.include_router(pipeline_router)
 app.include_router(graph_router)
 app.include_router(query_router)
 app.include_router(ontology_router)
+app.include_router(entities_router)
+app.include_router(reviews_router)
 
 
 @app.get("/")

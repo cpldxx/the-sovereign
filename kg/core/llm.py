@@ -1,8 +1,8 @@
 """LLM selection for the KG agents — everything comes from env, nothing is hard-coded.
 
     LLM_MODEL=ollama:qwen3.6:35b            default for every agent
-    LLM_MODEL_INGESTOR=anthropic:claude-…   optional per-agent override (INGESTOR, GATEKEEPER,
-                                            ARCHITECT, ONTOLOGIST)
+    LLM_MODEL_EXTRACTOR=anthropic:claude-…  optional per-agent override (EXTRACTOR, VALIDATOR,
+                                            RESOLVER, LINKER, ONTOLOGIST)
     LLM_THINKING=false                      reasoning off unless set to true
     ANTHROPIC_API_KEY=…                     only needed for anthropic: models
 

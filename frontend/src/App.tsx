@@ -1,26 +1,28 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bot, FileInput, Network, Search, Shapes } from 'lucide-react';
+import { Bot, FileInput, Inbox, Network, Search, Shapes } from 'lucide-react';
 import { kg, type DomainDetail, type DomainSummary, type Graph, type Ontology } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { DomainHeader } from './components/DomainHeader';
 import { GraphView } from './components/GraphView';
-import { NodeDetail } from './components/NodeDetail';
+import { EntityPanel } from './components/EntityPanel';
 import { Welcome } from './components/Welcome';
 import { AskPanel } from './panels/AskPanel';
 import { IngestPanel } from './panels/IngestPanel';
 import { SearchPanel } from './panels/SearchPanel';
 import { OntologyPanel } from './panels/OntologyPanel';
+import { ReviewPanel } from './panels/ReviewPanel';
 
-type Tab = 'ask' | 'ingest' | 'search' | 'ontology';
+type Tab = 'ask' | 'ingest' | 'search' | 'review' | 'ontology';
 
 const TABS: { id: Tab; label: string; icon: typeof Bot }[] = [
   { id: 'ask', label: 'Head Agent', icon: Bot },
   { id: 'ingest', label: 'Ingest', icon: FileInput },
   { id: 'search', label: 'Search', icon: Search },
+  { id: 'review', label: 'Review', icon: Inbox },
   { id: 'ontology', label: 'Ontology', icon: Shapes },
 ];
 
-const EMPTY_GRAPH: Graph = { nodes: [], edges: [] };
+const EMPTY_GRAPH: Graph = { entities: [], facts: [] };
 
 /** Active domain lives in the URL hash (#/quant_trading) so links and reloads keep it. */
 function readHash(): string | null {
@@ -37,6 +39,7 @@ export default function App() {
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('ask');
+  const [version, setVersion] = useState(0);  // bumps on every reload, so open panels refetch
   const [error, setError] = useState<string | null>(null);
 
   const loadDomains = useCallback(async () => {
@@ -55,6 +58,7 @@ export default function App() {
       setDetail(det);
       setOntology(ont.ontology);
       setGraph(g);
+      setVersion(v => v + 1);
       setError(null);
     } catch (e) {
       setError(String((e as Error).message));
@@ -105,7 +109,9 @@ export default function App() {
     if (!active || !detail) return;
     const t = setInterval(async () => {
       const det = await kg.domain(active).catch(() => null);
-      if (det && (det.stats.node_count !== detail.stats.node_count || det.stats.edge_count !== detail.stats.edge_count)) {
+      const s = det?.stats, old = detail.stats;
+      if (s && (s.entity_count !== old.entity_count || s.fact_count !== old.fact_count
+        || s.invalid_fact_count !== old.invalid_fact_count || s.pending_reviews !== old.pending_reviews)) {
         await loadDomain(active);
       }
     }, 15000);
@@ -135,7 +141,6 @@ export default function App() {
   }, [active, loadDomain]);
 
   const entityTypes = ontology?.entity_types ?? [];
-  const selectedNode = graph.nodes.find(n => n.id === selected) ?? null;
 
   return (
     <div className="flex h-full">
@@ -161,7 +166,7 @@ export default function App() {
                   selected={selected}
                   onSelect={setSelected}
                 />
-                {graph.nodes.length === 0 && (
+                {graph.entities.length === 0 && (
                   <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
                     <Network className="text-faint" size={32} />
                     <p className="text-sm text-dim">This knowledge graph is empty.</p>
@@ -176,11 +181,12 @@ export default function App() {
                     Clear highlight ({highlight.size})
                   </button>
                 )}
-                {selectedNode && (
-                  <NodeDetail
-                    node={selectedNode}
-                    graph={graph}
+                {selected && (
+                  <EntityPanel
+                    domain={active}
+                    uid={selected}
                     entityTypes={entityTypes}
+                    version={version}
                     onClose={() => setSelected(null)}
                     onSelect={setSelected}
                   />
@@ -198,6 +204,9 @@ export default function App() {
                       }`}
                     >
                       <Icon size={13} /> {label}
+                      {id === 'review' && detail.stats.pending_reviews > 0 && (
+                        <span className="rounded-full bg-gold px-1.5 font-mono text-[9.5px] text-black">{detail.stats.pending_reviews}</span>
+                      )}
                     </button>
                   ))}
                 </nav>
@@ -222,6 +231,9 @@ export default function App() {
                       onHighlight={setHighlight}
                       onSelect={setSelected}
                     />
+                  </div>
+                  <div className={tab === 'review' ? 'h-full' : 'hidden'}>
+                    <ReviewPanel key={active} domain={active} version={version} onChanged={refresh} />
                   </div>
                   <div className={tab === 'ontology' ? 'h-full' : 'hidden'}>
                     {ontology && (

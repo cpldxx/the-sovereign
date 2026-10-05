@@ -16,14 +16,19 @@ MODEL = model_for("ontologist")
 
 SYSTEM_PROMPT = """You are The Sovereign's Ontologist. Your job is to define the grammar of a knowledge graph.
 
+The graph's nodes are ENTITIES — discrete, nameable things (companies, products, technologies, people,
+policies, indicators, places, events). Its edges are FACTS — one entity acting on or relating to another.
+
 Given a domain name and description, generate:
-- entity_types: 5-8 specific node categories for this domain (lowercase_underscore)
-- relation_types: 4-6 edge types describing how entities connect (lowercase_underscore)
+- entity_types: 5-8 kinds of entity for this domain (lowercase_underscore), e.g. "company", "chip_product",
+  "central_bank". Kinds of THINGS — never kinds of statements ("finding", "trend", "risk_signal", "claim").
+- relation_types: 5-8 directional verb phrases between entities (lowercase_underscore), e.g. "supplies",
+  "competes_with", "regulates", "depends_on", "invests_in".
 
 Rules:
-- Be domain-specific, not generic (avoid "concept", "thing", "item")
-- Types must be mutually exclusive and cover the domain comprehensively
-- relation_types should be directional verbs or verb phrases"""
+- Domain-specific, not generic (avoid "concept", "thing", "item", "related_to").
+- Entity types mutually exclusive and together covering the domain.
+- Facts about a single entity (its status or numbers) use a built-in relation; do not invent one for them."""
 
 
 async def generate_ontology(domain_name: str, description: str) -> Ontology:
