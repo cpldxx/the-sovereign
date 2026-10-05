@@ -1,0 +1,8 @@
+# SearXNG for DeerFlow's web_search (local, no API key). Merged over SearXNG's defaults.
+use_default_settings: true
+server:
+  limiter: false          # local use only — the port is bound to 127.0.0.1
+  image_proxy: false
+search:
+  formats: [html, json]   # DeerFlow reads the JSON API
+  safe_search: 0

@@ -1,25 +1,31 @@
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
-import { hermes, kg, type DomainSummary } from '../lib/api';
+import { hermes, kg, research, type DomainSummary } from '../lib/api';
 import { NewDomainDialog } from './NewDomainDialog';
 
 interface Health {
   kg: boolean | null;
   arcadedb: boolean | null;
   hermes: boolean | null;
+  research: boolean | null;
+  search: boolean | null;
+  crawler: boolean | null;
 }
 
 function useHealth(): Health {
-  const [health, setHealth] = useState<Health>({ kg: null, arcadedb: null, hermes: null });
+  const [health, setHealth] = useState<Health>({ kg: null, arcadedb: null, hermes: null, research: null, search: null, crawler: null });
   useEffect(() => {
     let alive = true;
     const check = async () => {
-      const [k, h] = await Promise.allSettled([kg.health(), hermes.health()]);
+      const [k, h, r] = await Promise.allSettled([kg.health(), hermes.health(), research.health()]);
       if (!alive) return;
       setHealth({
         kg: k.status === 'fulfilled',
         arcadedb: k.status === 'fulfilled' ? k.value.arcadedb : null,
         hermes: h.status === 'fulfilled',
+        research: r.status === 'fulfilled',
+        search: r.status === 'fulfilled' ? r.value.searxng : null,
+        crawler: r.status === 'fulfilled' ? r.value.crawler : null,
       });
     };
     void check();
@@ -91,6 +97,8 @@ export function Sidebar({ domains, active, onSelect, onCreate }: {
         <Status label="KG API" ok={health.kg} hint="kg/ — http://localhost:8080" />
         <Status label="ArcadeDB" ok={health.arcadedb} hint="docker compose up -d — http://localhost:2480" />
         <Status label="Hermes" ok={health.hermes} hint="hermes/ — http://localhost:8090" />
+        <Status label="Research" ok={health.research} hint="research/ — http://localhost:8070" />
+        <Status label="Search · Crawler" ok={health.search === null ? null : !!(health.search && health.crawler)} hint="docker compose up -d (searxng, crawl4ai)" />
       </div>
 
       {creating && <NewDomainDialog onCreate={onCreate} onClose={() => setCreating(false)} />}

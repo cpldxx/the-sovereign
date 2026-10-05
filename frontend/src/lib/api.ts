@@ -2,6 +2,7 @@
 
 export const KG_API: string = import.meta.env.VITE_KG_URL ?? 'http://localhost:8080';
 export const HERMES_API: string = import.meta.env.VITE_HERMES_URL ?? 'http://localhost:8090';
+export const RESEARCH_API: string = import.meta.env.VITE_RESEARCH_URL ?? 'http://localhost:8070';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -141,6 +142,44 @@ export interface Review {
   resolution?: string;
 }
 
+export type ResearchMode = 'bootstrap' | 'update' | 'mission';
+
+export interface ResearchPage {
+  url: string;
+  title: string;
+  status: 'full' | 'partial' | 'failed';
+  error: string;
+  chars: number;
+  ingest?: {
+    skipped?: string;
+    error?: string;
+    duplicate?: boolean;
+    entities_created?: number;
+    entities_matched?: number;
+    facts_created?: number;
+    facts_strengthened?: number;
+    facts_invalidated?: number;
+    facts_rejected?: number;
+    review_items?: number;
+  };
+}
+
+export interface ResearchJob {
+  id: string;
+  domain: string;
+  mode: ResearchMode;
+  question: string;
+  status: 'queued' | 'researching' | 'ontology' | 'ingesting' | 'done' | 'failed';
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  steps: { at: string; text: string }[];
+  pages?: ResearchPage[];
+  report: string;
+  error: string;
+  summary: Record<string, number>;
+}
+
 export interface Turn {
   role: 'user' | 'assistant';
   content: string;
@@ -218,6 +257,21 @@ export const kg = {
     request<{ ontology: Ontology }>(KG_API, `${d(id)}/ontology`, { method: 'PUT', body: JSON.stringify(ontology) }),
 
   generateOntology: (id: string) => request<unknown>(KG_API, `${d(id)}/ontology/generate`, { method: 'POST' }),
+};
+
+// ── Research (DeerFlow) ─────────────────────────────────────────────────────
+
+export const research = {
+  health: () => request<{ research: boolean; model: string; searxng: boolean; crawler: boolean; nightly: string }>(
+    RESEARCH_API, '/health'),
+
+  start: (id: string, mode: ResearchMode, question = '') =>
+    request<ResearchJob>(RESEARCH_API, `${d(id)}/research`, json({ mode, question })),
+
+  jobs: (id: string) =>
+    request<{ jobs: ResearchJob[] }>(RESEARCH_API, `/jobs?domain=${encodeURIComponent(id)}&limit=30`).then(r => r.jobs),
+
+  job: (jobId: string) => request<ResearchJob>(RESEARCH_API, `/jobs/${encodeURIComponent(jobId)}`),
 };
 
 // ── Hermes (Head Agent) ─────────────────────────────────────────────────────

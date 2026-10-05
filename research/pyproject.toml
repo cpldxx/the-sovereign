@@ -1,0 +1,19 @@
+[project]
+name = "sovereign-research"
+version = "0.1.0"
+description = "Sovereign collection — DeerFlow research missions whose fetched pages become KG episodes"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    # DeerFlow (MIT) is not on PyPI; pinned to a release tag. Its own venv, like Hermes.
+    "deerflow-harness[ollama] @ git+https://github.com/bytedance/deer-flow@v2.1.0#subdirectory=backend/packages/harness",
+    "deerflow-extension-api @ git+https://github.com/bytedance/deer-flow@v2.1.0#subdirectory=backend/packages/extension-api",
+    # DeerFlow's code uses the MCP v1 API but doesn't cap its adapter, whose newest release pulls MCP v2.
+    # Pinned to the versions in DeerFlow's own v2.1.0 lockfile.
+    "langchain-mcp-adapters==0.2.2",
+    "mcp>=1.28,<2",
+    "langgraph==1.2.9",   # the version DeerFlow's checkpoint patch was validated against
+    "fastapi>=0.133.1",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.2.2",
+    "uvicorn>=0.41.0",
+]

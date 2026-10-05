@@ -28,18 +28,31 @@ Given a domain name and description, generate:
 Rules:
 - Domain-specific, not generic (avoid "concept", "thing", "item", "related_to").
 - Entity types mutually exclusive and together covering the domain.
-- Facts about a single entity (its status or numbers) use a built-in relation; do not invent one for them."""
+- Facts about a single entity (its status or numbers) use a built-in relation; do not invent one for them.
+- When SOURCE EXCERPTS are given, derive the types from what those sources actually talk about — the kinds of
+  things they name and the ways they relate them — rather than from what the domain might contain."""
+
+EXCERPT_CHARS = 1500   # per source
+MAX_EXCERPTS = 10
 
 
-async def generate_ontology(domain_name: str, description: str) -> Ontology:
+async def generate_ontology(domain_name: str, description: str, corpus: list[str] | None = None) -> Ontology:
+    """`corpus`: texts from real sources (research) to ground the grammar in; without it the
+    ontology comes from the description alone."""
     agent = Agent(MODEL, model_settings=model_settings(), system_prompt=SYSTEM_PROMPT, output_type=Ontology, retries=3)
-    result = await agent.run(
-        f"Domain: {domain_name}\nDescription: {description}\n\nGenerate the ontology."
-    )
+    prompt = f"Domain: {domain_name}\nDescription: {description}\n"
+    if corpus:
+        excerpts = "\n\n".join(
+            f"[{i}] {text.strip()[:EXCERPT_CHARS]}" for i, text in enumerate(corpus[:MAX_EXCERPTS]) if text.strip()
+        )
+        prompt += f"\nSOURCE EXCERPTS (from real research on this domain):\n{excerpts}\n"
+    result = await agent.run(prompt + "\nGenerate the ontology.")
     return result.output
 
 
-async def bootstrap_domain_ontology(domain: str, description: str, *, overwrite: bool = False) -> None:
+async def bootstrap_domain_ontology(
+    domain: str, description: str, *, overwrite: bool = False, corpus: list[str] | None = None
+) -> None:
     """Generate and save ontology.json for a domain. Never raises.
 
     Slow (minutes on a large local model), so it runs as a background task. On
@@ -49,7 +62,7 @@ async def bootstrap_domain_ontology(domain: str, description: str, *, overwrite:
     try:
         if ontology_path(domain).exists() and not overwrite:
             return
-        ontology = await generate_ontology(domain, description)
+        ontology = await generate_ontology(domain, description, corpus)
         save_ontology(domain, ontology)
     except Exception as e:
         print(f"[Ontologist] Failed for '{domain}': {type(e).__name__}: {e}", flush=True)

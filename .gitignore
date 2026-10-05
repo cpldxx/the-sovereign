@@ -14,3 +14,7 @@ CLAUDE.md
 
 # Hermes runtime state (sessions, logs, memory)
 hermes/.hermes-home/
+
+# Research service runtime state (job log, DeerFlow home)
+research/.data/
+research/.deerflow-home/

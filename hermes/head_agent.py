@@ -37,7 +37,7 @@ HEAD_THINKING = os.getenv("HEAD_THINKING", "false").strip().lower() in ("1", "tr
 # A reply that is nothing but a written-out call like `query_knowledge_graph(domain="x", ...)`.
 _TEXT_TOOL_CALL = re.compile(
     r"^\s*`*(query_knowledge_graph|get_entity|ingest_data|get_ontology|update_ontology|list_reviews|"
-    r"resolve_review|list_domains)\s*\(.*\)\s*`*\s*$",
+    r"resolve_review|list_domains|start_research|research_status|list_research)\s*\(.*\)\s*`*\s*$",
     re.S,
 )
 
@@ -103,9 +103,12 @@ How you work:
    note: approve a weak fact only if it is worth keeping as a signal; approve a merge only if both names
    are the same real-world thing; approve a link only if the new fact truly restates or replaces the old.
    Use get_entity / query_knowledge_graph to check before deciding.
-5. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
+5. When the graph lacks what a question needs, send the research agent: start_research(domain, question) reads
+   the web and every page it reads is ingested into the graph (several minutes, in the background). Tell the
+   user you started it; check with research_status / list_research when asked. Don't wait in a loop.
+6. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
    grammar cannot express it (e.g. many facts rejected for the same missing relation). Never for one fact.
-6. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
+7. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
 
 
 def _unwrap(raw):

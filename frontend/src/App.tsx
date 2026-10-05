@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bot, FileInput, Inbox, Network, Search, Shapes } from 'lucide-react';
-import { kg, type DomainDetail, type DomainSummary, type Graph, type Ontology } from './lib/api';
+import { Bot, FileInput, Globe, Inbox, Network, Search, Shapes } from 'lucide-react';
+import { kg, research, type DomainDetail, type DomainSummary, type Graph, type Ontology } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { DomainHeader } from './components/DomainHeader';
 import { GraphView } from './components/GraphView';
@@ -11,11 +11,13 @@ import { IngestPanel } from './panels/IngestPanel';
 import { SearchPanel } from './panels/SearchPanel';
 import { OntologyPanel } from './panels/OntologyPanel';
 import { ReviewPanel } from './panels/ReviewPanel';
+import { ResearchPanel } from './panels/ResearchPanel';
 
-type Tab = 'ask' | 'ingest' | 'search' | 'review' | 'ontology';
+type Tab = 'ask' | 'research' | 'ingest' | 'search' | 'review' | 'ontology';
 
 const TABS: { id: Tab; label: string; icon: typeof Bot }[] = [
-  { id: 'ask', label: 'Head Agent', icon: Bot },
+  { id: 'ask', label: 'Head', icon: Bot },
+  { id: 'research', label: 'Research', icon: Globe },
   { id: 'ingest', label: 'Ingest', icon: FileInput },
   { id: 'search', label: 'Search', icon: Search },
   { id: 'review', label: 'Review', icon: Inbox },
@@ -127,7 +129,13 @@ export default function App() {
     const id = await kg.createDomain(name, description);
     await loadDomains();
     select(id);
-    setTab('ingest');
+    // Start the research bootstrap right away when the research service is up; otherwise ingest by hand.
+    try {
+      await research.start(id, 'bootstrap');
+      setTab('research');
+    } catch {
+      setTab('ingest');
+    }
   }
 
   async function deleteDomain(id: string) {
@@ -214,6 +222,9 @@ export default function App() {
                   {/* Panels stay mounted so a running chat or ingest survives tab switches. */}
                   <div className={tab === 'ask' ? 'h-full' : 'hidden'}>
                     <AskPanel key={active} domain={active} onKnowledgeChanged={refresh} onHighlight={setHighlight} />
+                  </div>
+                  <div className={tab === 'research' ? 'h-full' : 'hidden'}>
+                    <ResearchPanel key={active} domain={active} onIngesting={refresh} />
                   </div>
                   <div className={tab === 'ingest' ? 'h-full' : 'hidden'}>
                     <IngestPanel

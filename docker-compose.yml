@@ -13,6 +13,31 @@ services:
     networks:
       - sovereign-net
 
+  # Web search for DeerFlow (metasearch, no API key). JSON API at http://localhost:8088/search?format=json
+  searxng:
+    image: searxng/searxng:latest
+    environment:
+      # Signs SearXNG's cookies. Local-only service; override in a root .env for anything shared.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-sovereign-local-searxng}
+    ports:
+      - "127.0.0.1:8088:8080"
+    volumes:
+      - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - sovereign-net
+
+  # Page fetching for DeerFlow: renders JavaScript pages with headless Chromium, returns clean markdown.
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    environment:
+      # Bearer token the research service sends. Local-only; override in a root .env for anything shared.
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-sovereign-local-crawl4ai}
+    ports:
+      - "127.0.0.1:11235:11235"
+    shm_size: 1g
+    networks:
+      - sovereign-net
+
 volumes:
   arcadedb_data:
 

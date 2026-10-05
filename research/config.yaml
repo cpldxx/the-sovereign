@@ -1,0 +1,49 @@
+# DeerFlow configuration for Sovereign research missions.
+# Only web search + our fetch tool; no shell, no file tools, no extra LLM calls (titles, suggestions,
+# memory, input polishing) — every model call goes to research. See DeerFlow's config.example.yaml
+# (v2.1.0) for every option.
+config_version: 52
+log_level: warning
+# Graph steps per run (each model turn and tool call counts). Research reads many pages; 100 is too few.
+recursion_limit: 400
+
+models:
+  - name: local
+    display_name: Research model (Ollama)
+    use: langchain_ollama:ChatOllama
+    model: $RESEARCH_OLLAMA_MODEL
+    base_url: $OLLAMA_HOST
+    reasoning: false          # think:false on Ollama's native API — ~9x faster, same quality (measured)
+    temperature: 0.2
+    # DeerFlow's own budget (summarizes long runs before this). No num_ctx: Ollama then serves the same
+    # context to every client (KG, Hermes, DeerFlow) — a different num_ctx would reload the model on each switch.
+    context_window: 65536
+    supports_thinking: false
+    supports_vision: false
+
+tool_groups:
+  - name: web
+
+tools:
+  - name: web_search
+    group: web
+    use: deerflow.community.searxng.tools:web_search_tool
+    base_url: $SEARXNG_URL
+    max_results: 8
+  # Sovereign's fetch: robots.txt, per-site pacing, crawl4ai rendering, and the full page kept for the KG.
+  - name: web_fetch
+    group: web
+    use: sovereign_research.fetch:web_fetch_tool
+
+sandbox:
+  use: deerflow.sandbox.local:LocalSandboxProvider
+  allow_host_bash: false
+
+title:
+  enabled: false
+suggestions:
+  enabled: false
+memory:
+  enabled: false
+input_polish:
+  enabled: false

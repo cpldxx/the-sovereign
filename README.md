@@ -38,7 +38,7 @@ The gap widens as the knowledge graph grows deeper.
 
 ## Architecture
 
-"Sovereign" is the whole system — three independent parts:
+"Sovereign" is the whole system — four independent parts:
 
 ```
 ┌──────────────────────── Sovereign ────────────────────────┐
@@ -46,6 +46,7 @@ The gap widens as the knowledge graph grows deeper.
 │  frontend/  — graph, Head Agent chat, ingest, search, ontology│
 │        │ REST                         │ REST (/ask)       │
 │        ▼                              ▼                   │
+│  research/  DeerFlow ── raw pages ──▶ kg/ (episodes)      │
 │  kg/  Sovereign KG API  ◀── MCP ──  hermes/  Hermes agents│
 │   - query (vector + graph)            Head Agent (CEO)    │
 │   - ingest pipeline                   (Data / Analyst /   │
@@ -106,7 +107,7 @@ The ontology is the grammar of a domain's KG — which node categories and relat
 
 Requirements: Docker, [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node.js. Python 3.12 is installed by uv.
 
-Run each step from the repo root, steps 2–4 each in their own terminal.
+Run each step from the repo root, steps 2–5 each in their own terminal.
 
 ```bash
 # 0. Models (every model is an env var — see kg/.env.example and hermes/.env.example)
@@ -114,7 +115,7 @@ ollama pull qwen3.6:35b              # every agent (MoE, fast); thinking off by 
 ollama pull nomic-embed-text-v2-moe  # embeddings
 # Claude instead: set LLM_MODEL / HEAD_MODEL=anthropic:<model> + ANTHROPIC_API_KEY in kg/.env and hermes/.env
 
-# 1. ArcadeDB  → Studio at http://localhost:2480 (root / sovereign_pass)
+# 1. ArcadeDB (Studio http://localhost:2480, root / sovereign_pass) + SearXNG search + crawl4ai crawler
 docker compose up -d
 
 # 2. KG API  → http://localhost:8080  (OpenAPI docs at /docs, MCP at /mcp)
@@ -123,7 +124,10 @@ cd kg && cp .env.example .env && uv sync && uv run python main.py
 # 3. Hermes (Head Agent)  → http://localhost:8090
 cd hermes && cp .env.example .env && uv sync && uv run python server.py
 
-# 4. Frontend  → http://localhost:5173
+# 4. Research (DeerFlow)  → http://localhost:8070 — first install pulls DeerFlow from GitHub
+cd research && cp .env.example .env && uv sync && uv run python server.py
+
+# 5. Frontend  → http://localhost:5173
 cd frontend && npm install && npm run dev
 ```
 
@@ -137,7 +141,8 @@ One screen per domain: the knowledge graph on the left, tools on the right.
 - **Search** — Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources.
 - **Review** — the Head review queue: approve/dismiss yourself, or let the Head Agent decide everything.
 - **Ontology** — the domain's grammar with per-type counts; edit it or have the Ontologist regenerate it.
-- **Status** — KG API / ArcadeDB / Hermes health in the sidebar.
+- **Research** — bootstrap, "what's new" and custom missions; each run shows the pages read, what each added to the graph, failures and the report.
+- **Status** — KG API / ArcadeDB / Hermes / Research / search + crawler health in the sidebar.
 
 Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_URL` (see `frontend/.env.example`).
 
@@ -162,7 +167,17 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 | `GET` / `POST` | `/domains/{domain}/reviews`, `/reviews/{uid}` | Head review queue / decide `{approve, note}` |
 | `GET` | `/health` | KG API + ArcadeDB status |
 | `POST` | `/domains/{domain}/generate-tools` | OpenHands writes domain tools (background job) |
-| MCP | `/mcp` | Tools: `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review` |
+| MCP | `/mcp` | Tools: `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `start_research`, `research_status`, `list_research` |
+
+### Research (`research/`, port 8070)
+
+| Method | Path | What |
+|---|---|---|
+| `POST` | `/domains/{domain}/research` | Queue a run `{mode: bootstrap \| update \| mission, question?}` |
+| `GET` | `/jobs?domain=`, `/jobs/{id}` | Runs: status, pages read (and what each added to the graph), report |
+| `GET` | `/health` | Model, SearXNG, crawler, nightly schedule |
+
+Every night (03:00, `RESEARCH_NIGHTLY_HOUR`) each domain gets a "what's new" run — or a bootstrap if it never had one.
 
 ### Hermes (`hermes/`, port 8090)
 
@@ -185,7 +200,7 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 | LLMs + embeddings | Ollama (qwen3.6:35b, nomic-embed) by default; Claude via env | — |
 | Autonomous coding | OpenHands | MIT |
 | Frontend | React 19 + Vite + Tailwind + Cytoscape.js | — |
-| Deep research (planned) | Deer-flow | — |
+| Research / collection | DeerFlow 2.1 + SearXNG + crawl4ai | MIT / AGPL-3.0 (run unmodified as a separate service) / Apache 2.0 + attribution |
 | Observability (planned) | LangFuse | — |
 | Voice (planned) | Hermes TTS | — |
 
@@ -207,9 +222,11 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - LLM unification: qwen3.6:35b, thinking off, Claude via env (ontology 164 s → 17 s, Head 60–240 s → 17 s)
 - Neuron KG: entities, weighted facts with history, episodes, entity resolution, Head review queue
 
-### Next — Phase C: DeerFlow collection
-- DeerFlow (MIT) as a 4th service: domain bootstrap research → ontology from real sources → first episodes
-- Nightly "what's new" missions per domain and Head-assigned missions; the raw pages it opened are ingested (never its LLM-written report); access failures are logged, nothing is bypassed
+### ✅ Phase C — DeerFlow collection
+- `research/`: DeerFlow (embedded) with SearXNG search and a Sovereign fetch tool (robots.txt, per-site pacing, crawl4ai rendering)
+- Bootstrap: research → ontology derived from the pages read → pages ingested as the first episodes
+- Nightly "what's new" runs; Head-assigned missions through MCP; the raw pages are ingested, never the LLM report
+- Unreadable pages (blocked, paywalled, robots.txt) are recorded, never bypassed
 
 ### Phase D — Observability + daily report
 - LangFuse tracing; 24h report (collected, new entities, strengthened/superseded facts, failures); nightly entity summary refresh
@@ -220,3 +237,12 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 
 ### Phase F — Voice · Phase G — SaaS
 - Hermes TTS / always-on voice · auth, multi-tenant, per-user isolation
+
+---
+
+## Credits
+
+- This product includes software developed by UncleCode (https://x.com/unclecode) as part of the Crawl4AI project (https://github.com/unclecode/crawl4ai).
+- Entity/fact extraction rules are adapted from [Graphiti](https://github.com/getzep/graphiti) by Zep Software (Apache 2.0).
+- Research runs on [DeerFlow](https://github.com/bytedance/deer-flow) (MIT); agents on [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT); storage on [ArcadeDB](https://github.com/ArcadeData/arcadedb) (Apache 2.0).
+- Web search via a self-hosted, unmodified [SearXNG](https://github.com/searxng/searxng) (AGPL-3.0). If it is ever modified and offered to users over a network, its source must be published.

@@ -5,8 +5,10 @@ with their schemas; no glue code is needed on the agent side. Every tool calls t
 `core` functions the REST routes use.
 """
 
+import os
 from typing import Literal
 
+import httpx
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
@@ -29,6 +31,20 @@ mcp = MCPServer(
 
 # Set by main.py's lifespan: the same ArcadeDB client the REST routes use.
 db: ArcadeDB | None = None
+
+# The research service (DeerFlow) — reached through these tools so agents keep one entry point.
+RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
+
+
+async def _research(method: str, path: str, **kw) -> dict:
+    try:
+        async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=30) as client:
+            r = await client.request(method, path, **kw)
+    except httpx.HTTPError as e:
+        raise ToolError(f"Research service unreachable at {RESEARCH_URL} ({type(e).__name__})") from e
+    if r.is_error:
+        raise ToolError(f"Research service: {r.status_code} {r.text[:300]}")
+    return r.json()
 
 
 def _require(domain: str) -> dict:
@@ -129,3 +145,31 @@ async def resolve_review(domain: str, uid: str, approve: bool, note: str = "") -
         return await kg.resolve_review(db, domain, uid, approve, note)
     except ValueError as e:
         raise ToolError(str(e)) from e
+
+
+@mcp.tool()
+async def start_research(domain: str, question: str) -> dict:
+    """Send the research agent (DeerFlow) on a mission: it searches the web, reads the most relevant pages
+    in full and every page it reads is ingested into the domain's graph as a source episode.
+    Runs in the background (several minutes). Returns a job id for research_status."""
+    _require(domain)
+    return await _research("POST", f"/domains/{domain}/research", json={"mode": "mission", "question": question})
+
+
+@mcp.tool()
+async def research_status(job_id: str) -> dict:
+    """Status of a research job: queued / researching / ingesting / done / failed, the pages it read
+    (with what each added to the graph or why it failed) and, when done, its short report."""
+    job = await _research("GET", f"/jobs/{job_id}")
+    for page in job.get("pages", []):
+        page.pop("markdown", None)
+    return job
+
+
+@mcp.tool()
+async def list_research(domain: str) -> list[dict]:
+    """Recent research jobs for a domain (newest first): bootstrap, nightly updates and missions."""
+    _require(domain)
+    jobs = await _research("GET", "/jobs", params={"domain": domain, "limit": 20})
+    return [{k: j.get(k) for k in ("id", "mode", "question", "status", "created_at", "finished_at", "summary")}
+            for j in jobs.get("jobs", [])]
