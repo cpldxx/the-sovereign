@@ -6,3 +6,17 @@ server:
 search:
   formats: [html, json]   # DeerFlow reads the JSON API
   safe_search: 0
+
+# More engines spread the load: free engines rate-limit (or CAPTCHA) a single client after
+# many queries, and Sovereign never works around that — it asks other engines instead.
+engines:
+  - name: bing
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: mojeek
+    disabled: false
+  - name: qwant
+    disabled: false
+  - name: startpage
+    disabled: false

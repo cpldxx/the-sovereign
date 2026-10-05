@@ -122,6 +122,13 @@ class Jobs:
         report, pages = await asyncio.to_thread(runner.run, prompt, on_step)
         job["report"] = report
         readable = [p for p in pages if p.status != "failed"]
+        if not readable:
+            job["pages"] = [{"url": p.url, "title": p.title, "status": p.status, "error": p.error, "chars": 0}
+                            for p in pages]
+            raise RuntimeError(
+                "no page could be read — " + ("every page failed (see pages)" if pages else
+                "the agent found nothing to open (search engines may be rate-limiting; "
+                "try later, or set TAVILY_API_KEY / BRAVE_API_KEY in research/.env)"))
         job["pages"] = [
             {"url": p.url, "title": p.title, "status": p.status, "error": p.error, "chars": len(p.markdown)}
             for p in pages

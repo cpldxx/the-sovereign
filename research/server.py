@@ -118,7 +118,10 @@ async def health():
     return {
         "research": True,
         "model": runner.model_name(),
-        "searxng": await up(f"{SEARXNG_URL}/search", params={"q": "ping", "format": "json"}),
+        "search": runner.search_provider(),
+        # An API search provider doesn't need the local SearXNG.
+        "searxng": runner.search_provider() != "searxng"
+        or await up(f"{SEARXNG_URL}/search", params={"q": "ping", "format": "json"}),
         "crawler": await up(f"{fetch.CRAWL4AI_URL}/health"),
         "nightly": f"{NIGHTLY_HOUR:02d}:00" if NIGHTLY else "off",
     }

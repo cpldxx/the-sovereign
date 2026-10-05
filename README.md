@@ -179,6 +179,8 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 
 Every night (03:00, `RESEARCH_NIGHTLY_HOUR`) each domain gets a "what's new" run — or a bootstrap if it never had one.
 
+Search uses the local SearXNG by default. Its free engines throttle heavy use (searches are paced, and Sovereign never works around a block); for reliable daily research set `TAVILY_API_KEY` or `BRAVE_API_KEY` in `research/.env` (both have free tiers).
+
 ### Hermes (`hermes/`, port 8090)
 
 | Method | Path | What |

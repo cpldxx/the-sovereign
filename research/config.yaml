@@ -4,8 +4,6 @@
 # (v2.1.0) for every option.
 config_version: 52
 log_level: warning
-# Graph steps per run (each model turn and tool call counts). Research reads many pages; 100 is too few.
-recursion_limit: 400
 
 models:
   - name: local
@@ -25,11 +23,11 @@ tool_groups:
   - name: web
 
 tools:
+  # SearXNG with pacing (sovereign_research/search.py). runner.py swaps in Tavily or Brave
+  # when TAVILY_API_KEY / BRAVE_API_KEY is set.
   - name: web_search
     group: web
-    use: deerflow.community.searxng.tools:web_search_tool
-    base_url: $SEARXNG_URL
-    max_results: 8
+    use: sovereign_research.search:web_search_tool
   # Sovereign's fetch: robots.txt, per-site pacing, crawl4ai rendering, and the full page kept for the KG.
   - name: web_fetch
     group: web

@@ -9,19 +9,50 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import yaml
 from deerflow.client import DeerFlowClient
 
 from sovereign_research import fetch
 
 CONFIG = Path(__file__).resolve().parent.parent / "config.yaml"
+# Graph steps per run (each model turn and tool call counts). The embedded client ignores config.yaml's
+# recursion_limit and defaults to 100 — too few for reading many pages — so it is passed per run.
+RECURSION_LIMIT = int(os.getenv("RESEARCH_RECURSION_LIMIT", "400"))
 
 _client: DeerFlowClient | None = None
+
+
+def search_provider() -> str:
+    """Which web search the agent uses: an API when a key is set, else the local SearXNG."""
+    if os.getenv("TAVILY_API_KEY"):
+        return "tavily"
+    if os.getenv("BRAVE_API_KEY"):
+        return "brave"
+    return "searxng"
+
+
+def _resolved_config() -> str:
+    """config.yaml with the web_search tool chosen from env, written next to DeerFlow's state."""
+    config = yaml.safe_load(CONFIG.read_text())
+    provider = search_provider()
+    if provider != "searxng":
+        key = os.environ["TAVILY_API_KEY" if provider == "tavily" else "BRAVE_API_KEY"]
+        for t in config["tools"]:
+            if t["name"] == "web_search":
+                t.clear()
+                t.update(name="web_search", group="web", max_results=8, api_key=key,
+                         use=f"deerflow.community.{provider}.tools:web_search_tool")
+    out = Path(os.environ["DEER_FLOW_HOME"]) / "config.resolved.yaml"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(yaml.safe_dump(config, sort_keys=False))
+    out.chmod(0o600)  # may hold an API key
+    return str(out)
 
 
 def _get_client() -> DeerFlowClient:
     global _client
     if _client is None:
-        _client = DeerFlowClient(config_path=str(CONFIG), thinking_enabled=False, subagent_enabled=False)
+        _client = DeerFlowClient(config_path=_resolved_config(), thinking_enabled=False, subagent_enabled=False)
     return _client
 
 
@@ -35,7 +66,7 @@ def run(prompt: str, on_step: Callable[[str], None]) -> tuple[str, list[fetch.Pa
     order: list[str] = []
     start = time.monotonic()
     try:
-        for ev in _get_client().stream(prompt):
+        for ev in _get_client().stream(prompt, recursion_limit=RECURSION_LIMIT):
             if ev.type != "messages-tuple" or not isinstance(ev.data, dict):
                 continue
             data = ev.data
