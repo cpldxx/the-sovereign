@@ -14,7 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import kg
+from core import digest, kg
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -145,6 +145,19 @@ async def resolve_review(domain: str, uid: str, approve: bool, note: str = "") -
         return await kg.resolve_review(db, domain, uid, approve, note)
     except ValueError as e:
         raise ToolError(str(e)) from e
+
+
+@mcp.tool()
+async def daily_report(domain: str) -> dict:
+    """The latest daily report for a domain: a headline, a briefing of what changed in the graph (new sources,
+    entities and facts, facts confirmed or superseded, research runs, what needs attention) and a short spoken
+    version. Reports are written every night after research; use this when asked what happened or what's new."""
+    _require(domain)
+    reports = await kgdb.list_reports(db, domain, 1)
+    if not reports:
+        return {"report": None, "generating": digest.running(domain),
+                "note": "No report yet — one is written every night after research."}
+    return {"report": reports[0], "generating": digest.running(domain)}
 
 
 @mcp.tool()

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bot, FileInput, Globe, Inbox, Network, Search, Shapes } from 'lucide-react';
+import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Shapes } from 'lucide-react';
 import { kg, research, type DomainDetail, type DomainSummary, type Graph, type Ontology } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { DomainHeader } from './components/DomainHeader';
@@ -12,11 +12,13 @@ import { SearchPanel } from './panels/SearchPanel';
 import { OntologyPanel } from './panels/OntologyPanel';
 import { ReviewPanel } from './panels/ReviewPanel';
 import { ResearchPanel } from './panels/ResearchPanel';
+import { ReportPanel } from './panels/ReportPanel';
 
-type Tab = 'ask' | 'research' | 'ingest' | 'search' | 'review' | 'ontology';
+type Tab = 'ask' | 'report' | 'research' | 'ingest' | 'search' | 'review' | 'ontology';
 
 const TABS: { id: Tab; label: string; icon: typeof Bot }[] = [
   { id: 'ask', label: 'Head', icon: Bot },
+  { id: 'report', label: 'Report', icon: Newspaper },
   { id: 'research', label: 'Research', icon: Globe },
   { id: 'ingest', label: 'Ingest', icon: FileInput },
   { id: 'search', label: 'Search', icon: Search },
@@ -207,11 +209,13 @@ export default function App() {
                     <button
                       key={id}
                       onClick={() => setTab(id)}
-                      className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-xs transition-colors ${
-                        tab === id ? 'border-gold text-ink' : 'border-transparent text-faint hover:text-dim'
+                      title={label}
+                      className={`flex min-w-0 items-center justify-center gap-1.5 border-b-2 py-2.5 text-xs transition-colors ${
+                        tab === id ? 'flex-[2.2] border-gold text-ink' : 'flex-1 border-transparent text-faint hover:text-dim'
                       }`}
                     >
-                      <Icon size={13} /> {label}
+                      {/* Seven tabs: only the active one shows its name. */}
+                      <Icon size={13} className="shrink-0" /> {tab === id && <span className="truncate">{label}</span>}
                       {id === 'review' && detail.stats.pending_reviews > 0 && (
                         <span className="rounded-full bg-gold px-1.5 font-mono text-[9.5px] text-black">{detail.stats.pending_reviews}</span>
                       )}
@@ -222,6 +226,9 @@ export default function App() {
                   {/* Panels stay mounted so a running chat or ingest survives tab switches. */}
                   <div className={tab === 'ask' ? 'h-full' : 'hidden'}>
                     <AskPanel key={active} domain={active} onKnowledgeChanged={refresh} onHighlight={setHighlight} />
+                  </div>
+                  <div className={tab === 'report' ? 'h-full' : 'hidden'}>
+                    <ReportPanel key={active} domain={active} version={version} onHighlight={setHighlight} onSelect={setSelected} />
                   </div>
                   <div className={tab === 'research' ? 'h-full' : 'hidden'}>
                     <ResearchPanel key={active} domain={active} onIngesting={refresh} />

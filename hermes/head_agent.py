@@ -24,6 +24,30 @@ load_dotenv(HERE / ".env")
 # Must be set before any Hermes module is imported.
 os.environ.setdefault("HERMES_HOME", str(HERE / ".hermes-home"))
 
+# LangFuse tracing (optional), through Hermes' bundled langfuse plugin. The Sovereign services share
+# LANGFUSE_* keys; the plugin reads HERMES_LANGFUSE_* and is opt-in, so it is enabled here. Plugins are
+# discovered when Hermes is imported, so this too must run first.
+TRACING = bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
+
+
+def _enable_hermes_plugin(name: str) -> None:
+    import yaml
+
+    path = Path(os.environ["HERMES_HOME"]) / "config.yaml"
+    config = (yaml.safe_load(path.read_text()) if path.exists() else None) or {}
+    enabled = config.setdefault("plugins", {}).setdefault("enabled", [])
+    if name not in enabled:
+        enabled.append(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(yaml.safe_dump(config, sort_keys=False))
+
+
+if TRACING:
+    for _key in ("PUBLIC_KEY", "SECRET_KEY", "BASE_URL"):
+        if os.getenv(f"LANGFUSE_{_key}"):
+            os.environ.setdefault(f"HERMES_LANGFUSE_{_key}", os.environ[f"LANGFUSE_{_key}"])
+    _enable_hermes_plugin("observability/langfuse")
+
 from run_agent import AIAgent  # noqa: E402
 from tools.mcp_tool import register_mcp_servers  # noqa: E402
 
@@ -37,7 +61,7 @@ HEAD_THINKING = os.getenv("HEAD_THINKING", "false").strip().lower() in ("1", "tr
 # A reply that is nothing but a written-out call like `query_knowledge_graph(domain="x", ...)`.
 _TEXT_TOOL_CALL = re.compile(
     r"^\s*`*(query_knowledge_graph|get_entity|ingest_data|get_ontology|update_ontology|list_reviews|"
-    r"resolve_review|list_domains|start_research|research_status|list_research)\s*\(.*\)\s*`*\s*$",
+    r"resolve_review|list_domains|start_research|research_status|list_research|daily_report)\s*\(.*\)\s*`*\s*$",
     re.S,
 )
 
@@ -106,9 +130,11 @@ How you work:
 5. When the graph lacks what a question needs, send the research agent: start_research(domain, question) reads
    the web and every page it reads is ingested into the graph (several minutes, in the background). Tell the
    user you started it; check with research_status / list_research when asked. Don't wait in a loop.
-6. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
+6. For "what happened / what's new / brief me", start from daily_report (written every night after research),
+   then drill into the graph if asked. Read it out in your own words; don't just paste it.
+7. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
    grammar cannot express it (e.g. many facts rejected for the same missing relation). Never for one fact.
-7. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
+8. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
 
 
 def _unwrap(raw):

@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from head_agent import HEAD_MODEL, DomainNotFound, ask_head, connect_kg
+from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, connect_kg
 
 
 @asynccontextmanager
@@ -121,7 +121,7 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"hermes": True, "model": HEAD_MODEL}
+    return {"hermes": True, "model": HEAD_MODEL, "tracing": TRACING}
 
 
 if __name__ == "__main__":

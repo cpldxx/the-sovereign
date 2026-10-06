@@ -117,6 +117,9 @@ ollama pull nomic-embed-text-v2-moe  # embeddings
 
 # 1. ArcadeDB (Studio http://localhost:2480, root / sovereign_pass) + SearXNG search + crawl4ai crawler
 docker compose up -d
+# Optional: LangFuse tracing → http://localhost:3000 (sign up there; you join the "sovereign" project).
+# The .env files already carry its local keys; without it running, traces are simply dropped.
+docker compose --profile observability up -d
 
 # 2. KG API  → http://localhost:8080  (OpenAPI docs at /docs, MCP at /mcp)
 cd kg && cp .env.example .env && uv sync && uv run python main.py
@@ -141,8 +144,9 @@ One screen per domain: the knowledge graph on the left, tools on the right.
 - **Search** — Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources.
 - **Review** — the Head review queue: approve/dismiss yourself, or let the Head Agent decide everything.
 - **Ontology** — the domain's grammar with per-type counts; edit it or have the Ontologist regenerate it.
-- **Research** — bootstrap, "what's new" and custom missions; each run shows the pages read, what each added to the graph, failures and the report.
-- **Status** — KG API / ArcadeDB / Hermes / Research / search + crawler health in the sidebar.
+- **Report** — the daily briefing: what the graph learned, what changed (superseded and confirmed facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now.
+- **Research** — bootstrap, "what's new" and custom missions; each run shows the pages read, what each added to the graph (and how long it took), failures and the report.
+- **Status** — KG API / ArcadeDB / Hermes / Research / search + crawler health in the sidebar, plus a link to the LangFuse traces when tracing is on.
 
 Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_URL` (see `frontend/.env.example`).
 
@@ -165,9 +169,10 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 | `GET` | `/domains/{domain}/entities/{uid}` | One entity: facts (with history) + source episodes |
 | `GET` | `/domains/{domain}/episodes` | Ingested sources, newest first |
 | `GET` / `POST` | `/domains/{domain}/reviews`, `/reviews/{uid}` | Head review queue / decide `{approve, note}` |
-| `GET` | `/health` | KG API + ArcadeDB status |
+| `GET` / `POST` | `/domains/{domain}/reports`, `/reports/{uid}` | Daily reports / write one now `{hours: 24, wait?}`: refreshes stale entity summaries, then a briefing of the period's changes |
+| `GET` | `/health` | KG API + ArcadeDB status, tracing on/off |
 | `POST` | `/domains/{domain}/generate-tools` | OpenHands writes domain tools (background job) |
-| MCP | `/mcp` | Tools: `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `start_research`, `research_status`, `list_research` |
+| MCP | `/mcp` | Tools: `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `start_research`, `research_status`, `list_research` |
 
 ### Research (`research/`, port 8070)
 
@@ -177,7 +182,7 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 | `GET` | `/jobs?domain=`, `/jobs/{id}` | Runs: status, pages read (and what each added to the graph), report |
 | `GET` | `/health` | Model, SearXNG, crawler, nightly schedule |
 
-Every night (03:00, `RESEARCH_NIGHTLY_HOUR`) each domain gets a "what's new" run — or a bootstrap if it never had one.
+Every night (03:00, `RESEARCH_NIGHTLY_HOUR`) each domain gets a "what's new" run — or a bootstrap if it never had one — and, once its runs are finished, its daily report.
 
 Search uses the local SearXNG by default. Its free engines throttle heavy use (searches are paced, and Sovereign never works around a block); for reliable daily research set `TAVILY_API_KEY` or `BRAVE_API_KEY` in `research/.env` (both have free tiers).
 
@@ -203,7 +208,7 @@ Search uses the local SearXNG by default. Its free engines throttle heavy use (s
 | Autonomous coding | OpenHands | MIT |
 | Frontend | React 19 + Vite + Tailwind + Cytoscape.js | — |
 | Research / collection | DeerFlow 2.1 + SearXNG + crawl4ai | MIT / AGPL-3.0 (run unmodified as a separate service) / Apache 2.0 + attribution |
-| Observability (planned) | LangFuse | — |
+| Observability | LangFuse (self-hosted, optional) | MIT (core) |
 | Voice (planned) | Hermes TTS | — |
 
 ---
@@ -230,8 +235,11 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - Nightly "what's new" runs; Head-assigned missions through MCP; the raw pages are ingested, never the LLM report
 - Unreadable pages (blocked, paywalled, robots.txt) are recorded, never bypassed
 
-### Phase D — Observability + daily report
-- LangFuse tracing; 24h report (collected, new entities, strengthened/superseded facts, failures); nightly entity summary refresh
+### ✅ Phase D — Observability + daily report
+- LangFuse traces every LLM call (KG agents, Hermes, DeerFlow) with tokens and latency; every ingest reports per-stage timings
+- Ingest keeps more of what it extracts: amounts/dates never become entities, reverse/variant relations are normalized in code (`manufactured_by` → `manufactures`, swapped), facts about dropped values stay as states; what the ontology can't hold is counted and reported
+- Nightly: research → stale entity summaries rewritten → daily report (UI tab, read aloud, Head Agent `daily_report` tool)
+- Judging agents (Validator, Resolver, Linker) run at a low temperature for consistent decisions; research no longer hangs on parallel searches
 
 ### Phase E — Agents + action (the fast path)
 - Per-role tools, Coder Agent writes per-domain live-data tools, nightly playbooks from the graph

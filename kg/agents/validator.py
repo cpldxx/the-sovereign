@@ -43,7 +43,8 @@ For each fact:
 - Do NOT judge facts against your own knowledge: the source may report events newer than your training data.
 Return one verdict per fact, with its index."""
 
-_agent = Agent(MODEL, model_settings=model_settings(), system_prompt=SYSTEM, output_type=Verdicts, retries=3)
+_agent = Agent(MODEL, name="validator", model_settings=model_settings(decisive=True),
+               system_prompt=SYSTEM, output_type=Verdicts, retries=3)
 
 
 async def validate(text: str, source: str, facts: list[str]) -> list[FactVerdict]:

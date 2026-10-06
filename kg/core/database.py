@@ -9,6 +9,8 @@ One ArcadeDB database per domain:
     (:Episode)   memory   uid, source, title, content, content_status, content_hash, created_at
     (:Episode)-[:MENTIONS]->(:Entity)
     ReviewItem (document) uid, kind, status, summary, payload (JSON), created_at, resolved_at, resolution
+    Report     (document) uid, kind, period_start, period_end, created_at, headline, briefing, spoken,
+                          stats (JSON), digest (JSON)
 
 A synapse's strength is a noisy-OR over its independent sources:
     weight = 1 - disbelief,  disbelief = Π (1 - reliability of each distinct source)
@@ -36,7 +38,7 @@ DB_PASS = os.getenv("ARCADEDB_PASS", "sovereign_pass")
 ENTITY_INDEX = "Entity[embedding]"
 STATE = "has_state"  # built-in relation for facts about a single entity (self-loop)
 # Relation names that would collide with the schema's own types.
-_RESERVED = {"entity", "episode", "fact", "mentions", "reviewitem"}
+_RESERVED = {"entity", "episode", "fact", "mentions", "reviewitem", "report"}
 
 _NON_IDENT = re.compile(r"[^A-Za-z0-9_]+")
 
@@ -56,6 +58,9 @@ CREATE EDGE TYPE MENTIONS IF NOT EXISTS;
 CREATE DOCUMENT TYPE ReviewItem IF NOT EXISTS;
 CREATE PROPERTY ReviewItem.uid IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON ReviewItem (uid) UNIQUE;
+CREATE DOCUMENT TYPE Report IF NOT EXISTS;
+CREATE PROPERTY Report.uid IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON Report (uid) UNIQUE;
 """
 
 # Vector indexes need the embedding dimension, so they are created on first use.
@@ -222,6 +227,12 @@ async def find_episode(db: ArcadeDB, domain: str, content_hash: str) -> dict | N
 
 async def create_episode(db: ArcadeDB, domain: str, episode: dict) -> None:
     await db.cypher(domain, "CREATE (e:Episode) SET e += $props", props=episode)
+
+
+async def set_episode_gaps(db: ArcadeDB, domain: str, episode_uid: str, gaps: dict[str, int]) -> None:
+    """What the ontology could not hold in this source ("relation:uses": 3) — evidence for changing it."""
+    await db.cypher(domain, "MATCH (ep:Episode {uid: $uid}) SET ep.ontology_gaps = $gaps",
+                    uid=episode_uid, gaps=json.dumps(gaps))
 
 
 async def link_mentions(db: ArcadeDB, domain: str, episode_uid: str, entity_uids: list[str]) -> None:
@@ -545,3 +556,132 @@ async def close_review(db: ArcadeDB, domain: str, uid: str, status: str, resolut
         "UPDATE ReviewItem SET status = :s, resolution = :res, resolved_at = :now WHERE uid = :uid",
         s=status, res=resolution, now=now(), uid=uid,
     )
+
+
+# ── Changes over a period (daily report, summary refresh) ──────────────────
+# Timestamps are stored as UTC ISO-8601 strings. ArcadeDB's Cypher reads them as datetimes, so a comparison
+# with a plain string parameter is always false: compare with datetime($since). SQL compares them as strings.
+
+async def changes_since(db: ArcadeDB, domain: str, since: str, limit: int = 300) -> dict:
+    """What the graph gained and lost since `since`: sources, entities, new / strengthened / superseded
+    facts, and review items opened or decided."""
+    empty = {"episodes": [], "entities": [], "facts_created": [], "facts_strengthened": [],
+             "facts_invalidated": [], "reviews_opened": [], "reviews_decided": []}
+    if not await db.exists(domain):
+        return empty
+    await ensure_domain_db(db, domain)
+    episodes = await db.cypher(
+        domain,
+        "MATCH (ep:Episode) WHERE ep.created_at >= datetime($since) OPTIONAL MATCH (ep)-[:MENTIONS]->(e:Entity) "
+        "RETURN ep.uid AS uid, ep.source AS source, ep.title AS title, ep.content_status AS content_status, "
+        "ep.created_at AS created_at, ep.ontology_gaps AS ontology_gaps, count(e) AS entities ORDER BY created_at",
+        since=since,
+    )
+    for ep in episodes:
+        ep["ontology_gaps"] = json.loads(ep.get("ontology_gaps") or "{}")
+    entities = await db.cypher(
+        domain,
+        f"MATCH (e:Entity) WHERE e.created_at >= datetime($since) RETURN {_ENTITY_COLUMNS} "
+        "ORDER BY e.mentions DESC LIMIT $n",
+        since=since, n=limit,
+    )
+
+    async def facts(where: str, order: str) -> list[dict]:
+        rows = await db.cypher(
+            domain,
+            f"MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE {where} RETURN {_FACT_COLUMNS} ORDER BY {order} LIMIT $n",
+            since=since, n=limit,
+        )
+        return [_fact(r) for r in rows]
+
+    reviews = await db.sql(
+        domain,
+        "SELECT uid, kind, status, summary, created_at, resolved_at, resolution FROM ReviewItem "
+        "WHERE created_at >= :since OR resolved_at >= :since ORDER BY created_at",
+        since=since,
+    )
+    return {
+        "episodes": episodes,
+        "entities": entities,
+        "facts_created": await facts("r.created_at >= datetime($since) AND r.invalid_at IS NULL", "r.disbelief ASC"),
+        # Updated after creation and still valid: another source confirmed it.
+        "facts_strengthened": await facts(
+            "r.updated_at >= datetime($since) AND r.created_at < datetime($since) AND r.invalid_at IS NULL",
+            "r.disbelief ASC"),
+        "facts_invalidated": await facts("r.invalid_at >= datetime($since)", "r.invalid_at DESC"),
+        "reviews_opened": [r for r in reviews if r["created_at"] >= since],
+        "reviews_decided": [r for r in reviews if (r.get("resolved_at") or "") >= since],
+    }
+
+
+async def changed_entities(db: ArcadeDB, domain: str, since: str, limit: int) -> list[str]:
+    """Entities whose facts changed since `since` (created, strengthened or superseded), most changes first."""
+    rows = await db.cypher(
+        domain,
+        "MATCH (a:Entity)-[r:Fact]->(b:Entity) "
+        "WHERE r.created_at >= datetime($since) OR r.updated_at >= datetime($since) "
+        "OR r.invalid_at >= datetime($since) "
+        "RETURN a.uid AS a, b.uid AS b",
+        since=since,
+    )
+    counts: dict[str, int] = {}
+    for r in rows:
+        for uid in {r["a"], r["b"]}:
+            counts[uid] = counts.get(uid, 0) + 1
+    return sorted(counts, key=lambda u: -counts[u])[:limit]
+
+
+async def set_entity_summary(db: ArcadeDB, domain: str, uid: str, summary: str) -> None:
+    """A rewritten summary. The embedding stays the one from the entity's first description: entity
+    resolution's similarity threshold is calibrated on description-vs-description."""
+    await db.cypher(domain, "MATCH (e:Entity {uid: $uid}) SET e.summary = $s, e.summary_at = $now",
+                    uid=uid, s=summary, now=now())
+
+
+# ── Reports ────────────────────────────────────────────────────────────────
+
+async def save_report(db: ArcadeDB, domain: str, report: dict) -> str:
+    await ensure_domain_db(db, domain)
+    uid = new_uid("rep")
+    await db.sql(
+        domain,
+        "INSERT INTO Report SET uid = :uid, kind = :kind, period_start = :ps, period_end = :pe, created_at = :now, "
+        "headline = :headline, briefing = :briefing, spoken = :spoken, stats = :stats, digest = :digest",
+        uid=uid, kind=report["kind"], ps=report["period_start"], pe=report["period_end"], now=now(),
+        headline=report["headline"], briefing=report["briefing"], spoken=report["spoken"],
+        stats=json.dumps(report["stats"], default=str), digest=json.dumps(report["digest"], default=str),
+    )
+    return uid
+
+
+def _report(row: dict, full: bool) -> dict:
+    out = {**row, "stats": json.loads(row["stats"])}
+    if full:
+        out["digest"] = json.loads(row["digest"])
+    return out
+
+
+async def list_reports(db: ArcadeDB, domain: str, limit: int = 30) -> list[dict]:
+    if not await db.exists(domain):
+        return []
+    await ensure_domain_db(db, domain)
+    rows = await db.sql(
+        domain,
+        "SELECT uid, kind, period_start, period_end, created_at, headline, briefing, spoken, stats FROM Report "
+        "ORDER BY created_at DESC LIMIT :n",
+        n=limit,
+    )
+    return [_report(r, full=False) for r in rows]
+
+
+async def get_report(db: ArcadeDB, domain: str, uid: str) -> dict | None:
+    if not await db.exists(domain):
+        return None
+    await ensure_domain_db(db, domain)
+    rows = await db.sql(
+        domain,
+        "SELECT uid, kind, period_start, period_end, created_at, headline, briefing, spoken, stats, digest "
+        "FROM Report WHERE uid = :uid",
+        uid=uid,
+    )
+    return _report(rows[0], full=True) if rows else None

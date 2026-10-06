@@ -39,7 +39,8 @@ MAX_EXCERPTS = 10
 async def generate_ontology(domain_name: str, description: str, corpus: list[str] | None = None) -> Ontology:
     """`corpus`: texts from real sources (research) to ground the grammar in; without it the
     ontology comes from the description alone."""
-    agent = Agent(MODEL, model_settings=model_settings(), system_prompt=SYSTEM_PROMPT, output_type=Ontology, retries=3)
+    agent = Agent(MODEL, name="ontologist", model_settings=model_settings(), system_prompt=SYSTEM_PROMPT,
+                  output_type=Ontology, retries=3)
     prompt = f"Domain: {domain_name}\nDescription: {description}\n"
     if corpus:
         excerpts = "\n\n".join(
@@ -63,6 +64,10 @@ async def bootstrap_domain_ontology(
         if ontology_path(domain).exists() and not overwrite:
             return
         ontology = await generate_ontology(domain, description, corpus)
+        # Generation takes a while: an ontology saved meanwhile (by the user, the Head or the research
+        # bootstrap's corpus-grounded one) wins over this description-only one.
+        if ontology_path(domain).exists() and not overwrite:
+            return
         save_ontology(domain, ontology)
     except Exception as e:
         print(f"[Ontologist] Failed for '{domain}': {type(e).__name__}: {e}", flush=True)

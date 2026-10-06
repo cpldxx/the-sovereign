@@ -8,6 +8,7 @@ Agents reach it through the KG's MCP tools (start_research / research_status / l
 
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -31,12 +32,14 @@ from sovereign_research.jobs import KG_URL, Jobs  # noqa: E402
 NIGHTLY = os.getenv("RESEARCH_NIGHTLY", "on").lower() in ("1", "on", "true", "yes")
 NIGHTLY_HOUR = int(os.getenv("RESEARCH_NIGHTLY_HOUR", "3"))  # local time
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8088").rstrip("/")
+REPORT_WAIT = 18 * 3600  # seconds the nightly report waits for a domain's research runs
 
 jobs = Jobs()
 
 
 async def nightly() -> None:
-    """Once a day at NIGHTLY_HOUR: a 'what's new' run per domain (a bootstrap for never-researched ones)."""
+    """Once a day at NIGHTLY_HOUR: a 'what's new' run per domain (a bootstrap for never-researched ones),
+    then — once a domain's runs are finished — its daily report (the KG refreshes stale summaries first)."""
     ran_on: str | None = None
     while True:
         await asyncio.sleep(600)
@@ -46,16 +49,38 @@ async def nightly() -> None:
         ran_on = today
         try:
             async with httpx.AsyncClient(base_url=KG_URL, timeout=30) as kg:
-                domains = (await kg.get("/domains")).json()["domains"]
+                domains = [d["id"] for d in (await kg.get("/domains")).json()["domains"]]
         except httpx.HTTPError as e:
             print(f"[Research] nightly: KG unreachable ({type(e).__name__})", flush=True)
             continue
         for d in domains:
-            if jobs.active(d["id"]):
+            if jobs.active(d):
                 continue
-            mode = "update" if jobs.last(d["id"], "bootstrap") else "bootstrap"
-            jobs.submit(d["id"], mode)
-            print(f"[Research] nightly: queued {mode} for {d['id']}", flush=True)
+            mode = "update" if jobs.last(d, "bootstrap") else "bootstrap"
+            jobs.submit(d, mode)
+            print(f"[Research] nightly: queued {mode} for {d}", flush=True)
+        await daily_reports(domains)
+
+
+async def daily_reports(domains: list[str]) -> None:
+    """Each domain's daily report, as soon as its research runs are finished (runs are sequential). A run still
+    going after REPORT_WAIT doesn't hold the report back — nor the next night, which waits on this loop."""
+    pending = list(domains)
+    deadline = time.monotonic() + REPORT_WAIT
+    while pending:
+        idle = [d for d in pending if not jobs.active(d) or time.monotonic() > deadline]
+        for d in idle:
+            pending.remove(d)
+            try:
+                # Summary refresh + report is LLM work on the KG side: minutes with a local model.
+                async with httpx.AsyncClient(base_url=KG_URL, timeout=httpx.Timeout(3600, connect=10)) as kg:
+                    r = await kg.post(f"/domains/{d}/reports", json={"hours": 24, "wait": True})
+                print(f"[Research] nightly: report for {d}: "
+                      f"{r.json().get('headline', '') if r.is_success else f'failed ({r.status_code})'}", flush=True)
+            except httpx.HTTPError as e:
+                print(f"[Research] nightly: report for {d} failed ({type(e).__name__})", flush=True)
+        if pending:
+            await asyncio.sleep(60)
 
 
 @asynccontextmanager
@@ -124,6 +149,7 @@ async def health():
         or await up(f"{SEARXNG_URL}/search", params={"q": "ping", "format": "json"}),
         "crawler": await up(f"{fetch.CRAWL4AI_URL}/health"),
         "nightly": f"{NIGHTLY_HOUR:02d}:00" if NIGHTLY else "off",
+        "tracing": runner.tracing(),
     }
 
 

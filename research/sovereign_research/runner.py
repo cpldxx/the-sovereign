@@ -56,8 +56,9 @@ def _get_client() -> DeerFlowClient:
     return _client
 
 
-def run(prompt: str, on_step: Callable[[str], None]) -> tuple[str, list[fetch.Page]]:
+def run(prompt: str, on_step: Callable[[str], None], thread_id: str | None = None) -> tuple[str, list[fetch.Page]]:
     """One research turn. Returns (the agent's report, every page it tried to read).
+    `thread_id` (the job id) groups the run's LangFuse traces into one session.
 
     A run that stops early (step limit, model error) still returns the pages it read — those are
     what the graph needs; the report is only a summary. It raises only when nothing was read."""
@@ -66,7 +67,7 @@ def run(prompt: str, on_step: Callable[[str], None]) -> tuple[str, list[fetch.Pa
     order: list[str] = []
     start = time.monotonic()
     try:
-        for ev in _get_client().stream(prompt, recursion_limit=RECURSION_LIMIT):
+        for ev in _get_client().stream(prompt, thread_id=thread_id, recursion_limit=RECURSION_LIMIT):
             if ev.type != "messages-tuple" or not isinstance(ev.data, dict):
                 continue
             data = ev.data
@@ -93,3 +94,10 @@ def run(prompt: str, on_step: Callable[[str], None]) -> tuple[str, list[fetch.Pa
 
 def model_name() -> str:
     return os.getenv("RESEARCH_OLLAMA_MODEL", "")
+
+
+def tracing() -> bool:
+    """LangFuse tracing through DeerFlow's built-in callback (LANGFUSE_TRACING + keys in .env)."""
+    from deerflow.config import get_enabled_tracing_providers
+
+    return "langfuse" in get_enabled_tracing_providers()

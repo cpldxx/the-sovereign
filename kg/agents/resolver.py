@@ -4,7 +4,7 @@ Only called for the ambiguous cases: exact name-key matches are merged in code, 
 no embedding candidates are simply new. One LLM call covers every ambiguous entity of an ingest.
 """
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_ai import Agent
 
 from core.llm import model_for, model_settings
@@ -16,6 +16,11 @@ class Resolution(BaseModel):
     index: int
     duplicate_of: str | None = Field(default=None, description="uid of the existing entity that is the same thing")
     confident: bool = True
+
+    @field_validator("confident", mode="before")
+    @classmethod
+    def _null_flag(cls, v):
+        return False if v is None else v  # qwen3.6 sometimes writes null; rejecting it regenerated the answer
 
 
 class Resolutions(BaseModel):
@@ -41,7 +46,8 @@ as one of its CANDIDATES (existing entities).
 - If you are not sure, give your best answer and set confident = false.
 Return one resolution per new entity, with its index."""
 
-_agent = Agent(MODEL, model_settings=model_settings(), system_prompt=SYSTEM, output_type=Resolutions, retries=3)
+_agent = Agent(MODEL, name="resolver", model_settings=model_settings(decisive=True),
+               system_prompt=SYSTEM, output_type=Resolutions, retries=3)
 
 
 async def resolve(items: list[dict]) -> list[Resolution]:

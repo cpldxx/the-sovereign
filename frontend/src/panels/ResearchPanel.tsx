@@ -16,6 +16,10 @@ const STATUS_LABEL: Record<ResearchJob['status'], string> = {
 
 const MODE_LABEL = { bootstrap: 'bootstrap', update: "what's new", mission: 'mission' } as const;
 
+function duration(seconds: number) {
+  return seconds < 90 ? `${Math.round(seconds)}s` : `${Math.round(seconds / 60)}m`;
+}
+
 function PageRow({ page }: { page: ResearchPage }) {
   const ing = page.ingest;
   const outcome = page.status === 'failed'
@@ -27,7 +31,8 @@ function PageRow({ page }: { page: ResearchPage }) {
     : `+${ing.entities_created ?? 0} entities · +${ing.facts_created ?? 0} facts`
       + (ing.facts_strengthened ? ` · ${ing.facts_strengthened} strengthened` : '')
       + (ing.facts_invalidated ? ` · ${ing.facts_invalidated} superseded` : '')
-      + (ing.review_items ? ` · ${ing.review_items} to review` : '');
+      + (ing.review_items ? ` · ${ing.review_items} to review` : '')
+      + (ing.seconds ? ` · ${duration(ing.seconds)}` : '');
   return (
     <li className="py-1.5 text-[11.5px]">
       <a href={page.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-dim hover:text-ink">
@@ -75,6 +80,9 @@ function JobCard({ job, open, onToggle }: { job: ResearchJob; open: boolean; onT
               {s.facts_strengthened ? ` · ${s.facts_strengthened} strengthened` : ''}
               {s.facts_invalidated ? ` · ${s.facts_invalidated} superseded` : ''}
               {s.pages_failed ? ` · ${s.pages_failed} unreadable` : ''}
+              {s.seconds && (
+                <span className="text-faint"> · research {duration(s.seconds.research)} · ingest {duration(s.seconds.ingest)}</span>
+              )}
             </p>
           )}
           {active && j.steps.length > 0 && <p className="mt-1 truncate font-mono text-[10.5px] text-faint">{j.steps[j.steps.length - 1].text}</p>}

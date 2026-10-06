@@ -62,10 +62,11 @@ ENTITY RULES
 
 FACT RULES
 1. source and target must be names from your entities list.
-2. relation: one of the RELATION TYPES. A fact that involves TWO of your entities MUST connect them with the
-   closest RELATION TYPE — this is what links the graph together. Examples: "Samsung is qualifying HBM3E with
-   Nvidia" → Samsung supplies_to Nvidia; "TSMC will double CoWoS capacity" → TSMC manufactures CoWoS.
-   Use "{state}" (target = source) ONLY for a fact about one entity with no second listed entity in it.
+2. relation: one of the RELATION TYPES, spelled exactly as listed. A fact that involves TWO of your entities MUST
+   connect them with the closest RELATION TYPE — this is what links the graph together. When only the reverse
+   relation is listed, swap source and target ("CoWoS is made by TSMC" with "manufactures" listed → TSMC
+   manufactures CoWoS). Use "{state}" (target = source) ONLY for a fact about one entity with no second listed
+   entity in it.
 3. fact: ONE self-contained sentence, understandable without the source, keeping every number, date,
    variant name and qualifier ("expected", "plans to", "about"). State only what the text says — no inference,
    no outside knowledge. Every fact in the text becomes one fact; do not merge two facts into one."""
@@ -74,6 +75,7 @@ FACT RULES
 def _agent(domain: str, description: str) -> Agent:
     return Agent(
         MODEL,
+        name="extractor",
         model_settings=model_settings(),
         system_prompt=SYSTEM.format(domain=domain, description=description, state=STATE),
         output_type=Extraction,

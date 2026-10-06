@@ -12,6 +12,7 @@ and the agent is told to find the information elsewhere.
 import asyncio
 import os
 import re
+import threading
 import time
 import urllib.robotparser
 from dataclasses import dataclass, field
@@ -58,8 +59,11 @@ class Capture:
 current: Capture | None = None   # set by the runner around a research run
 
 _robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
-_last_hit: dict[str, float] = {}
-_lock = asyncio.Lock()
+# Per-site pacing. DeerFlow runs parallel tool calls on separate event loops, so the pacing state is guarded by
+# a thread lock and each call reserves its time slot instead of holding a lock across the wait (an asyncio.Lock
+# shared across loops deadlocked a run that fetched three pages at once).
+_next_slot: dict[str, float] = {}
+_slot_lock = threading.Lock()
 
 
 def _record(page: Page) -> None:
@@ -87,11 +91,12 @@ async def _robots_allows(url: str) -> bool:
 
 async def _pace(url: str) -> None:
     site = urlsplit(url).netloc
-    async with _lock:
-        wait = _last_hit.get(site, 0) + MIN_SITE_INTERVAL - time.monotonic()
-        if wait > 0:
-            await asyncio.sleep(wait)
-        _last_hit[site] = time.monotonic()
+    with _slot_lock:
+        now = time.monotonic()
+        slot = max(now, _next_slot.get(site, 0.0))
+        _next_slot[site] = slot + MIN_SITE_INTERVAL
+    if slot > now:
+        await asyncio.sleep(slot - now)
 
 
 def _title(markdown: str) -> str:

@@ -7,6 +7,7 @@ __pycache__/
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/*.tsbuildinfo
 
 # System
 .DS_Store
@@ -15,6 +16,7 @@ CLAUDE.md
 # Hermes runtime state (sessions, logs, memory)
 hermes/.hermes-home/
 
-# Research service runtime state (job log, DeerFlow home)
+# Research service runtime state (job log, DeerFlow home, DeerFlow's SQLite store — written under the cwd)
 research/.data/
 research/.deerflow-home/
+research/.deer-flow/

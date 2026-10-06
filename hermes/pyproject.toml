@@ -11,4 +11,5 @@ dependencies = [
     "httpx>=0.28.1",
     "python-dotenv>=1.2.2",
     "uvicorn>=0.41.0",
+    "langfuse>=4",
 ]

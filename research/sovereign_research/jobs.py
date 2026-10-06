@@ -8,6 +8,7 @@
 import asyncio
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,7 +120,9 @@ class Jobs:
 
         loop = asyncio.get_running_loop()
         on_step = lambda text: loop.call_soon_threadsafe(self._step, job, text)  # noqa: E731
-        report, pages = await asyncio.to_thread(runner.run, prompt, on_step)
+        started = time.monotonic()
+        report, pages = await asyncio.to_thread(runner.run, prompt, on_step, job["id"])
+        seconds = {"research": round(time.monotonic() - started), "ontology": 0, "ingest": 0}
         job["report"] = report
         readable = [p for p in pages if p.status != "failed"]
         if not readable:
@@ -140,8 +143,10 @@ class Jobs:
             if job["mode"] == "bootstrap" and readable:
                 job["status"] = "ontology"
                 self._step(job, "deriving the domain's ontology from the pages read")
+                started = time.monotonic()
                 r = await kg.post(f"/domains/{domain}/ontology/generate",
                                   json={"corpus": [p.markdown for p in readable], "wait": True})
+                seconds["ontology"] = round(time.monotonic() - started)
                 if r.is_success:
                     self._step(job, f"ontology: {', '.join(r.json()['ontology']['entity_types'])}")
                 else:
@@ -156,6 +161,7 @@ class Jobs:
                     entry["ingest"] = {"skipped": "already in the graph"}
                     continue
                 self._step(job, f"ingesting {page.url}")
+                started = time.monotonic()
                 try:
                     r = await kg.post(f"/domains/{domain}/ingest", json={
                         "raw_text": page.markdown, "source": page.url, "title": page.title,
@@ -165,12 +171,16 @@ class Jobs:
                     res = r.json()
                     entry["ingest"] = {k: res.get(k) for k in (
                         "duplicate", "entities_created", "entities_matched", "facts_created",
-                        "facts_strengthened", "facts_invalidated", "facts_rejected", "review_items")}
+                        "facts_strengthened", "facts_invalidated", "facts_rejected", "review_items",
+                        "chunks", "timings")}
                     known.add(page.url)
                 except httpx.HTTPError as e:
                     entry["ingest"] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+                entry["ingest"]["seconds"] = round(time.monotonic() - started)
+                seconds["ingest"] += entry["ingest"]["seconds"]
                 self._save()
 
         totals = {k: sum((p.get("ingest") or {}).get(k) or 0 for p in job["pages"]) for k in (
             "entities_created", "facts_created", "facts_strengthened", "facts_invalidated", "review_items")}
-        job["summary"] = {"pages_read": len(readable), "pages_failed": len(pages) - len(readable), **totals}
+        job["summary"] = {"pages_read": len(readable), "pages_failed": len(pages) - len(readable), **totals,
+                          "seconds": seconds}

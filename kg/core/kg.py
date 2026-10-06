@@ -13,6 +13,8 @@ query    question → entity + fact vector search → expand through the graph �
 
 import hashlib
 import re
+import time
+from collections import Counter
 
 from agents.extractor import STATE, extract
 from agents.linker import link
@@ -23,6 +25,7 @@ from core.database import ArcadeDB, new_uid, now
 from core.embeddings import embed
 from core.names import name_key
 from core.ontology import Ontology, normalize_type
+from core.tracing import Timings, observe
 from domains.registry import load_domain
 
 COMMIT_RELIABILITY = 0.6   # supported facts below this go to Head review instead of the graph
@@ -47,6 +50,34 @@ def _chunks(text: str) -> list[str]:
     return chunks
 
 
+# Amounts, percentages, dates and reporting periods belong inside fact text, never as entities.
+_MONTHS = "january|february|march|april|may|june|july|august|september|october|november|december"
+_VALUE = re.compile(
+    rf"^\s*(?:[$€£¥₩]|[\d.,\s]+$|.*\d\s*%|(?:Q[1-4]|H[12]|FY\s?\d{{2,4}})\b"
+    rf"|(?:{_MONTHS})(?:\s+\d{{1,2}})?(?:,?\s+\d{{4}})?\s*$)",
+    re.I,
+)
+
+
+def _stem(relation: str) -> tuple[str, bool]:
+    """'manufactured_by' → ('manufactur', True): the verb stem, and whether it is the reverse (passive) form."""
+    base = re.sub(r"_(by|to|with|for|in|on|from)$", "", relation)
+    return re.sub(r"(ies|ied|es|ed|s|d|e)$", "", base), relation.endswith("_by")
+
+
+def _conform(relation: str, allowed: set[str]) -> tuple[str, bool] | None:
+    """An off-ontology relation that is a form of an allowed one → (that relation, whether source and target
+    swap): manufactured_by → (manufactures, True), supplies_to → (supplies, False). None if there is none."""
+    stem, passive = _stem(relation)
+    if len(stem) < 4:
+        return None
+    for candidate in sorted(allowed):
+        cstem, cpassive = _stem(candidate)
+        if cstem == stem:
+            return candidate, passive != cpassive
+    return None
+
+
 def _in_text(names: list[str], text: str) -> bool:
     lowered = " ".join(text.lower().split())
     return any(" ".join(n.lower().split()) in lowered for n in names if n.strip())
@@ -58,6 +89,9 @@ class Report:
         self.entities: list[dict] = []
         self.facts: list[dict] = []
         self.reviews: list[str] = []
+        self.timings = Timings()  # seconds per pipeline stage
+        self.chunks = 0
+        self.gaps: Counter[str] = Counter()  # "relation:uses" / "type:person" → items the ontology could not hold
 
     def entity(self, **kw) -> None:
         self.entities.append(kw)
@@ -80,6 +114,9 @@ class Report:
             "facts_review": count(self.facts, "review"),
             "review_items": len(self.reviews),
             "touched_uids": sorted({e["uid"] for e in self.entities if e.get("uid")}),
+            "chunks": self.chunks,
+            "ontology_gaps": dict(self.gaps.most_common()),
+            "timings": dict(self.timings),
             "entities": self.entities,
             "facts": self.facts,
         }
@@ -110,25 +147,44 @@ async def ingest(
     })
     report = Report(episode_uid)
     cap = PARTIAL_CAP if content_status == "partial" else 1.0
-    for chunk in _chunks(text):
-        await _ingest_chunk(db, domain, description, grammar, chunk, source, episode_uid, cap, report)
-    return {**report.as_dict(), "duplicate": False}
+    start = time.perf_counter()
+    with observe("ingest", input={"source": source, "title": title, "chars": len(text)},
+                 metadata={"domain": domain, "episode_uid": episode_uid}, tags=[domain, "ingest"]) as obs:
+        for chunk in _chunks(text):
+            report.chunks += 1
+            await _ingest_chunk(db, domain, description, grammar, chunk, source, episode_uid, cap, report)
+        report.timings["total"] = round(time.perf_counter() - start, 2)
+        if report.gaps:
+            await kgdb.set_episode_gaps(db, domain, episode_uid, dict(report.gaps))
+        result = {**report.as_dict(), "duplicate": False}
+        if obs:
+            obs.update(output={k: v for k, v in result.items() if isinstance(v, (int, dict)) and k != "entities"})
+    return result
 
 
 async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source, episode_uid, cap, report: Report):
-    ex = await extract(text, domain, description, grammar, source)
+    stage = report.timings.stage
+    with stage("extract"):
+        ex = await extract(text, domain, description, grammar, source)
 
     # ── Code gates: entities ───────────────────────────────────────────────
     kept: dict[str, dict] = {}   # name key → entity
     by_name: dict[str, str] = {}  # any name/alias key → canonical key
+    detail: set[str] = set()      # keys of dropped values / off-ontology things: facts about them are kept as states
     for e in ex.entities:
         etype = normalize_type(e.type)
         key = name_key(e.name)
         names = [e.name, *e.aliases]
         if not key:
             continue
+        if _VALUE.match(e.name):
+            report.entity(name=e.name, type=etype, status="dropped", reason="an amount, percentage or date")
+            detail.add(key)
+            continue
         if etype not in grammar.entity_types:
             report.entity(name=e.name, type=etype, status="dropped", reason="type not in the ontology")
+            report.gaps[f"type:{etype}"] += 1
+            detail.add(key)
             continue
         if not _in_text(names, text):
             report.entity(name=e.name, type=etype, status="dropped", reason="not mentioned in the source")
@@ -148,15 +204,25 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
     facts = []
     for f in ex.facts:
         rel = normalize_type(f.relation)
-        s, t = by_name.get(name_key(f.source)), by_name.get(name_key(f.target))
+        source, target = f.source, f.target
+        if rel not in allowed and (conformed := _conform(rel, allowed - {STATE})):
+            rel, swapped = conformed
+            if swapped:
+                source, target = target, source
+        s, t = by_name.get(name_key(source)), by_name.get(name_key(target))
         if rel == STATE:
             t = s
+        elif bool(s) != bool(t) and name_key(target if s else source) in detail:
+            # "X reached $5.8 billion" / "X presented at <event>": the sentence is about X — keep it as X's state.
+            rel, s, t = STATE, s or t, s or t
         reason = (
             "relation not in the ontology" if rel not in allowed
             else "endpoint is not an extracted entity" if not (s and t)
             else "an entity related to itself" if s == t and rel != STATE
             else None
         )
+        if rel not in allowed:
+            report.gaps[f"relation:{rel}"] += 1
         if reason:
             report.fact(fact=f.fact, relation=rel, source=f.source, target=f.target, status="rejected", reason=reason)
             continue
@@ -166,7 +232,8 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
         return
 
     # ── Validate facts against the text ────────────────────────────────────
-    verdicts = await validate(text, source, [f["fact"] for f in facts])
+    with stage("validate"):
+        verdicts = await validate(text, source, [f["fact"] for f in facts])
     commit, weak = [], []
     for f, v in zip(facts, verdicts):
         f["reliability"] = round(min(v.reliability, cap), 3)
@@ -182,11 +249,12 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
     entity_keys = list(kept)
     texts = [f"{kept[k]['name']} ({kept[k]['type']}): {kept[k]['description']}" for k in entity_keys]
     texts += [f["fact"] for f in commit + weak]
-    try:
-        vectors = await embed(texts)
-    except Exception as e:
-        print(f"[KG] embedding failed, continuing without vectors: {type(e).__name__}: {e}", flush=True)
-        vectors = [None] * len(texts)
+    with stage("embed"):
+        try:
+            vectors = await embed(texts)
+        except Exception as e:
+            print(f"[KG] embedding failed, continuing without vectors: {type(e).__name__}: {e}", flush=True)
+            vectors = [None] * len(texts)
     entity_vec = dict(zip(entity_keys, vectors[: len(entity_keys)]))
     for f, v in zip(commit + weak, vectors[len(entity_keys):]):
         f["embedding"] = v
@@ -194,21 +262,23 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
     # ── Resolve entities: name keys → candidates → LLM for the ambiguous ───
     uid_of: dict[str, str] = {}
     ambiguous = []
-    for key, e in kept.items():
-        e["keys"] = sorted({key, *(name_key(a) for a in e["aliases"])} - {""})
-        if match := await kgdb.entities_by_keys(db, domain, e["keys"]):
-            uid_of[key] = match[0]["uid"]
-            continue
-        cands = []
-        if entity_vec[key]:
-            cands = [c for c in await kgdb.entity_candidates(db, domain, entity_vec[key], 5)
-                     if c["similarity"] >= CANDIDATE_SIMILARITY]
-        if cands:
-            ambiguous.append((key, cands))
-    resolutions = await resolve([
-        {"name": kept[k]["name"], "type": kept[k]["type"], "description": kept[k]["description"], "candidates": c}
-        for k, c in ambiguous
-    ])
+    with stage("resolve_lookup"):
+        for key, e in kept.items():
+            e["keys"] = sorted({key, *(name_key(a) for a in e["aliases"])} - {""})
+            if match := await kgdb.entities_by_keys(db, domain, e["keys"]):
+                uid_of[key] = match[0]["uid"]
+                continue
+            cands = []
+            if entity_vec[key]:
+                cands = [c for c in await kgdb.entity_candidates(db, domain, entity_vec[key], 5)
+                         if c["similarity"] >= CANDIDATE_SIMILARITY]
+            if cands:
+                ambiguous.append((key, cands))
+    with stage("resolve_llm"):
+        resolutions = await resolve([
+            {"name": kept[k]["name"], "type": kept[k]["type"], "description": kept[k]["description"], "candidates": c}
+            for k, c in ambiguous
+        ])
     unsure_merge = {}
     for (key, cands), r in zip(ambiguous, resolutions):
         if r.duplicate_of and r.confident:
@@ -216,27 +286,28 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
         elif r.duplicate_of:
             unsure_merge[key] = next(c for c in cands if c["uid"] == r.duplicate_of)
 
-    ts = now()
-    for key, e in kept.items():
-        if key in uid_of:
-            # The name this text used becomes an alias of the existing entity (touch_entity skips its own name).
-            await kgdb.touch_entity(db, domain, uid_of[key], e["keys"], [e["name"], *e["aliases"]], e["description"])
-            report.entity(name=e["name"], type=e["type"], uid=uid_of[key], status="matched")
-            continue
-        uid_of[key] = new_uid("e")
-        await kgdb.create_entity(db, domain, {
-            "uid": uid_of[key], "name": e["name"], "type": e["type"], "summary": e["description"],
-            "aliases": e["aliases"], "keys": e["keys"], "mentions": 1, "created_at": ts, "updated_at": ts,
-        }, entity_vec[key])
-        report.entity(name=e["name"], type=e["type"], uid=uid_of[key], status="created")
-        if key in unsure_merge:
-            cand = unsure_merge[key]
-            report.reviews.append(await kgdb.add_review(
-                db, domain, "merge", f"Is “{e['name']}” the same as “{cand['name']}”?",
-                {"entity_uid": uid_of[key], "entity_name": e["name"], "candidate_uid": cand["uid"],
-                 "candidate_name": cand["name"], "similarity": cand["similarity"], "episode_uid": episode_uid},
-            ))
-    await kgdb.link_mentions(db, domain, episode_uid, sorted(set(uid_of.values())))
+    with stage("write_entities"):
+        ts = now()
+        for key, e in kept.items():
+            if key in uid_of:
+                # The name this text used becomes an alias of the existing entity (touch_entity skips its own name).
+                await kgdb.touch_entity(db, domain, uid_of[key], e["keys"], [e["name"], *e["aliases"]], e["description"])
+                report.entity(name=e["name"], type=e["type"], uid=uid_of[key], status="matched")
+                continue
+            uid_of[key] = new_uid("e")
+            await kgdb.create_entity(db, domain, {
+                "uid": uid_of[key], "name": e["name"], "type": e["type"], "summary": e["description"],
+                "aliases": e["aliases"], "keys": e["keys"], "mentions": 1, "created_at": ts, "updated_at": ts,
+            }, entity_vec[key])
+            report.entity(name=e["name"], type=e["type"], uid=uid_of[key], status="created")
+            if key in unsure_merge:
+                cand = unsure_merge[key]
+                report.reviews.append(await kgdb.add_review(
+                    db, domain, "merge", f"Is “{e['name']}” the same as “{cand['name']}”?",
+                    {"entity_uid": uid_of[key], "entity_name": e["name"], "candidate_uid": cand["uid"],
+                     "candidate_name": cand["name"], "similarity": cand["similarity"], "episode_uid": episode_uid},
+                ))
+        await kgdb.link_mentions(db, domain, episode_uid, sorted(set(uid_of.values())))
 
     # ── Weak facts → Head review (not in the graph until approved) ────────
     for f in weak:
@@ -254,45 +325,48 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
     # Candidates: facts on the same entities (structural) + facts saying something similar (semantic) —
     # the latter catches an update stated about a different entity ("HBM3E is sold out" vs
     # "SK hynix says its HBM3E is no longer sold out").
-    candidates = []
-    for f in commit:
-        f["source_uid"], f["target_uid"] = uid_of[f["source"]], uid_of[f["target"]]
-        cands = await kgdb.fact_candidates(db, domain, f["source_uid"], f["relation"], f["target_uid"])
-        if f["embedding"]:
-            seen = {c["uid"] for c in cands}
-            cands += [c for c in await kgdb.search_facts(db, domain, f["embedding"], 5)
-                      if c["similarity"] >= FACT_SIMILARITY and c["uid"] not in seen]
-        candidates.append(cands)
-    to_link = [(i, c) for i, c in enumerate(candidates) if c]
-    links = dict(zip(
-        (i for i, _ in to_link),
-        await link([{"fact": commit[i]["fact"], "candidates": c} for i, c in to_link]),
-    ))
-    for i, f in enumerate(commit):
-        names = {"source": kept[f["source"]]["name"], "target": kept[f["target"]]["name"]}
-        by_uid = {c["uid"]: c for c in candidates[i]}
-        lk = links.get(i)
-        if lk and lk.same_as and lk.confident:
-            r = await kgdb.strengthen_fact(db, domain, by_uid[lk.same_as]["relation"], lk.same_as, episode_uid,
-                                           f["reliability"])
-            report.fact(fact=f["fact"], relation=f["relation"], **names, uid=lk.same_as, status="strengthened", **r)
-            continue
-        uid = await kgdb.create_fact(db, domain, f["source_uid"], f["relation"], f["target_uid"], f["fact"],
-                                     f["embedding"], episode_uid, f["reliability"])
-        invalidated = []
-        if lk and lk.confident:
-            for old in lk.supersedes:
-                await kgdb.invalidate_fact(db, domain, by_uid[old]["relation"], old, f"superseded by {uid}: {f['fact']}")
-                invalidated.append(old)
-        elif lk and (lk.same_as or lk.supersedes):
-            report.reviews.append(await kgdb.add_review(
-                db, domain, "link", f"Does “{f['fact']}” restate or replace existing facts?",
-                {"fact_uid": uid, "relation": f["relation"], "fact": f["fact"], "episode_uid": episode_uid,
-                 "reliability": f["reliability"], "same_as": lk.same_as, "supersedes": lk.supersedes,
-                 "existing": [{"uid": c["uid"], "relation": c["relation"], "fact": c["fact"]} for c in candidates[i]]},
-            ))
-        report.fact(fact=f["fact"], relation=f["relation"], **names, uid=uid, status="created",
-                    weight=f["reliability"], invalidated=invalidated)
+    with stage("link_lookup"):
+        candidates = []
+        for f in commit:
+            f["source_uid"], f["target_uid"] = uid_of[f["source"]], uid_of[f["target"]]
+            cands = await kgdb.fact_candidates(db, domain, f["source_uid"], f["relation"], f["target_uid"])
+            if f["embedding"]:
+                seen = {c["uid"] for c in cands}
+                cands += [c for c in await kgdb.search_facts(db, domain, f["embedding"], 5)
+                          if c["similarity"] >= FACT_SIMILARITY and c["uid"] not in seen]
+            candidates.append(cands)
+    with stage("link_llm"):
+        to_link = [(i, c) for i, c in enumerate(candidates) if c]
+        links = dict(zip(
+            (i for i, _ in to_link),
+            await link([{"fact": commit[i]["fact"], "candidates": c} for i, c in to_link]),
+        ))
+    with stage("write_facts"):
+        for i, f in enumerate(commit):
+            names = {"source": kept[f["source"]]["name"], "target": kept[f["target"]]["name"]}
+            by_uid = {c["uid"]: c for c in candidates[i]}
+            lk = links.get(i)
+            if lk and lk.same_as and lk.confident:
+                r = await kgdb.strengthen_fact(db, domain, by_uid[lk.same_as]["relation"], lk.same_as, episode_uid,
+                                               f["reliability"])
+                report.fact(fact=f["fact"], relation=f["relation"], **names, uid=lk.same_as, status="strengthened", **r)
+                continue
+            uid = await kgdb.create_fact(db, domain, f["source_uid"], f["relation"], f["target_uid"], f["fact"],
+                                         f["embedding"], episode_uid, f["reliability"])
+            invalidated = []
+            if lk and lk.confident:
+                for old in lk.supersedes:
+                    await kgdb.invalidate_fact(db, domain, by_uid[old]["relation"], old, f"superseded by {uid}: {f['fact']}")
+                    invalidated.append(old)
+            elif lk and (lk.same_as or lk.supersedes):
+                report.reviews.append(await kgdb.add_review(
+                    db, domain, "link", f"Does “{f['fact']}” restate or replace existing facts?",
+                    {"fact_uid": uid, "relation": f["relation"], "fact": f["fact"], "episode_uid": episode_uid,
+                     "reliability": f["reliability"], "same_as": lk.same_as, "supersedes": lk.supersedes,
+                     "existing": [{"uid": c["uid"], "relation": c["relation"], "fact": c["fact"]} for c in candidates[i]]},
+                ))
+            report.fact(fact=f["fact"], relation=f["relation"], **names, uid=uid, status="created",
+                        weight=f["reliability"], invalidated=invalidated)
 
 
 # ── Head review decisions ──────────────────────────────────────────────────
@@ -341,6 +415,15 @@ async def query(db: ArcadeDB, domain: str, question: str, k: int = 5) -> dict:
     empty = {"domain": domain, "query": question, "entities": [], "facts": [], "episodes": []}
     if not await db.exists(domain):
         return empty
+    with observe("query", input=question, metadata={"domain": domain}, tags=[domain, "query"]) as obs:
+        result = await _query(db, domain, question, k, empty)
+        if obs:
+            obs.update(output={"entities": [e["name"] for e in result["entities"][:20]],
+                               "facts": [f["fact"] for f in result["facts"][:20]]})
+    return result
+
+
+async def _query(db: ArcadeDB, domain: str, question: str, k: int, empty: dict) -> dict:
     [vector] = await embed([question])
     entities = await kgdb.search_entities(db, domain, vector, k)
     hit_facts = await kgdb.search_facts(db, domain, vector, k)

@@ -5,7 +5,7 @@ fact instead of deleting it. One LLM call covers every new fact that has candida
 candidates never reach it.
 """
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_ai import Agent
 
 from core.llm import model_for, model_settings
@@ -18,6 +18,17 @@ class Link(BaseModel):
     same_as: str | None = Field(default=None, description="uid of an existing fact that says the same thing")
     supersedes: list[str] = Field(default_factory=list, description="uids of existing facts no longer true")
     confident: bool = True
+
+    # qwen3.6 often writes null for an empty list or an unknown flag; rejecting that regenerated the whole answer.
+    @field_validator("supersedes", mode="before")
+    @classmethod
+    def _null_list(cls, v):
+        return [] if v is None else v
+
+    @field_validator("confident", mode="before")
+    @classmethod
+    def _null_flag(cls, v):
+        return False if v is None else v
 
 
 class Links(BaseModel):
@@ -43,7 +54,8 @@ SYSTEM = """You are the Sovereign's Linker. For each NEW fact, compare it with i
 - If you are not sure about a same_as or supersedes decision, still give it and set confident = false.
 Return one link per new fact, with its index."""
 
-_agent = Agent(MODEL, model_settings=model_settings(), system_prompt=SYSTEM, output_type=Links, retries=3)
+_agent = Agent(MODEL, name="linker", model_settings=model_settings(decisive=True),
+               system_prompt=SYSTEM, output_type=Links, retries=3)
 
 
 async def link(items: list[dict]) -> list[Link]:

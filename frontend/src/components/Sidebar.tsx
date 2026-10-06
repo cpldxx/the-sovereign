@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
-import { hermes, kg, research, type DomainSummary } from '../lib/api';
+import { hermes, kg, LANGFUSE_URL, research, type DomainSummary } from '../lib/api';
 import { NewDomainDialog } from './NewDomainDialog';
 
 interface Health {
@@ -10,10 +10,11 @@ interface Health {
   research: boolean | null;
   search: boolean | null;
   crawler: boolean | null;
+  tracing: boolean | null;
 }
 
 function useHealth(): Health {
-  const [health, setHealth] = useState<Health>({ kg: null, arcadedb: null, hermes: null, research: null, search: null, crawler: null });
+  const [health, setHealth] = useState<Health>({ kg: null, arcadedb: null, hermes: null, research: null, search: null, crawler: null, tracing: null });
   useEffect(() => {
     let alive = true;
     const check = async () => {
@@ -26,6 +27,7 @@ function useHealth(): Health {
         research: r.status === 'fulfilled',
         search: r.status === 'fulfilled' ? r.value.searxng : null,
         crawler: r.status === 'fulfilled' ? r.value.crawler : null,
+        tracing: k.status === 'fulfilled' ? k.value.tracing : null,
       });
     };
     void check();
@@ -99,6 +101,11 @@ export function Sidebar({ domains, active, onSelect, onCreate }: {
         <Status label="Hermes" ok={health.hermes} hint="hermes/ — http://localhost:8090" />
         <Status label="Research" ok={health.research} hint="research/ — http://localhost:8070" />
         <Status label="Search · Crawler" ok={health.search === null ? null : !!(health.search && health.crawler)} hint="docker compose up -d (searxng, crawl4ai)" />
+        {health.tracing && (
+          <a href={LANGFUSE_URL} target="_blank" rel="noreferrer" className="block text-[11px] text-faint hover:text-ink" title="Agent traces — docker compose --profile observability up -d">
+            LangFuse traces ↗
+          </a>
+        )}
       </div>
 
       {creating && <NewDomainDialog onCreate={onCreate} onClose={() => setCreating(false)} />}

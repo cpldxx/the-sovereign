@@ -3,6 +3,7 @@
 export const KG_API: string = import.meta.env.VITE_KG_URL ?? 'http://localhost:8080';
 export const HERMES_API: string = import.meta.env.VITE_HERMES_URL ?? 'http://localhost:8090';
 export const RESEARCH_API: string = import.meta.env.VITE_RESEARCH_URL ?? 'http://localhost:8070';
+export const LANGFUSE_URL: string = import.meta.env.VITE_LANGFUSE_URL ?? 'http://localhost:3000';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -161,6 +162,9 @@ export interface ResearchPage {
     facts_invalidated?: number;
     facts_rejected?: number;
     review_items?: number;
+    chunks?: number;
+    seconds?: number;
+    timings?: Record<string, number>;
   };
 }
 
@@ -177,7 +181,77 @@ export interface ResearchJob {
   pages?: ResearchPage[];
   report: string;
   error: string;
-  summary: Record<string, number>;
+  summary: {
+    pages_read?: number;
+    pages_failed?: number;
+    entities_created?: number;
+    facts_created?: number;
+    facts_strengthened?: number;
+    facts_invalidated?: number;
+    review_items?: number;
+    seconds?: { research: number; ontology: number; ingest: number };
+  };
+}
+
+export interface ReportStats {
+  hours: number;
+  changes: {
+    sources: number;
+    entities_created: number;
+    facts_created: number;
+    facts_strengthened: number;
+    facts_invalidated: number;
+    reviews_opened: number;
+    reviews_decided: number;
+  };
+  research: {
+    reachable: boolean;
+    runs: number;
+    failed: number;
+    pages_read: number;
+    pages_failed: number;
+    seconds: { research: number; ontology: number; ingest: number };
+  };
+  summaries: { candidates: number; refreshed: number };
+  llm: { activity: string; calls: number; tokens: number; seconds: number }[] | null;
+  ontology_gaps: { kind: 'type' | 'relation'; name: string; count: number }[];
+  graph: { entity_count: number; fact_count: number; invalid_fact_count: number; episode_count: number; pending_reviews: number };
+  seconds: number;
+}
+
+export interface ReportFact {
+  uid: string;
+  relation: string;
+  fact: string;
+  source_uid: string;
+  source_name: string;
+  target_uid: string;
+  target_name: string;
+  weight: number;
+  evidence: number;
+  invalid_reason: string | null;
+}
+
+/** A daily briefing: what changed in the graph over a period. */
+export interface Report {
+  uid: string;
+  kind: 'daily';
+  period_start: string;
+  period_end: string;
+  created_at: string;
+  headline: string;
+  briefing: string;
+  spoken: string;
+  stats: ReportStats;
+  digest?: {
+    sources: { uid: string; source: string; title: string; content_status: string; entities: number }[];
+    entities: { uid: string; name: string; type: string }[];
+    facts_created: ReportFact[];
+    facts_strengthened: ReportFact[];
+    facts_invalidated: ReportFact[];
+    reviews_decided: { uid: string; kind: string; status: string; summary: string; resolution: string }[];
+    research: { id: string; mode: ResearchMode; question: string; status: string; error: string }[];
+  };
 }
 
 export interface Turn {
@@ -220,7 +294,7 @@ const d = (id: string) => `/domains/${encodeURIComponent(id)}`;
 // ── KG API ──────────────────────────────────────────────────────────────────
 
 export const kg = {
-  health: () => request<{ kg: boolean; arcadedb: boolean }>(KG_API, '/health'),
+  health: () => request<{ kg: boolean; arcadedb: boolean; tracing: boolean }>(KG_API, '/health'),
 
   domains: () => request<{ domains: DomainSummary[] }>(KG_API, '/domains').then(r => r.domains),
 
@@ -257,12 +331,19 @@ export const kg = {
     request<{ ontology: Ontology }>(KG_API, `${d(id)}/ontology`, { method: 'PUT', body: JSON.stringify(ontology) }),
 
   generateOntology: (id: string) => request<unknown>(KG_API, `${d(id)}/ontology/generate`, { method: 'POST' }),
+
+  reports: (id: string, limit = 30) =>
+    request<{ reports: Report[]; generating: boolean }>(KG_API, `${d(id)}/reports?limit=${limit}`),
+
+  report: (id: string, uid: string) => request<Report>(KG_API, `${d(id)}/reports/${encodeURIComponent(uid)}`),
+
+  createReport: (id: string, hours = 24) => request<unknown>(KG_API, `${d(id)}/reports`, json({ hours })),
 };
 
 // ── Research (DeerFlow) ─────────────────────────────────────────────────────
 
 export const research = {
-  health: () => request<{ research: boolean; model: string; searxng: boolean; crawler: boolean; nightly: string }>(
+  health: () => request<{ research: boolean; model: string; searxng: boolean; crawler: boolean; nightly: string; tracing: boolean }>(
     RESEARCH_API, '/health'),
 
   start: (id: string, mode: ResearchMode, question = '') =>
@@ -277,7 +358,7 @@ export const research = {
 // ── Hermes (Head Agent) ─────────────────────────────────────────────────────
 
 export const hermes = {
-  health: () => request<{ hermes: boolean; model: string }>(HERMES_API, '/health'),
+  health: () => request<{ hermes: boolean; model: string; tracing: boolean }>(HERMES_API, '/health'),
 
   /** Streams Head Agent progress; resolves when the final `answer` or `error` event arrives. */
   async askStream(

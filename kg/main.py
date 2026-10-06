@@ -12,7 +12,9 @@ from api.graph import router as graph_router
 from api.ontology import router as ontology_router
 from api.pipeline import router as pipeline_router
 from api.query import router as query_router
+from api.reports import router as reports_router
 from api.reviews import router as reviews_router
+from core import tracing
 from core.database import get_db
 
 
@@ -22,11 +24,14 @@ mcp_app = kg_mcp.mcp.streamable_http_app()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if tracing.setup():
+        print("[KG] tracing to LangFuse", flush=True)
     app.state.db = kg_mcp.db = await get_db()
     # A mounted app's own lifespan never runs, so the host enters the MCP session manager.
     async with kg_mcp.mcp.session_manager.run():
         yield
     await app.state.db.close()
+    tracing.shutdown()
 
 
 app = FastAPI(
@@ -50,6 +55,7 @@ app.include_router(query_router)
 app.include_router(ontology_router)
 app.include_router(entities_router)
 app.include_router(reviews_router)
+app.include_router(reports_router)
 
 
 @app.get("/")
@@ -60,7 +66,7 @@ async def root():
 @app.get("/health")
 async def health():
     """KG API liveness plus ArcadeDB readiness."""
-    return {"kg": True, "arcadedb": await app.state.db.ready()}
+    return {"kg": True, "arcadedb": await app.state.db.ready(), "tracing": tracing.ENABLED}
 
 
 # MCP endpoint for agents at /mcp. Mounted last: Mount("/") matches every path,

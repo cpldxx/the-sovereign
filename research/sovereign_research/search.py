@@ -10,6 +10,7 @@ providers instead.
 import asyncio
 import json
 import os
+import threading
 import time
 
 import httpx
@@ -19,18 +20,21 @@ SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8088").rstrip("/")
 MIN_INTERVAL = float(os.getenv("RESEARCH_SEARCH_INTERVAL", "4"))  # seconds between searches
 MAX_RESULTS = 8
 
-_last = 0.0
-_lock = asyncio.Lock()
+# DeerFlow runs parallel tool calls on separate event loops: an asyncio.Lock shared across them deadlocked a run
+# that issued three searches at once. Each search reserves its time slot under a thread lock instead.
+_next_slot = 0.0
+_slot_lock = threading.Lock()
 
 
 async def search(query: str, time_range: str | None = None) -> tuple[list[dict], list[str]]:
     """(results, unresponsive engines). Never raises."""
-    global _last
-    async with _lock:
-        wait = _last + MIN_INTERVAL - time.monotonic()
-        if wait > 0:
-            await asyncio.sleep(wait)
-        _last = time.monotonic()
+    global _next_slot
+    with _slot_lock:
+        now = time.monotonic()
+        slot = max(now, _next_slot)
+        _next_slot = slot + MIN_INTERVAL
+    if slot > now:
+        await asyncio.sleep(slot - now)
     params = {"q": query, "format": "json"}
     if time_range in ("day", "week", "month", "year"):
         params["time_range"] = time_range
