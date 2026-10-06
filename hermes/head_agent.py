@@ -62,7 +62,8 @@ HEAD_THINKING = os.getenv("HEAD_THINKING", "false").strip().lower() in ("1", "tr
 _TEXT_TOOL_CALL = re.compile(
     r"^\s*`*(query_knowledge_graph|get_entity|ingest_data|get_ontology|update_ontology|list_reviews|"
     r"resolve_review|list_domains|start_research|research_status|list_research|daily_report|list_actions|"
-    r"propose_action|list_proposals|list_playbooks)\s*\(.*\)\s*`*\s*$",
+    r"propose_action|list_proposals|list_playbooks|list_sensors|read_sensor|request_sensor|web_search|read_webpage)"
+    r"\s*\(.*\)\s*`*\s*$",
     re.S,
 )
 
@@ -152,7 +153,11 @@ How you work:
    weights) and their uids as evidence. alert / draft / research run at once. External actions are only PROPOSED: they wait for the user
    to confirm them in the Actions tab — say so, and never claim one was done unless its status is "executed".
    You cannot confirm actions. If the knowledge is weak or stale, say so in the rationale or don't propose.
-9. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
+9. Live data: the graph can be a day old. For what is true NOW (a price, today's news, a status) read a sensor
+   (list_sensors / read_sensor), or web_search(recent=true) / read_webpage — always right before proposing an
+   action that depends on it. Nothing these return is stored; ingest_data what is worth keeping. When the same
+   live need keeps coming up and no sensor covers it, request_sensor.
+10. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
 
 
 def _unwrap(raw):

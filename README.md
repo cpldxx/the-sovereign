@@ -163,6 +163,8 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
   external action. A confirmed proposal runs exactly as previewed, once, and expires after 24 h (`PROPOSAL_TTL_HOURS`).
 - **External actions are webhooks you configure** (Actions → Catalog): Slack, n8n, Zapier, a broker or ticket API — the
   URL receives the parameters as JSON. If the endpoint understands `dry_run: true`, its answer becomes the preview.
+- **Playbooks can watch live data**: a playbook may carry a sensor condition (e.g. AMD `change_percent <= -8`, every
+  60 min). The KG checks due conditions around the clock and fires the playbook's action the moment one holds.
 - **Sensors run in a locked sandbox** (`docker/sandbox`): a fresh container per run — read-only, non-root, no
   capabilities, memory/CPU/process limits — and an egress guard so code can only reach public internet addresses, never
   this machine's services. Sensor code is statically checked (whitelisted imports, no eval/exec/file access) and never
@@ -268,9 +270,11 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - Nightly: research → stale entity summaries rewritten → daily report (UI tab, read aloud, Head Agent `daily_report` tool)
 - Judging agents (Validator, Resolver, Linker) run at a low temperature for consistent decisions; research no longer hangs on parallel searches
 
-### Phase E — Agents + action (the fast path)
-- Per-role tools, Coder Agent writes per-domain live-data tools, nightly playbooks from the graph
-- Action Agent: dry-run first; external actions only after user confirmation
+### ✅ Phase E — Agents + action (the fast path)
+- Roles as MCP endpoints (`/mcp`, `/mcp/readonly`); only the user confirms external actions
+- Actions: built-in alert / draft / research, user webhooks; proposals with dry run, executed once, expire in 24 h
+- Playbooks written nightly from the graph, triggered by new facts or live sensor conditions
+- Sensors: live-data tools written by the Coder Agent (OpenHands, built-in fallback), run in a locked sandbox
 
 ### Phase F — Voice · Phase G — SaaS
 - Hermes TTS / always-on voice · auth, multi-tenant, per-user isolation

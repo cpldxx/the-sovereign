@@ -1,5 +1,6 @@
 """The Sovereign - Main entry point."""
 
+import asyncio
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
@@ -17,7 +18,7 @@ from api.query import router as query_router
 from api.reports import router as reports_router
 from api.reviews import router as reviews_router
 from api.sensors import router as sensors_router
-from core import tracing
+from core import playbooks, tracing
 from core.database import get_db
 
 
@@ -31,12 +32,16 @@ async def lifespan(app: FastAPI):
     if tracing.setup():
         print("[KG] tracing to LangFuse", flush=True)
     app.state.db = kg_mcp.db = await get_db()
+    # Live playbook triggers: sensors checked around the clock (SENSOR_WATCH=off disables it).
+    watch = asyncio.create_task(playbooks.watch_loop(app.state.db)) if playbooks.WATCH else None
     # The MCP apps' own lifespans never run (only their routes are served), so the host enters their
     # session managers.
     async with AsyncExitStack() as stack:
         for server in kg_mcp.servers.values():
             await stack.enter_async_context(server.session_manager.run())
         yield
+    if watch:
+        watch.cancel()
     await app.state.db.close()
     tracing.shutdown()
 

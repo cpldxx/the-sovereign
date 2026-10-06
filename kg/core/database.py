@@ -766,8 +766,9 @@ def _decode(row: dict, json_fields: tuple[str, ...]) -> dict:
 async def insert_doc(db: ArcadeDB, domain: str, type_: str, doc: dict, json_fields: tuple[str, ...] = ()) -> dict:
     await ensure_domain_db(db, domain)
     doc = {"uid": new_uid(type_.lower()[:4]), "created_at": now(), **doc}
-    await db.sql(domain, f"INSERT INTO {type_} SET " + ", ".join(f"{k} = :{k}" for k in doc),
-                 **_encode(doc, json_fields))
+    # Names quoted and parameters prefixed: some names are SQL keywords (trigger), as columns and as parameters.
+    await db.sql(domain, f"INSERT INTO {type_} SET " + ", ".join(f"`{k}` = :p_{k}" for k in doc),
+                 **{f"p_{k}": v for k, v in _encode(doc, json_fields).items()})
     return doc
 
 
@@ -790,7 +791,7 @@ async def update_doc(db: ArcadeDB, domain: str, type_: str, uid: str, changes: d
                      json_fields: tuple[str, ...] = (), if_status: str | None = None) -> bool:
     """Apply changes; with `if_status`, only while the document still has that status (atomic: a proposal
     is executed once even if confirmed twice). True if a document changed."""
-    sets = ", ".join(f"{k} = :set_{k}" for k in changes)
+    sets = ", ".join(f"`{k}` = :set_{k}" for k in changes)  # quoted + prefixed, as in insert_doc
     cond = "uid = :uid" + (" AND status = :if_status" if if_status else "")
     params = {f"set_{k}": v for k, v in _encode(changes, json_fields).items()}
     rows = await db.sql(domain, f"UPDATE {type_} SET {sets} WHERE {cond}", uid=uid, if_status=if_status, **params)

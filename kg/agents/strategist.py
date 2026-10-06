@@ -13,6 +13,20 @@ MODEL = model_for("strategist")
 MAX_PLAYBOOKS = 8
 
 
+class SensorTrigger(BaseModel):
+    sensor: str = Field(description="Name of a SENSOR")
+    params: dict = Field(default_factory=dict, description="Its parameters")
+    field: str = Field(description="Path to a number in its output, e.g. change_percent or quotes.0.price")
+    op: str = Field(description="One of < > <= >=")
+    value: float = Field(description="The threshold")
+    every_minutes: int = Field(default=60, description="How often to check (15-1440)")
+
+    @field_validator("params", mode="before")
+    @classmethod
+    def _null_dict(cls, v):
+        return {} if v is None else v
+
+
 class PlaybookDraft(BaseModel):
     uid: str | None = Field(default=None, description="uid of the existing playbook this keeps or revises; null if new")
     name: str = Field(description="Short title")
@@ -22,6 +36,8 @@ class PlaybookDraft(BaseModel):
     response: str = Field(description="What to do when it happens and why, grounded in the facts")
     action: str = Field(description="One action name from the ACTIONS catalog")
     evidence: list[str] = Field(default_factory=list, description="uids of the facts that justify this playbook")
+    trigger: SensorTrigger | None = Field(default=None, description="Optional live condition on a SENSOR that "
+                                                                    "fires the playbook as soon as it is met")
 
     @field_validator("watch", "evidence", mode="before")
     @classmethod
@@ -30,7 +46,13 @@ class PlaybookDraft(BaseModel):
 
 
 class Playbooks(BaseModel):
-    playbooks: list[PlaybookDraft]
+    playbooks: list[PlaybookDraft] = Field(default_factory=list, description="New or revised playbooks")
+    retire: list[str] = Field(default_factory=list, description="uids of existing playbooks that no longer apply")
+
+    @field_validator("playbooks", "retire", mode="before")
+    @classmethod
+    def _null_list(cls, v):
+        return [] if v is None else v
 
     @model_validator(mode="before")
     @classmethod
@@ -54,15 +76,21 @@ A good playbook:
   (cite them). action: the best-fitting action from the ACTIONS catalog (usually alert; draft for prepared
   documents; an external action only when the situation clearly calls for it).
 - evidence: uids of the facts behind it.
+- trigger (optional): when the situation shows up in a number a SENSOR reads live (a price move, a count), add a
+  condition on it: sensor, params (for the entity it is about), field (one of the sensor's numeric fields), op,
+  value, every_minutes — e.g. {{"sensor": "yahoo_stock_price", "params": {{"symbol": "AMD"}}, "field":
+  "change_percent", "op": "<=", "value": -8, "every_minutes": 60}}. It is checked around the clock and fires the
+  playbook the moment it holds. Only sensors and fields listed below.
 
-Return at most {MAX_PLAYBOOKS} playbooks, the most consequential ones. Keep an EXISTING playbook (same uid) if
-it still makes sense, revise it (same uid) if the knowledge changed, drop it if it no longer applies. Use only
-the facts given — no outside knowledge."""
+Return only the playbooks you ADD or REVISE (a revision keeps the existing uid), and in `retire` the uids of
+existing playbooks that no longer apply. Existing playbooks you don't mention stay as they are. At most
+{MAX_PLAYBOOKS} active playbooks in all — the most consequential ones. Use only the facts given — no outside
+knowledge."""
 
 _agent = Agent(MODEL, name="strategist", model_settings=model_settings(), system_prompt=SYSTEM,
                output_type=Playbooks, retries=3)
 
 
-async def write_playbooks(context: str) -> list[PlaybookDraft]:
+async def write_playbooks(context: str) -> Playbooks:
     """Raises on failure (the caller keeps the current playbooks)."""
-    return (await _agent.run(context)).output.playbooks[:MAX_PLAYBOOKS]
+    return (await _agent.run(context)).output

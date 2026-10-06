@@ -1,8 +1,11 @@
 """Sensor requests: a Coder backend writes a module for a need, then the acceptance test decides.
 
-backends   builtin    the KG's own Coder agent (agents/coder.py): search → docs → probe → write → test → fix
-           openhands  OpenHands in Docker (integrations/openhands.py)
-           CODER_BACKEND sets the default.
+backends   openhands  OpenHands in Docker (integrations/openhands.py) — the default (CODER_BACKEND)
+           builtin    the KG's own Coder agent (agents/coder.py): search → docs → probe → write → test → fix;
+                      also the fallback when OpenHands fails
+           Measured (qwen3.6:35b, 2026-10-06, 2 needs × 2 backends): both 2/2. OpenHands 231 s / 228 s and picked
+           the more standard sources (Yahoo chart API; Google News RSS); built-in 174 s / 98 s (Yahoo; an obscure
+           "free news API"). Sensors are written rarely (slow path), so source quality wins over speed.
 acceptance whatever a backend returns must pass the static check and a fresh sandbox run with its example
            parameters, returning a non-empty result — only then is it stored as an active sensor.
 Requests run one at a time (they share the local model) and are kept in memory with their logs.
@@ -20,7 +23,7 @@ from domains.registry import load_domain
 from integrations import openhands
 
 BACKENDS = ("builtin", "openhands")
-DEFAULT_BACKEND = os.getenv("CODER_BACKEND", "builtin")
+DEFAULT_BACKEND = os.getenv("CODER_BACKEND", "openhands")
 
 _jobs: dict[str, dict] = {}
 _tasks: set[asyncio.Task] = set()
@@ -51,31 +54,47 @@ def submit(db: ArcadeDB, domain: str, need: str, backend: str | None = None) -> 
     return j
 
 
+async def _attempt(j: dict, backend: str, description: str) -> tuple[str, dict]:
+    """One backend's module, put through the acceptance test → (code, sample result). Raises SensorError."""
+    if backend == "builtin":
+        out = await coder.write_sensor(j["need"], j["domain"], description, j["log"])
+        code, j["note"] = out.code, out.note
+    else:
+        code, tail = await openhands.write_sensor(j["need"], j["domain"], description)
+        j["log"] += tail
+    j["code"] = code
+    if not code:
+        raise sensors.SensorError(j["note"] or "the Coder wrote no module")
+    j["status"] = "testing"
+    meta, problems = sensors.inspect_code(code)
+    if problems:
+        raise sensors.SensorError("; ".join(problems))
+    out = await sensors.run_code(code, sensors.examples(meta))
+    if not out["ok"]:
+        raise sensors.SensorError(f"sandbox test failed: {out['error']}")
+    if not out["result"] or (isinstance(out["result"], dict) and not any(out["result"].values())):
+        raise sensors.SensorError("sandbox test returned no data")
+    return code, out["result"]
+
+
 async def _run(db: ArcadeDB, j: dict) -> None:
     async with _lock:
         started = time.monotonic()
         j["status"] = "coding"
         try:
             description = load_domain(j["domain"])["config"].get("description") or j["domain"]
-            if j["backend"] == "builtin":
-                out = await coder.write_sensor(j["need"], j["domain"], description, j["log"])
-                code, j["note"] = out.code, out.note
-            else:
-                code, j["log"] = await openhands.write_sensor(j["need"], j["domain"], description)
-            j["code"] = code
-            if not code:
-                raise sensors.SensorError(j["note"] or "the Coder wrote no module")
-            j["status"] = "testing"
-            meta, problems = sensors.inspect_code(code)
-            if problems:
-                raise sensors.SensorError("; ".join(problems))
-            out = await sensors.run_code(code, sensors.examples(meta))
-            if not out["ok"]:
-                raise sensors.SensorError(f"sandbox test failed: {out['error']}")
-            if not out["result"] or (isinstance(out["result"], dict) and not any(out["result"].values())):
-                raise sensors.SensorError("sandbox test returned no data")
-            j["result"] = sensors.clip(out["result"])[:3000]
-            stored = await sensors.save(db, j["domain"], code, j["need"], f"coder:{j['backend']}", out["result"])
+            try:
+                code, sample = await _attempt(j, j["backend"], description)
+            except Exception as e:
+                if j["backend"] != "openhands":
+                    raise
+                # OpenHands is heavier (Docker-in-Docker, a 10 GB runtime): when it fails, the built-in Coder tries.
+                j["log"].append(f"openhands failed ({type(e).__name__}: {str(e)[:200]}) — trying the built-in Coder")
+                j.update(backend="openhands→builtin", status="coding")
+                code, sample = await _attempt(j, "builtin", description)
+            j["result"] = sensors.clip(sample)[:3000]
+            author = "coder:" + ("builtin" if j["backend"].endswith("builtin") else j["backend"])
+            stored = await sensors.save(db, j["domain"], code, j["need"], author, sample)
             j.update(status="done", sensor=stored["name"])
         except Exception as e:
             j.update(status="failed", error=f"{type(e).__name__}: {e}"[:1000])

@@ -307,6 +307,10 @@ export interface Playbook {
   status: 'active' | 'retired';
   fired: number;
   last_fired_at: string | null;
+  /** Live condition on a sensor, checked around the clock. */
+  trigger?: { sensor: string; params: Record<string, unknown>; field: string; op: string; value: number; every_minutes: number } | null;
+  trigger_value?: number | null;
+  trigger_checked_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -331,7 +335,7 @@ export interface SensorRequest {
   id: string;
   domain: string;
   need: string;
-  backend: 'builtin' | 'openhands';
+  backend: string;  // builtin | openhands | openhands→builtin (fell back)
   status: 'queued' | 'coding' | 'testing' | 'done' | 'failed';
   created_at: string;
   finished_at: string | null;

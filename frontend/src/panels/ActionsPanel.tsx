@@ -127,6 +127,12 @@ function PlaybookCard({ pb, facts, onSelect, onHighlight, onRetire }: {
         <div className="min-w-0 flex-1">
           <div className="text-[12.5px] text-ink">{pb.name}</div>
           <p className="mt-0.5 text-[11.5px] leading-snug text-dim"><span className="text-faint">when </span>{pb.situation}</p>
+          {pb.trigger && (
+            <p className="mt-0.5 font-mono text-[10.5px] text-gold" title="Checked around the clock; fires the playbook when it holds">
+              live: {pb.trigger.sensor}({Object.entries(pb.trigger.params).map(([k, v]) => `${k}=${v}`).join(', ')}).{pb.trigger.field} {pb.trigger.op} {pb.trigger.value}
+              <span className="text-faint"> · every {pb.trigger.every_minutes}m{pb.trigger_value != null ? ` · now ${pb.trigger_value}` : ''}</span>
+            </p>
+          )}
           <div className="mt-1 flex flex-wrap items-center gap-1">
             {pb.watch.map(w => (
               <button key={w.uid} onClick={() => onSelect(w.uid)} className="rounded bg-panel-2 px-1.5 py-0.5 text-[10.5px] text-dim hover:text-ink">{w.name}</button>
