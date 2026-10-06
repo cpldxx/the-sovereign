@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Shapes } from 'lucide-react';
-import { kg, research, type DomainDetail, type DomainSummary, type Graph, type Ontology } from './lib/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Send, Shapes } from 'lucide-react';
+import { kg, research, type DomainDetail, type DomainSummary, type Fact, type Graph, type Ontology } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { DomainHeader } from './components/DomainHeader';
 import { GraphView } from './components/GraphView';
@@ -13,12 +13,14 @@ import { OntologyPanel } from './panels/OntologyPanel';
 import { ReviewPanel } from './panels/ReviewPanel';
 import { ResearchPanel } from './panels/ResearchPanel';
 import { ReportPanel } from './panels/ReportPanel';
+import { ActionsPanel } from './panels/ActionsPanel';
 
-type Tab = 'ask' | 'report' | 'research' | 'ingest' | 'search' | 'review' | 'ontology';
+type Tab = 'ask' | 'report' | 'actions' | 'research' | 'ingest' | 'search' | 'review' | 'ontology';
 
 const TABS: { id: Tab; label: string; icon: typeof Bot }[] = [
   { id: 'ask', label: 'Head', icon: Bot },
   { id: 'report', label: 'Report', icon: Newspaper },
+  { id: 'actions', label: 'Actions', icon: Send },
   { id: 'research', label: 'Research', icon: Globe },
   { id: 'ingest', label: 'Ingest', icon: FileInput },
   { id: 'search', label: 'Search', icon: Search },
@@ -44,6 +46,8 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('ask');
   const [version, setVersion] = useState(0);  // bumps on every reload, so open panels refetch
+  const [pendingActions, setPendingActions] = useState(0);
+  const factsById = useMemo(() => new Map<string, Fact>(graph.facts.map(f => [f.uid, f])), [graph]);
   const [error, setError] = useState<string | null>(null);
 
   const loadDomains = useCallback(async () => {
@@ -216,6 +220,9 @@ export default function App() {
                     >
                       {/* Seven tabs: only the active one shows its name. */}
                       <Icon size={13} className="shrink-0" /> {tab === id && <span className="truncate">{label}</span>}
+                      {id === 'actions' && pendingActions > 0 && (
+                        <span className="rounded-full bg-gold px-1.5 font-mono text-[9.5px] text-black">{pendingActions}</span>
+                      )}
                       {id === 'review' && detail.stats.pending_reviews > 0 && (
                         <span className="rounded-full bg-gold px-1.5 font-mono text-[9.5px] text-black">{detail.stats.pending_reviews}</span>
                       )}
@@ -229,6 +236,10 @@ export default function App() {
                   </div>
                   <div className={tab === 'report' ? 'h-full' : 'hidden'}>
                     <ReportPanel key={active} domain={active} version={version} onHighlight={setHighlight} onSelect={setSelected} />
+                  </div>
+                  <div className={tab === 'actions' ? 'h-full' : 'hidden'}>
+                    <ActionsPanel key={active} domain={active} version={version} facts={factsById}
+                      onSelect={setSelected} onHighlight={setHighlight} onPending={setPendingActions} />
                   </div>
                   <div className={tab === 'research' ? 'h-full' : 'hidden'}>
                     <ResearchPanel key={active} domain={active} onIngesting={refresh} />

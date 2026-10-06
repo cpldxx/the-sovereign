@@ -50,7 +50,9 @@ ENTITY RULES
    indicator, event, etc. Classify each with exactly ONE of the ENTITY TYPES. Skip things that fit no type.
 2. name: the most specific form used in the text, at most 5 words — the thing itself, not a quantity, stage or
    shipment of it ("HBM4", not "HBM4 samples"; "Blackwell", not "Blackwell orders"). aliases: other names the text uses for the
-   SAME thing (abbreviation, full name). description: one short sentence on what it is, from the text only.
+   SAME thing (abbreviation, full name, spelling) — never a group it belongs to ("hyperscalers"), a product or unit
+   of it ("Maia 200" is not Microsoft), a parent or a competitor. description: one short sentence on what it is,
+   from the text only.
 3. NOT entities: pronouns and unresolved references ("the company"); vague abstractions (growth, demand,
    supply, risk, market); full sentences; numbers, amounts, prices, percentages, dates and durations —
    those belong inside fact text.

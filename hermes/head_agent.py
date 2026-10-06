@@ -61,7 +61,8 @@ HEAD_THINKING = os.getenv("HEAD_THINKING", "false").strip().lower() in ("1", "tr
 # A reply that is nothing but a written-out call like `query_knowledge_graph(domain="x", ...)`.
 _TEXT_TOOL_CALL = re.compile(
     r"^\s*`*(query_knowledge_graph|get_entity|ingest_data|get_ontology|update_ontology|list_reviews|"
-    r"resolve_review|list_domains|start_research|research_status|list_research|daily_report)\s*\(.*\)\s*`*\s*$",
+    r"resolve_review|list_domains|start_research|research_status|list_research|daily_report|list_actions|"
+    r"propose_action|list_proposals|list_playbooks)\s*\(.*\)\s*`*\s*$",
     re.S,
 )
 
@@ -90,8 +91,8 @@ def connect_kg() -> list[str]:
     })
 
 
-def _domain_context(domain: str) -> tuple[str, dict]:
-    """Domain description + ontology from the KG REST API."""
+def _domain_context(domain: str) -> tuple[str, dict, list[dict]]:
+    """Domain description, ontology and action catalog from the KG REST API."""
     with httpx.Client(base_url=KG_URL, timeout=10.0) as client:
         r = client.get(f"/domains/{domain}")
         if r.status_code == 404:
@@ -99,16 +100,26 @@ def _domain_context(domain: str) -> tuple[str, dict]:
         r.raise_for_status()
         description = r.json()["config"].get("description") or domain
         ontology = client.get(f"/domains/{domain}/ontology").json()["ontology"]
-    return description, ontology
+        actions = client.get(f"/domains/{domain}/actions").json()["actions"]
+    return description, ontology, actions
 
 
-def _system_prompt(domain: str, description: str, ontology: dict) -> str:
+def _system_prompt(domain: str, description: str, ontology: dict, actions: list[dict]) -> str:
     entity_types = ", ".join(ontology.get("entity_types", []))
     relation_types = ", ".join(ontology.get("relation_types", []))
+    # The catalog is in the prompt, not behind a tool call: a local model asked to "let the team know" otherwise
+    # never looks for the action that does it (measured: it wrote the message into the chat instead).
+    catalog = "\n".join(
+        f"  - {a['name']}({', '.join(p['name'] for p in a['params'])}): {a['description']}"
+        f" [{'proposed — the user confirms' if a['confirm'] else 'runs at once'}]" for a in actions
+    )
     return f"""You are the Head Agent of The Sovereign — an autonomous domain expert for the "{domain}" domain.
 Domain: {description}
 
-You are the CEO of a knowledge operation. Your memory is a knowledge graph:
+You are the CEO of a knowledge operation. You can ACT through these actions (propose_action):
+{catalog}
+
+Your memory is a knowledge graph:
 - ENTITIES (types: {entity_types}) are the things this domain is about.
 - FACTS connect entities (relations: {relation_types}, plus has_state for a fact about one entity). Each fact
   has a weight from 0 to 1 that grows as independent sources confirm it, an evidence count, and its source
@@ -134,7 +145,14 @@ How you work:
    then drill into the graph if asked. Read it out in your own words; don't just paste it.
 7. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
    grammar cannot express it (e.g. many facts rejected for the same missing relation). Never for one fact.
-8. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
+8. Acting: when the user asks you to DO something (tell / notify / send / order / create / schedule …) that an
+   action above can do, you MUST call propose_action with it — writing the message in the chat is not doing it.
+   Also act when what you find calls for it. Check the graph and the playbooks (list_playbooks: responses
+   prepared from the graph) first, then call propose_action with a rationale that cites the facts (with
+   weights) and their uids as evidence. alert / draft / research run at once. External actions are only PROPOSED: they wait for the user
+   to confirm them in the Actions tab — say so, and never claim one was done unless its status is "executed".
+   You cannot confirm actions. If the knowledge is weak or stale, say so in the rationale or don't propose.
+9. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
 
 
 def _unwrap(raw):
@@ -221,12 +239,12 @@ def _model_kwargs() -> dict:
 
 def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSink | None = None) -> AIAgent:
     """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools."""
-    description, ontology = _domain_context(domain)
+    description, ontology, actions = _domain_context(domain)
     connect_kg()
     return AIAgent(
         **_model_kwargs(),
         enabled_toolsets=[KG_TOOLSET],
-        ephemeral_system_prompt=_system_prompt(domain, description, ontology),
+        ephemeral_system_prompt=_system_prompt(domain, description, ontology, actions),
         max_iterations=max_iterations,
         tool_delay=0.0,
         quiet_mode=True,

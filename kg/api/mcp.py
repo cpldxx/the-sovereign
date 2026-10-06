@@ -1,11 +1,18 @@
 """MCP adapter — the same KG operations as the REST API, exposed as agent tools.
 
-Hermes (or any MCP client) connects to http://localhost:8080/mcp and discovers these tools
-with their schemas; no glue code is needed on the agent side. Every tool calls the same
-`core` functions the REST routes use.
+Hermes (or any MCP client) connects and discovers these tools with their schemas; no glue code is needed
+on the agent side. Every tool calls the same `core` functions the REST routes use.
+
+Each role gets its own endpoint that serves only that role's tools — what an agent may do is decided by
+where it connects, not by its prompt:
+    head      /mcp           everything: writes, ontology changes, review decisions, action proposals
+    readonly  /mcp/readonly  reading the graph, reports, playbooks, actions and sensors — for sub-agents and
+                             external MCP clients (e.g. a desktop assistant pointed at your graph)
+No role can confirm or execute an action: that is the user's call, through the REST API / UI.
 """
 
 import os
+from collections.abc import Callable
 from typing import Literal
 
 import httpx
@@ -14,20 +21,28 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import digest, kg
+from core import actions, coding, digest, kg, playbooks, sensors
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
 
-mcp = MCPServer(
-    "sovereign-kg",
-    instructions=(
-        "The Sovereign knowledge graph. Each domain has its own graph of ENTITIES (things) connected by FACTS "
-        "(sourced statements whose weight grows as more independent sources confirm them; superseded facts are "
-        "kept with valid=false). Ground domain answers in query_knowledge_graph, drill into an entity with "
-        "get_entity, persist new information with ingest_data. Cite facts with their weight and sources."
-    ),
+INSTRUCTIONS = (
+    "The Sovereign knowledge graph. Each domain has its own graph of ENTITIES (things) connected by FACTS "
+    "(sourced statements whose weight grows as more independent sources confirm them; superseded facts are "
+    "kept with valid=false). Ground domain answers in query_knowledge_graph, drill into an entity with "
+    "get_entity, persist new information with ingest_data. Cite facts with their weight and sources."
 )
+PATHS = {"head": "/mcp", "readonly": "/mcp/readonly"}
+
+_TOOLS: list[tuple[Callable, frozenset[str]]] = []
+
+
+def tool(*roles: str):
+    """Register an agent tool for these roles (the Head always has every tool)."""
+    def register(fn: Callable) -> Callable:
+        _TOOLS.append((fn, frozenset({"head", *roles})))
+        return fn
+    return register
 
 # Set by main.py's lifespan: the same ArcadeDB client the REST routes use.
 db: ArcadeDB | None = None
@@ -36,9 +51,9 @@ db: ArcadeDB | None = None
 RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
 
 
-async def _research(method: str, path: str, **kw) -> dict:
+async def _research(method: str, path: str, timeout: float = 30, **kw) -> dict:
     try:
-        async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=30) as client:
+        async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=timeout) as client:
             r = await client.request(method, path, **kw)
     except httpx.HTTPError as e:
         raise ToolError(f"Research service unreachable at {RESEARCH_URL} ({type(e).__name__})") from e
@@ -55,13 +70,13 @@ def _require(domain: str) -> dict:
         raise ToolError(f"{e}. Known domains: {registry.list_domains()}") from e
 
 
-@mcp.tool()
+@tool("readonly")
 def list_domains() -> list[str]:
     """List the knowledge domains (one isolated knowledge graph each)."""
     return registry.list_domains()
 
 
-@mcp.tool()
+@tool("readonly")
 async def query_knowledge_graph(domain: str, query: str, k: int = 5) -> dict:
     """Search a domain's knowledge graph by meaning (Graph RAG).
 
@@ -73,7 +88,7 @@ async def query_knowledge_graph(domain: str, query: str, k: int = 5) -> dict:
     return await kg.query(db, domain, query, max(1, min(k, 50)))
 
 
-@mcp.tool()
+@tool("readonly")
 async def get_entity(domain: str, uid: str) -> dict:
     """Everything the graph knows about one entity: its summary and aliases, every fact touching it
     (strongest first, superseded ones marked valid=false) and the episodes that mention it."""
@@ -84,7 +99,7 @@ async def get_entity(domain: str, uid: str) -> dict:
     return detail
 
 
-@mcp.tool()
+@tool()
 async def ingest_data(
     domain: str, raw_text: str, source: str = "agent", title: str = "",
     content_status: Literal["full", "partial"] = "full",
@@ -105,14 +120,14 @@ async def ingest_data(
     }
 
 
-@mcp.tool()
+@tool("readonly")
 def get_ontology(domain: str) -> dict:
     """The domain's ontology: allowed entity types and relation types (plus the built-in has_state for facts
     about a single entity)."""
     return _require(domain)["ontology"]
 
 
-@mcp.tool()
+@tool()
 def update_ontology(domain: str, entity_types: list[str], relation_types: list[str]) -> dict:
     """Replace the domain's ontology. Head Agent only — change it only on evidence from accumulated data.
 
@@ -127,7 +142,7 @@ def update_ontology(domain: str, entity_types: list[str], relation_types: list[s
     return ontology.model_dump()
 
 
-@mcp.tool()
+@tool("readonly")
 async def list_reviews(domain: str) -> list[dict]:
     """Pending review items — ambiguous writes waiting for the Head Agent:
     kind "fact" (a supported but low-reliability fact), "merge" (maybe the same entity as an existing one),
@@ -136,7 +151,7 @@ async def list_reviews(domain: str) -> list[dict]:
     return await kgdb.list_reviews(db, domain, "pending")
 
 
-@mcp.tool()
+@tool()
 async def resolve_review(domain: str, uid: str, approve: bool, note: str = "") -> dict:
     """Decide a review item. approve=true applies it (adds the fact / merges the entities / links the facts);
     approve=false dismisses it. Give a short note with your reasoning."""
@@ -147,7 +162,7 @@ async def resolve_review(domain: str, uid: str, approve: bool, note: str = "") -
         raise ToolError(str(e)) from e
 
 
-@mcp.tool()
+@tool("readonly")
 async def daily_report(domain: str) -> dict:
     """The latest daily report for a domain: a headline, a briefing of what changed in the graph (new sources,
     entities and facts, facts confirmed or superseded, research runs, what needs attention) and a short spoken
@@ -160,7 +175,94 @@ async def daily_report(domain: str) -> dict:
     return {"report": reports[0], "generating": digest.running(domain)}
 
 
-@mcp.tool()
+@tool("readonly")
+async def list_actions(domain: str) -> list[dict]:
+    """What this domain can do: built-in actions (alert, draft, research — they run at once) and the user's
+    external actions (webhooks — they run only after the user confirms). Each with its parameters."""
+    _require(domain)
+    return await actions.catalog(db, domain)
+
+
+@tool("readonly")
+async def list_playbooks(domain: str) -> list[dict]:
+    """The domain's playbooks: situations worth acting on, each with the entities it watches, the prepared
+    response and action, and the facts behind it. Written every night from the graph; a triggered playbook
+    becomes a proposal by itself. Check them when deciding what to do."""
+    _require(domain)
+    return await playbooks.list_playbooks(db, domain)
+
+
+@tool()
+async def propose_action(domain: str, action: str, params: dict, rationale: str,
+                         evidence: list[str] | None = None) -> dict:
+    """Propose an action from the catalog (list_actions). `rationale`: why, grounded in the graph — cite facts
+    with their weight; `evidence`: the uids of those facts. Internal actions run at once; external actions
+    are recorded with a dry-run preview and wait for the user's confirmation in the Actions tab — never say
+    one was done unless its status is "executed"."""
+    _require(domain)
+    try:
+        return await actions.propose(db, domain, action, params, rationale, evidence, source="head")
+    except actions.ActionError as e:
+        raise ToolError(str(e)) from e
+
+
+@tool("readonly")
+async def list_proposals(domain: str, status: str = "proposed") -> list[dict]:
+    """Proposed actions. status: "proposed" (waiting for the user), "executed", "rejected", "failed", "expired"."""
+    _require(domain)
+    return await actions.list_proposals(db, domain, status, 30)
+
+
+# ── Senses: the world right now (the graph can be a day old) ──────────────
+
+@tool("readonly")
+async def web_search(query: str, recent: bool = False) -> list[dict]:
+    """Search the web right now: titles, URLs, snippets. recent=true prefers the last day's results.
+    Nothing is stored — use start_research for knowledge worth keeping."""
+    out = await _research("GET", "/search", params={"q": query, "time_range": "day" if recent else None, "limit": 8},
+                          timeout=60)
+    return out.get("results", [])
+
+
+@tool("readonly")
+async def read_webpage(url: str) -> dict:
+    """Read one public web page right now, as text (robots.txt respected; some sites can't be read).
+    Nothing is stored — ingest_data it if it is worth keeping."""
+    return await _research("POST", "/fetch", json={"url": url, "max_chars": 12000}, timeout=120)
+
+
+@tool("readonly")
+async def list_sensors(domain: str) -> list[dict]:
+    """The domain's live-data sensors (written by the Coder Agent): name, what it returns, its parameters."""
+    _require(domain)
+    return [{k: s[k] for k in ("name", "description", "params", "last_run_at", "last_ok")}
+            for s in await sensors.list_sensors(db, domain) if s["status"] == "active"]
+
+
+@tool("readonly")
+async def read_sensor(domain: str, name: str, params: dict | None = None) -> dict:
+    """Read a live-data sensor now (runs in a sandbox, a few seconds). Check live data right before acting."""
+    _require(domain)
+    try:
+        out = await sensors.read(db, domain, name, params or {})
+    except sensors.SensorError as e:
+        raise ToolError(str(e)) from e
+    if out.get("ok"):
+        out["result"] = sensors.clip(out["result"])
+    return out
+
+
+@tool()
+def request_sensor(domain: str, need: str) -> dict:
+    """Ask the Coder Agent to write a new sensor for a recurring live-data need (e.g. "latest stock price and
+    day change for a ticker"). It finds a free public source, tests the code in a sandbox; takes minutes.
+    Returns a request id; list_sensors shows it once it works."""
+    _require(domain)
+    j = coding.submit(db, domain, need)
+    return {"request": j["id"], "status": j["status"], "need": j["need"]}
+
+
+@tool()
 async def start_research(domain: str, question: str) -> dict:
     """Send the research agent (DeerFlow) on a mission: it searches the web, reads the most relevant pages
     in full and every page it reads is ingested into the domain's graph as a source episode.
@@ -169,7 +271,7 @@ async def start_research(domain: str, question: str) -> dict:
     return await _research("POST", f"/domains/{domain}/research", json={"mode": "mission", "question": question})
 
 
-@mcp.tool()
+@tool("readonly")
 async def research_status(job_id: str) -> dict:
     """Status of a research job: queued / researching / ingesting / done / failed, the pages it read
     (with what each added to the graph or why it failed) and, when done, its short report."""
@@ -179,10 +281,22 @@ async def research_status(job_id: str) -> dict:
     return job
 
 
-@mcp.tool()
+@tool("readonly")
 async def list_research(domain: str) -> list[dict]:
     """Recent research jobs for a domain (newest first): bootstrap, nightly updates and missions."""
     _require(domain)
     jobs = await _research("GET", "/jobs", params={"domain": domain, "limit": 20})
     return [{k: j.get(k) for k in ("id", "mode", "question", "status", "created_at", "finished_at", "summary")}
             for j in jobs.get("jobs", [])]
+
+
+def _server(role: str) -> MCPServer:
+    server = MCPServer(f"sovereign-kg-{role}", instructions=INSTRUCTIONS)
+    for fn, roles in _TOOLS:
+        if role in roles:
+            server.add_tool(fn)
+    return server
+
+
+# One MCP server per role (main.py serves each at PATHS[role] and runs its session manager).
+servers = {role: _server(role) for role in PATHS}

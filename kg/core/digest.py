@@ -1,5 +1,6 @@
 """Daily digest — refresh what went stale, then report what changed.
 
+repair             name keys that leaked onto the wrong entity are removed
 refresh_summaries  entities whose facts changed get their summary rewritten from their current facts
 build_report       the period's changes (from the graph) + research runs (from the research service)
                    → Reporter → a stored Report: a briefing to read and a short version to speak
@@ -143,6 +144,7 @@ async def build_report(db: ArcadeDB, domain: str, hours: int = 24, refresh: bool
                      tags=[domain, "report"]) as obs:
             end_dt = datetime.now(timezone.utc)
             start, end = _iso(end_dt - timedelta(hours=hours)), _iso(end_dt)
+            repaired = await kgdb.repair_name_keys(db, domain)  # names that leaked onto other entities
             summaries = await refresh_summaries(db, domain, start) if refresh else {"candidates": 0, "refreshed": 0}
             changes = await kgdb.changes_since(db, domain, start)
             runs = await _research_runs(domain, start)
@@ -170,6 +172,7 @@ async def build_report(db: ArcadeDB, domain: str, hours: int = 24, refresh: bool
                                 for k in ("research", "ontology", "ingest")},
                 },
                 "summaries": summaries,
+                "names_repaired": repaired,
                 "ontology_gaps": gaps,
                 # LLM calls / tokens per activity across ALL domains (one local model serves them all), or None
                 "llm": await llm_usage(start, end),

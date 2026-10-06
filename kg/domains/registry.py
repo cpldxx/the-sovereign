@@ -71,19 +71,16 @@ def ontology_path(name: str) -> Path:
 
 
 def load_domain(name: str) -> dict:
-    """Load a domain's config, tools (Coder Agent target) and ontology."""
+    """Load a domain's config and ontology. (Its live-data tools are sensors in its database.)"""
     domain_dir = _domain_dir(name)
 
-    # Import domain modules dynamically
     config_module = importlib.import_module(f"domains.{name}.config")
-    tools_module = importlib.import_module(f"domains.{name}.tools")
 
     ontology_file = domain_dir / "ontology.json"
     ontology = json.loads(ontology_file.read_text()) if ontology_file.exists() else DEFAULT_ONTOLOGY
 
     return {
         "config": config_module.DOMAIN_CONFIG,
-        "tools": tools_module,
         "ontology": ontology,
     }
 
@@ -101,6 +98,6 @@ def delete_domain(name: str) -> None:
     domain_dir = _domain_dir(name)
     shutil.rmtree(domain_dir)
     # Forget the imported modules, or a re-created domain of the same name
-    # would silently load the deleted one's config and tools.
+    # would silently load the deleted one's config.
     for module in [m for m in sys.modules if m == f"domains.{name}" or m.startswith(f"domains.{name}.")]:
         del sys.modules[module]

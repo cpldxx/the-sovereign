@@ -11,6 +11,10 @@ One ArcadeDB database per domain:
     ReviewItem (document) uid, kind, status, summary, payload (JSON), created_at, resolved_at, resolution
     Report     (document) uid, kind, period_start, period_end, created_at, headline, briefing, spoken,
                           stats (JSON), digest (JSON)
+    Action     (document) a user-configured external action (webhook): name, description, url, params (JSON)…
+    Proposal   (document) an action someone wants taken: action, params, rationale, status, result…
+    Playbook   (document) a pre-computed "if this happens, do that" rule derived from the graph
+    Sensor     (document) a live-data tool: name, description, params, code, last run…
 
 A synapse's strength is a noisy-OR over its independent sources:
     weight = 1 - disbelief,  disbelief = Π (1 - reliability of each distinct source)
@@ -27,6 +31,7 @@ from datetime import datetime, timezone
 import httpx
 from dotenv import load_dotenv
 
+from core.names import name_key
 from core.ontology import normalize_type
 
 load_dotenv()
@@ -38,7 +43,8 @@ DB_PASS = os.getenv("ARCADEDB_PASS", "sovereign_pass")
 ENTITY_INDEX = "Entity[embedding]"
 STATE = "has_state"  # built-in relation for facts about a single entity (self-loop)
 # Relation names that would collide with the schema's own types.
-_RESERVED = {"entity", "episode", "fact", "mentions", "reviewitem", "report"}
+_RESERVED = {"entity", "episode", "fact", "mentions", "reviewitem", "report", "action", "proposal", "playbook",
+             "sensor"}
 
 _NON_IDENT = re.compile(r"[^A-Za-z0-9_]+")
 
@@ -61,6 +67,18 @@ CREATE INDEX IF NOT EXISTS ON ReviewItem (uid) UNIQUE;
 CREATE DOCUMENT TYPE Report IF NOT EXISTS;
 CREATE PROPERTY Report.uid IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Report (uid) UNIQUE;
+CREATE DOCUMENT TYPE Action IF NOT EXISTS;
+CREATE PROPERTY Action.uid IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON Action (uid) UNIQUE;
+CREATE DOCUMENT TYPE Proposal IF NOT EXISTS;
+CREATE PROPERTY Proposal.uid IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON Proposal (uid) UNIQUE;
+CREATE DOCUMENT TYPE Playbook IF NOT EXISTS;
+CREATE PROPERTY Playbook.uid IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON Playbook (uid) UNIQUE;
+CREATE DOCUMENT TYPE Sensor IF NOT EXISTS;
+CREATE PROPERTY Sensor.uid IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON Sensor (uid) UNIQUE;
 """
 
 # Vector indexes need the embedding dimension, so they are created on first use.
@@ -382,6 +400,31 @@ async def get_facts(db: ArcadeDB, domain: str, uids: list[str]) -> list[dict]:
     return [_fact(r) for r in rows]
 
 
+async def repair_name_keys(db: ArcadeDB, domain: str) -> int:
+    """A name key belongs to one entity — the one whose own name it is — or, when it is nobody's name (a shared
+    descriptor such as "hyperscaler"), to none. Removes keys and aliases that leaked onto other entities.
+    Returns how many entities were fixed. (Two entities with the same own name are left for a merge review.)"""
+    rows = await db.sql(domain, "SELECT uid, name, keys, aliases FROM Entity")
+    owners: dict[str, list[dict]] = {}
+    for r in rows:
+        for k in r.get("keys") or []:
+            owners.setdefault(k, []).append(r)
+    leaked: dict[str, set[str]] = {}
+    for k, ents in owners.items():
+        if len(ents) > 1:
+            for r in ents:
+                if name_key(r["name"]) != k:
+                    leaked.setdefault(r["uid"], set()).add(k)
+    for r in rows:
+        if bad := leaked.get(r["uid"]):
+            await db.cypher(
+                domain, "MATCH (e:Entity {uid: $uid}) SET e.keys = $keys, e.aliases = $aliases", uid=r["uid"],
+                keys=[k for k in r["keys"] if k not in bad],
+                aliases=[a for a in r.get("aliases") or [] if name_key(a) not in bad],
+            )
+    return len(leaked)
+
+
 async def merge_entities(db: ArcadeDB, domain: str, duplicate_uid: str, into_uid: str) -> None:
     """Fold a duplicate entity into another: names, mentions and every fact move over."""
     dup = await entity_detail(db, domain, duplicate_uid)
@@ -631,6 +674,23 @@ async def changed_entities(db: ArcadeDB, domain: str, since: str, limit: int) ->
     return sorted(counts, key=lambda u: -counts[u])[:limit]
 
 
+async def top_entities(db: ArcadeDB, domain: str, limit: int) -> list[dict]:
+    """The most mentioned entities."""
+    return await db.cypher(domain, f"MATCH (e:Entity) RETURN {_ENTITY_COLUMNS} ORDER BY e.mentions DESC LIMIT $n",
+                           n=limit)
+
+
+async def top_facts(db: ArcadeDB, domain: str, limit: int, valid: bool = True) -> list[dict]:
+    """Strongest valid facts — or, with valid=False, the most recently superseded ones."""
+    where, order = ("r.invalid_at IS NULL", "r.disbelief ASC, r.evidence DESC") if valid else \
+        ("r.invalid_at IS NOT NULL", "r.invalid_at DESC")
+    rows = await db.cypher(
+        domain, f"MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE {where} RETURN {_FACT_COLUMNS} ORDER BY {order} LIMIT $n",
+        n=limit,
+    )
+    return [_fact(r) for r in rows]
+
+
 async def set_entity_summary(db: ArcadeDB, domain: str, uid: str, summary: str) -> None:
     """A rewritten summary. The embedding stays the one from the entity's first description: entity
     resolution's similarity threshold is calibrated on description-vs-description."""
@@ -685,3 +745,57 @@ async def get_report(db: ArcadeDB, domain: str, uid: str) -> dict | None:
         uid=uid,
     )
     return _report(rows[0], full=True) if rows else None
+
+
+# ── Documents: actions, proposals, playbooks, sensors ──────────────────────
+# Type and column names come from code, never from input. Nested values (params, results, evidence) are
+# stored as JSON strings, like ReviewItem.payload; `json_fields` names them for encoding and decoding.
+
+def _encode(doc: dict, json_fields: tuple[str, ...]) -> dict:
+    return {k: json.dumps(v, default=str) if k in json_fields else v for k, v in doc.items()}
+
+
+def _decode(row: dict, json_fields: tuple[str, ...]) -> dict:
+    row = {k: v for k, v in row.items() if not k.startswith("@")}
+    for k in json_fields:
+        if isinstance(row.get(k), str):
+            row[k] = json.loads(row[k])
+    return row
+
+
+async def insert_doc(db: ArcadeDB, domain: str, type_: str, doc: dict, json_fields: tuple[str, ...] = ()) -> dict:
+    await ensure_domain_db(db, domain)
+    doc = {"uid": new_uid(type_.lower()[:4]), "created_at": now(), **doc}
+    await db.sql(domain, f"INSERT INTO {type_} SET " + ", ".join(f"{k} = :{k}" for k in doc),
+                 **_encode(doc, json_fields))
+    return doc
+
+
+async def find_docs(db: ArcadeDB, domain: str, type_: str, json_fields: tuple[str, ...] = (), where: str = "",
+                    order: str = "created_at DESC", limit: int = 100, **params) -> list[dict]:
+    if not await db.exists(domain):
+        return []
+    await ensure_domain_db(db, domain)
+    rows = await db.sql(domain, f"SELECT FROM {type_}{' WHERE ' + where if where else ''} ORDER BY {order} LIMIT :n",
+                        n=limit, **params)
+    return [_decode(r, json_fields) for r in rows]
+
+
+async def get_doc(db: ArcadeDB, domain: str, type_: str, uid: str, json_fields: tuple[str, ...] = ()) -> dict | None:
+    rows = await find_docs(db, domain, type_, json_fields, "uid = :uid", limit=1, uid=uid)
+    return rows[0] if rows else None
+
+
+async def update_doc(db: ArcadeDB, domain: str, type_: str, uid: str, changes: dict,
+                     json_fields: tuple[str, ...] = (), if_status: str | None = None) -> bool:
+    """Apply changes; with `if_status`, only while the document still has that status (atomic: a proposal
+    is executed once even if confirmed twice). True if a document changed."""
+    sets = ", ".join(f"{k} = :set_{k}" for k in changes)
+    cond = "uid = :uid" + (" AND status = :if_status" if if_status else "")
+    params = {f"set_{k}": v for k, v in _encode(changes, json_fields).items()}
+    rows = await db.sql(domain, f"UPDATE {type_} SET {sets} WHERE {cond}", uid=uid, if_status=if_status, **params)
+    return bool(rows and rows[0].get("count"))
+
+
+async def delete_doc(db: ArcadeDB, domain: str, type_: str, uid: str) -> None:
+    await db.sql(domain, f"DELETE FROM {type_} WHERE uid = :uid", uid=uid)

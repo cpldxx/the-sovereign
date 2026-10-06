@@ -195,6 +195,8 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
         kept[key] = {"name": e.name.strip(), "type": etype, "aliases": [a.strip() for a in e.aliases if a.strip()],
                      "description": e.description.strip()}
     for key, e in kept.items():
+        # An alias that is another extracted entity's name ("Samsung" listed with "SK Hynix") is a mistake.
+        e["aliases"] = [a for a in e["aliases"] if name_key(a) == key or name_key(a) not in kept]
         for n in [e["name"], *e["aliases"]]:
             if k := name_key(n):
                 by_name.setdefault(k, key)
@@ -265,13 +267,20 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
     with stage("resolve_lookup"):
         for key, e in kept.items():
             e["keys"] = sorted({key, *(name_key(a) for a in e["aliases"])} - {""})
-            if match := await kgdb.entities_by_keys(db, domain, e["keys"]):
-                uid_of[key] = match[0]["uid"]
+            e["matches"] = await kgdb.entities_by_keys(db, domain, e["keys"])
+            # Identity is decided by the entity's own name: the existing entity known by that name. A shared
+            # alias alone ("hyperscaler"; "CoWoS-L" once listed under CoWoS) proves nothing — the Resolver decides.
+            named = [m for m in e["matches"] if key in m["keys"]]
+            if len(named) > 1:
+                named = [m for m in named if name_key(m["name"]) == key] or named
+            if len(named) == 1:
+                uid_of[key] = named[0]["uid"]
                 continue
-            cands = []
+            cands = [{**m, "summary": m.get("summary") or "", "similarity": None} for m in named or e["matches"]]
             if entity_vec[key]:
-                cands = [c for c in await kgdb.entity_candidates(db, domain, entity_vec[key], 5)
-                         if c["similarity"] >= CANDIDATE_SIMILARITY]
+                seen = {c["uid"] for c in cands}
+                cands += [c for c in await kgdb.entity_candidates(db, domain, entity_vec[key], 5)
+                          if c["similarity"] >= CANDIDATE_SIMILARITY and c["uid"] not in seen]
             if cands:
                 ambiguous.append((key, cands))
     with stage("resolve_llm"):
@@ -289,15 +298,19 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
     with stage("write_entities"):
         ts = now()
         for key, e in kept.items():
+            # Names another entity already owns stay with it: they never move onto this one.
+            others = {k for m in e["matches"] if m["uid"] != uid_of.get(key) for k in m["keys"]}
+            keys = [k for k in e["keys"] if k == key or k not in others]
+            aliases = [a for a in e["aliases"] if name_key(a) not in others]
             if key in uid_of:
                 # The name this text used becomes an alias of the existing entity (touch_entity skips its own name).
-                await kgdb.touch_entity(db, domain, uid_of[key], e["keys"], [e["name"], *e["aliases"]], e["description"])
+                await kgdb.touch_entity(db, domain, uid_of[key], keys, [e["name"], *aliases], e["description"])
                 report.entity(name=e["name"], type=e["type"], uid=uid_of[key], status="matched")
                 continue
             uid_of[key] = new_uid("e")
             await kgdb.create_entity(db, domain, {
                 "uid": uid_of[key], "name": e["name"], "type": e["type"], "summary": e["description"],
-                "aliases": e["aliases"], "keys": e["keys"], "mentions": 1, "created_at": ts, "updated_at": ts,
+                "aliases": aliases, "keys": keys, "mentions": 1, "created_at": ts, "updated_at": ts,
             }, entity_vec[key])
             report.entity(name=e["name"], type=e["type"], uid=uid_of[key], status="created")
             if key in unsure_merge:

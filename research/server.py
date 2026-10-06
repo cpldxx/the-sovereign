@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from sovereign_research import fetch, runner  # noqa: E402
+from sovereign_research import fetch, runner, search  # noqa: E402
 from sovereign_research.jobs import KG_URL, Jobs  # noqa: E402
 
 NIGHTLY = os.getenv("RESEARCH_NIGHTLY", "on").lower() in ("1", "on", "true", "yes")
@@ -63,8 +63,9 @@ async def nightly() -> None:
 
 
 async def daily_reports(domains: list[str]) -> None:
-    """Each domain's daily report, as soon as its research runs are finished (runs are sequential). A run still
-    going after REPORT_WAIT doesn't hold the report back — nor the next night, which waits on this loop."""
+    """Each domain's daily report and playbook cycle, as soon as its research runs are finished (runs are
+    sequential). A run still going after REPORT_WAIT doesn't hold them back — nor the next night, which waits
+    on this loop."""
     pending = list(domains)
     deadline = time.monotonic() + REPORT_WAIT
     while pending:
@@ -75,10 +76,15 @@ async def daily_reports(domains: list[str]) -> None:
                 # Summary refresh + report is LLM work on the KG side: minutes with a local model.
                 async with httpx.AsyncClient(base_url=KG_URL, timeout=httpx.Timeout(3600, connect=10)) as kg:
                     r = await kg.post(f"/domains/{d}/reports", json={"hours": 24, "wait": True})
-                print(f"[Research] nightly: report for {d}: "
-                      f"{r.json().get('headline', '') if r.is_success else f'failed ({r.status_code})'}", flush=True)
+                    print(f"[Research] nightly: report for {d}: "
+                          f"{r.json().get('headline', '') if r.is_success else f'failed ({r.status_code})'}", flush=True)
+                    # Then the playbooks: today's changes checked against them (triggered ones become
+                    # proposals), and the set rewritten from the graph.
+                    r = await kg.post(f"/domains/{d}/playbooks/cycle", json={"hours": 24, "wait": True})
+                    print(f"[Research] nightly: playbooks for {d}: "
+                          f"{r.json() if r.is_success else f'failed ({r.status_code})'}", flush=True)
             except httpx.HTTPError as e:
-                print(f"[Research] nightly: report for {d} failed ({type(e).__name__})", flush=True)
+                print(f"[Research] nightly: report / playbooks for {d} failed ({type(e).__name__})", flush=True)
         if pending:
             await asyncio.sleep(60)
 
@@ -118,6 +124,33 @@ async def research(domain: str, request: ResearchRequest):
     if request.mode == "bootstrap" and (active := jobs.active(domain)) and active["mode"] == "bootstrap":
         return active
     return jobs.submit(domain, request.mode, request.question.strip())
+
+
+class FetchRequest(BaseModel):
+    url: str
+    max_chars: int = 12000
+
+
+@app.post("/fetch")
+async def fetch_now(request: FetchRequest):
+    """Read one page now — a live sense for agents. Same rules as research runs: public URLs only,
+    robots.txt respected, per-site pacing, rendered by the crawler."""
+    page = await fetch.fetch_page(request.url)
+    return {"url": page.url, "title": page.title, "status": page.status, "error": page.error,
+            "chars": len(page.markdown), "markdown": page.markdown[: max(0, min(request.max_chars, 50_000))]}
+
+
+@app.get("/search")
+async def search_now(q: str, time_range: Literal["day", "week", "month", "year"] | None = None,
+                     limit: int = Query(8, ge=1, le=20)):
+    """Web search now (local SearXNG, paced) — a live sense for agents; `time_range` for recent results.
+    Several free engines ignore time ranges and then return nothing: such a search is retried without it."""
+    results, unresponsive = await search.search(q, time_range)
+    filtered = bool(time_range)
+    if not results and time_range:
+        results, unresponsive = await search.search(q)
+        filtered = False
+    return {"results": results[:limit], "time_range_applied": filtered, "unresponsive": unresponsive}
 
 
 @app.get("/jobs")

@@ -1,25 +1,29 @@
 """The Sovereign - Main entry point."""
 
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.actions import router as actions_router
 from api.domains import router as domains_router
 from api.entities import router as entities_router
 from api import mcp as kg_mcp
 from api.graph import router as graph_router
 from api.ontology import router as ontology_router
+from api.playbooks import router as playbooks_router
 from api.pipeline import router as pipeline_router
 from api.query import router as query_router
 from api.reports import router as reports_router
 from api.reviews import router as reviews_router
+from api.sensors import router as sensors_router
 from core import tracing
 from core.database import get_db
 
 
-# Built at import time: the MCP session manager only exists after this call.
-mcp_app = kg_mcp.mcp.streamable_http_app()
+# Built at import time: a server's MCP session manager only exists after this call.
+mcp_routes = [route for role, server in kg_mcp.servers.items()
+              for route in server.streamable_http_app(streamable_http_path=kg_mcp.PATHS[role]).routes]
 
 
 @asynccontextmanager
@@ -27,8 +31,11 @@ async def lifespan(app: FastAPI):
     if tracing.setup():
         print("[KG] tracing to LangFuse", flush=True)
     app.state.db = kg_mcp.db = await get_db()
-    # A mounted app's own lifespan never runs, so the host enters the MCP session manager.
-    async with kg_mcp.mcp.session_manager.run():
+    # The MCP apps' own lifespans never run (only their routes are served), so the host enters their
+    # session managers.
+    async with AsyncExitStack() as stack:
+        for server in kg_mcp.servers.values():
+            await stack.enter_async_context(server.session_manager.run())
         yield
     await app.state.db.close()
     tracing.shutdown()
@@ -56,6 +63,9 @@ app.include_router(ontology_router)
 app.include_router(entities_router)
 app.include_router(reviews_router)
 app.include_router(reports_router)
+app.include_router(actions_router)
+app.include_router(playbooks_router)
+app.include_router(sensors_router)
 
 
 @app.get("/")
@@ -69,9 +79,8 @@ async def health():
     return {"kg": True, "arcadedb": await app.state.db.ready(), "tracing": tracing.ENABLED}
 
 
-# MCP endpoint for agents at /mcp. Mounted last: Mount("/") matches every path,
-# so it only receives requests no route above claimed.
-app.mount("/", mcp_app)
+# MCP endpoints for agents, one per role: /mcp (Head), /mcp/readonly.
+app.router.routes.extend(mcp_routes)
 
 
 if __name__ == "__main__":
