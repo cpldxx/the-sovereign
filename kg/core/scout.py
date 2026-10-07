@@ -10,17 +10,19 @@ cross-check between them.
     2 collect    real URLs from web search hits that show the example values, made into templates (…/quote/{symbol}),
                  plus the Scout's own list of 20-30 APIs and pages; while fewer than SCOUT_MAX_SOURCES answer, up to
                  ROUNDS rounds, each asking for sites not tried yet (guessed URLs are mostly 404s and landing pages)
-                 Round one starts with the catalog: templates that worked for a similar need before (any domain)
-    (reach)      when the group already reads a value, a page that doesn't show it within 1 % is dropped before
-                 any parser is written
+                 Round one starts with the catalog (core/catalog.py): templates that worked for similar needs before,
+                 in any domain; sites that refused us lately are skipped
+    (reach)      when the group already reads a value, a page that doesn't show it (within the group's tolerance, at
+                 least 1 %) is dropped before any parser is written
     3 reach      each candidate with the example parameters: pages opened in a browser (robots.txt, no bot-protection
                  workarounds), APIs checked against robots.txt and probed from the sandbox — blocked ones are recorded
     4 parse      for the reachable ones (APIs first, up to SCOUT_MAX_SOURCES): a parser written from what the source
                  actually returned, tested in the sandbox on the example AND a second value (a parser fitted to the
                  NVDA page broke on AMD), fixed once
-    5 agree      the main key field compared across every working source (and the group's current ones): with three or
-                 more, a source more than 0.5 % off the median is dropped — it read the wrong number (at 3 %, a page's
-                 previous close passed for the price)
+    5 agree      the main key's values across every working source (and the group's current ones) must sit within 4
+                 robust spreads (median absolute deviation) of their median — a source that read another number (a
+                 previous close) stands out; spread-out values (counts, headlines) aren't voted on. Thresholds come
+                 from the data: fixed ones let a previous close pass (3 %) or rejected every good source (10 %)
     6 keep       every source left joins the group; reading it falls back from one to the next
 
 The nightly health check reads every source once; a group with fewer than MIN_WORKING working sources is scouted again
@@ -34,13 +36,12 @@ import re
 import statistics
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from urllib.parse import urlsplit
 
 import httpx
 
 from agents import scout as agent
-from core import auth, playbooks, sensors
+from core import auth, catalog, playbooks, sensors
 from core import database as kgdb
 from core.database import ArcadeDB, now
 
@@ -48,7 +49,6 @@ MAX_CANDIDATES = 30   # per round
 ROUNDS = 3            # rounds of candidates while fewer than SCOUT_MAX_SOURCES answer
 MAX_SOURCES = int(os.getenv("SCOUT_MAX_SOURCES", "12"))   # parsers written per run (each is one or two LLM calls)
 MIN_WORKING = 2
-CONSENSUS = 0.005     # a new source more than 0.5 % off the median read something else (3 % let a previous close in)
 RESCOUT_DAYS = 7
 DEAD_RESCOUT_HOURS = 6   # a sensor with no working source is searched again after this long
 SAMPLE_CHARS = 9000
@@ -139,49 +139,21 @@ async def _search(need: str, args: dict, args2: dict | None, domain: str) -> tup
     return text, pages
 
 
-def _shows(text: str, reference: float | None) -> bool:
+def _shows(text: str, reference: float | None, tolerance: float = 0.01) -> bool:
     """Does the text contain a number within 1 % of the value other sources read? (No reference: assume yes.) 3 %
     let 404 and overview pages through: some number on them was always that close."""
     if reference is None:
         return True
     for raw in re.findall(r"\d[\d,]*\.?\d*", text):
         try:
-            if abs(float(raw.replace(",", "")) - reference) <= 0.01 * abs(reference):
+            if abs(float(raw.replace(",", "")) - reference) <= tolerance * abs(reference):
                 return True
         except ValueError:
             continue
     return False
 
 
-# ── Catalog: source templates that worked, for the next scout of a similar need (any domain) ─────────────────
-
-CATALOG = Path(__file__).resolve().parents[1] / ".scout-catalog.json"
-_WORD = re.compile(r"[a-z]{4,}")
-
-
-def _catalog() -> list[dict]:
-    try:
-        return json.loads(CATALOG.read_text())
-    except (OSError, ValueError):
-        return []
-
-
-def _catalog_add(entries: list[dict]) -> None:
-    """Remember sources that worked (URL templates only — public knowledge, nothing of a tenant's)."""
-    catalog = _catalog()
-    known = {(e["url"], tuple(e["params"])) for e in catalog}
-    catalog += [e for e in entries if (e["url"], tuple(e["params"])) not in known]
-    CATALOG.write_text(json.dumps(catalog, indent=1))
-
-
-def _from_catalog(need: str, params: dict) -> list[dict]:
-    """Templates that worked for a need with the same parameters and at least two of the same words."""
-    words = set(_WORD.findall(need.lower()))
-    return [{"host": e["host"], "kind": e["kind"], "url": e["url"], "outcome": "queued", "from": "catalog"}
-            for e in _catalog() if e["params"] == sorted(params) and len(words & set(_WORD.findall(e["need"].lower()))) >= 2]
-
-
-async def _reach(c: dict, args: dict, domain: str, reference: float | None = None) -> None:
+async def _reach(c: dict, args: dict, domain: str, reference: float | None = None, tolerance: float = 0.01) -> None:
     """Open one candidate with the example parameters; record the outcome (and a sample when it answered)."""
     url = sensors.fill(c["url"], args)
     started = time.monotonic()
@@ -193,7 +165,7 @@ async def _reach(c: dict, args: dict, domain: str, reference: float | None = Non
                             else f"unreadable: {err[:80]}")
         elif len(page.get("text", "")) < 200:
             c["outcome"] = "empty page"
-        elif not _shows(page["text"], reference):
+        elif not _shows(page["text"], reference, tolerance):
             c["outcome"] = f"doesn't show the value (~{reference}): wrong page?"
         else:
             c.update(outcome="reachable", sample=page["text"][:SAMPLE_CHARS])
@@ -211,7 +183,7 @@ async def _reach(c: dict, args: dict, domain: str, reference: float | None = Non
             c["outcome"] = "rate limited (429)"
         elif status != 200 or not res.get("body", "").strip():
             c["outcome"] = f"HTTP {status}"
-        elif not _shows(res["body"], reference):
+        elif not _shows(res["body"], reference, tolerance):
             c["outcome"] = f"doesn't show the value (~{reference})"
         else:
             c.update(outcome="reachable", sample=f"content-type: {res.get('content_type')}\n{res['body'][:SAMPLE_CHARS]}")
@@ -265,36 +237,28 @@ def _brief(v):
     return f"{len(v)} items" if isinstance(v, (list, dict)) else str(v)[:60]
 
 
-def _agreement(works: list[dict], current: list[dict], keys: list[str], numeric: bool = True,
-               others: list[str] = ()) -> None:
-    """Drop the sources whose main key value is off the median of every working source (3+ needed to tell). Only
-    the first key is voted on that strictly: values near zero (a day's change) differ by more than 0.5 % between
-    sources read seconds apart. The group's other numbers are only checked for the opposite sign, both clearly off
-    zero: a Morningstar parser gave +0.9 for a -0.92 % day. Closer checks (10 %, a 20x scale) rejected good sources
-    after hours, when pages differ on which session's change they show (-0.30 … -0.74 %, or +0.04 vs -1.2)."""
-    if not numeric:
-        return
-    for key in keys[:1]:
-        values = [c["value"][key] for c in works if c["outcome"] == "works"] + \
-                 [r[key] for r in current if isinstance(r.get(key), (int, float))]
-        if len(values) < 3:
-            continue
-        median = statistics.median(values)
-        for c in works:
-            if c["outcome"] == "works" and not sensors.agree(c["value"][key], median, CONSENSUS):
-                c["outcome"] = f"disagrees: {key} {c['value'][key]} vs {median} elsewhere"
+def _agreement(works: list[dict], current: list[dict], keys: list[str], others: list[str] = ()) -> None:
+    """Drop the sources that read another number than the rest — decided from the data, not a fixed tolerance:
+    the main key's values (3+) must sit within 4 robust spreads of their median (at least 0.2 %); when they are
+    spread out by nature (> 5 %: a count of results, headlines) there is nothing to vote on. The group's other numbers
+    are voted the same way only when they are tight too; otherwise just for the opposite sign, both clearly off zero
+    (a Morningstar parser gave +0.9 for a -0.92 % day; after hours, pages differ on which session's change they show:
+    -0.30 … -0.74 %). Earlier fixed tolerances let a previous close pass (3 %) or rejected every good source (10 %)."""
     number = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)  # noqa: E731
-    for field in others:
-        values = [c["result"][field] for c in works if c["outcome"] == "works" and number(c["result"].get(field))] + \
-                 [r[field] for r in current if number(r.get(field))]
+    for field, strict in [(k, True) for k in keys[:1]] + [(f, False) for f in others]:
+        voters = [c for c in works if c["outcome"] == "works" and number(c["result"].get(field))]
+        values = [c["result"][field] for c in voters] + [r[field] for r in current if number(r.get(field))]
         if len(values) < 3:
             continue
+        spread = sensors.relative_spread(values)
+        tight = spread is not None and spread <= 0.05
+        odd = sensors.outliers(values, k=4.0 if strict else 6.0, floor=0.002 if strict else 0.01) if tight else \
+            [False] * len(values)
         median = statistics.median(values)
-        for c in works:
-            v = c["result"].get(field) if c["outcome"] == "works" else None
-            if not number(v):
-                continue
-            if abs(v) > 0.2 and abs(median) > 0.2 and (v > 0) != (median > 0):
+        for c, o in zip(voters, odd):
+            v = c["result"][field]
+            flipped = not strict and abs(v) > 0.2 and abs(median) > 0.2 and (v > 0) != (median > 0)
+            if o or flipped:
                 c["outcome"] = f"disagrees: {field} {v} vs {median} elsewhere"
 
 
@@ -345,16 +309,30 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
     j["status"] = "collecting"
     hits, from_search = await _search(need, args, args2, domain)
     tried = {sensors.host_of(m) for m in existing} - {""}
+    from_catalog = [] if j.get("repair") else await catalog.suggest(need, list(params), tried)
+    log.append(f"catalog: {len(from_catalog)} templates from similar needs ({catalog.stats()['templates']} known)")
     cands: list[dict] = []
     j["candidates"] = cands
     sem = asyncio.Semaphore(4)
 
     async def reach(c):
+        if why := catalog.refused(c):   # it refused us lately: don't knock again
+            c["outcome"] = f"skipped: refused within {catalog.REFUSAL_DAYS} days ({why})"
+            return
         async with sem:
-            await _reach(c, args, domain, reference)
+            await _reach(c, args, domain, reference, max(0.01, sensors.tolerance(existing[0])) if existing else 0.01)
 
+    # Repair: the broken sources' own pages, read again and parsed anew — no new candidates.
+    broken = [m for m in existing if m["name"] in (j.get("repair") or [])]
+    if broken:
+        j["status"] = "probing"
+        for m in broken:
+            cands.append({"host": sensors.host_of(m), "kind": m.get("kind") or "page", "url": sensors.url_of(m),
+                          "outcome": "queued", "repair": m["name"]})
+        await asyncio.gather(*(reach(c) for c in cands))
+        log.append(f"repair: {len(cands)} source(s), {sum(c['outcome'] == 'reachable' for c in cands)} reachable")
     # Rounds until enough sources answer: each asks for sites not tried yet (most famous ones refuse robots).
-    for round_ in range(ROUNDS):
+    for round_ in range(0 if broken else ROUNDS):
         j["status"] = "collecting"
         try:
             found = await agent.candidates(need, shape, hits, sorted(tried))
@@ -366,7 +344,7 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
         listed = [{"host": _host(x.url), "kind": x.kind, "outcome": "queued",
                    "url": x.url if sensors._PLACEHOLDER.search(x.url) else (_template(x.url, args) or x.url)}
                   for x in found]
-        for c in ((_from_catalog(need, params) + from_search) if round_ == 0 else []) + listed:
+        for c in ((from_catalog + from_search) if round_ == 0 else []) + listed:
             if c["host"] and c["host"] not in tried and urlsplit(c["url"]).scheme in ("http", "https"):
                 tried.add(c["host"])
                 new.append(c)
@@ -390,21 +368,23 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
         await _parse(c, shape, fields, args, domain, log, args2)
 
     j["status"] = "testing"
-    # Only values every honest source shows alike (a price) can be voted on; headlines differ by source.
-    _agreement(cands, current, keys, numeric=bool(keys) and any(f["numeric"] and f.get("comparable")
-                                                                 for f in fields if f["name"] == keys[0]),
+    _agreement(cands, current, [k for k in keys if any(f["name"] == k and f["numeric"] for f in fields)],
                others=[f["name"] for f in fields if f["numeric"] and not f["key"]])
 
+    # The group's fields as every source must answer them (checked with pydantic on every reading).
+    sample = next((c["result"] for c in cands if c["outcome"] == "works"), {})
+    schema = [{"name": f["name"], "required": bool(f["key"] or f.get("required")),
+               "type": "number" if f["numeric"] else sensors._kind_of(sample.get(f["name"], ""))} for f in fields]
     kept = []
     for c in cands:
         c.pop("sample", None)
         if c["outcome"] != "works":
             continue
-        member = _slug(f"{name}_{c['host']}")
+        member = c.get("repair") or _slug(f"{name}_{c['host']}")
         try:
             await sensors.save(db, domain, c["code"], need, "scout", c["result"], name=member, group=name,
                                description=existing[0]["description"] if existing else plan.description,
-                               key_fields=keys, url=c["url"])
+                               key_fields=keys, url=c["url"], schema=schema)
             kept.append(member)
         except sensors.SensorError as e:
             c["outcome"] = f"not saved: {e}"[:120]
@@ -412,8 +392,8 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
             c.pop(k, None)
     for m in await sensors.members(db, domain, name):
         await kgdb.update_doc(db, domain, "Sensor", m["uid"], {"scouted_at": now()})
-    _catalog_add([{"params": sorted(params), "need": need, "kind": c["kind"], "url": c["url"], "host": c["host"],
-                   "at": now()} for c in cands if c["outcome"] == "works"])
+    learned = await catalog.record(need, list(params), cands)
+    log.append(f"catalog: {learned}")
     j.update(sensor=name if kept or existing else None, sources=len(kept))
     j["note"] = (f"{len(kept)} new source(s) of {len(cands)} candidates for {name}"
                  + (f" (it had {len(existing)})" if existing else ""))
@@ -429,13 +409,25 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
     for group in await sensors.groups(db, domain):
         sources = await sensors.members(db, domain, group["name"])
         args = {k: v.get("example") for k, v in group["params"].items()}
+        schema = next((m["schema"] for m in sources if m.get("schema")), None) or sensors.schema_of(sources[0])
+        key = next((m["key_fields"][0] for m in sources if m.get("key_fields")), None)
         working = resting = 0
+        values = []
         for m in sources:
             if sensors.cooling(m):   # it refused us: don't knock again before its rest is over
                 resting += 1
                 continue
-            working += (await sensors._run_member(db, domain, m, args))["ok"]
+            out = await sensors._run_member(db, domain, m, args, schema)
+            working += out["ok"]
+            await catalog.record_source(m.get("url") or "", list(group["params"]), out["ok"])
+            if out["ok"] and key and isinstance(v := (out["result"] or {}).get(key), (int, float)):
+                values.append(v)
         report[group["name"]] = {"working": working, "sources": len(sources), "resting": resting}
+        # How far this group's sources usually differ: the tolerance its readings are compared with.
+        if (spread := sensors.relative_spread(values)) is not None:
+            report[group["name"]]["spread"] = round(spread, 5)
+            for m in sources:
+                await kgdb.update_doc(db, domain, "Sensor", m["uid"], {"spread": round(spread, 6)})
         last = max((m.get("scouted_at") or "" for m in sources), default="")
         # A dead sensor is searched again soon (a search that found nothing mustn't park it for a week).
         wait = timedelta(hours=DEAD_RESCOUT_HOURS) if working == 0 else timedelta(days=RESCOUT_DAYS)
@@ -444,4 +436,25 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
                    for r in coding.jobs(domain))
         if working < MIN_WORKING and group.get("need") and stale and not busy:
             report[group["name"]]["rescout"] = coding.submit(db, domain, group["need"], "scout", group=group["name"])["id"]
+            busy = True
+        # A source that worked and now fails twice in a row for another reason than a refusal: its site changed.
+        # Its page is read again and a new parser written (the old one stays until a new one passes); one that
+        # can't be repaired twice is retired.
+        fresh = {m["uid"]: m for m in await sensors.members(db, domain, group["name"], with_code=False)}
+        broken = []
+        for m in sources:
+            m = {**m, **fresh.get(m["uid"], {})}
+            history, error = m.get("history") or "", m.get("last_error") or ""
+            if not (history.endswith("00") and "1" in history and not sensors.cooling(m)
+                    and not sensors._BLOCKED.search(error) and "disagreed" not in error and sensors.url_of(m)):
+                continue
+            if (m.get("repairs") or 0) >= 2:
+                await kgdb.update_doc(db, domain, "Sensor", m["uid"], {"status": "retired"})
+                report[group["name"]].setdefault("retired", []).append(m["name"])
+            else:
+                await kgdb.update_doc(db, domain, "Sensor", m["uid"], {"repairs": (m.get("repairs") or 0) + 1})
+                broken.append(m["name"])
+        if broken and group.get("need") and not busy:
+            report[group["name"]]["repair"] = coding.submit(db, domain, group["need"], "scout", group=group["name"],
+                                                            repair=broken)["id"]
     return report

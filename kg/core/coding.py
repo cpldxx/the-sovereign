@@ -42,7 +42,8 @@ def job(job_id: str) -> dict | None:
     return _jobs.get(job_id)
 
 
-def submit(db: ArcadeDB, domain: str, need: str, backend: str | None = None, group: str | None = None) -> dict:
+def submit(db: ArcadeDB, domain: str, need: str, backend: str | None = None, group: str | None = None,
+           repair: list[str] | None = None) -> dict:
     load_domain(domain)
     backend = backend or DEFAULT_BACKEND
     if backend not in BACKENDS:
@@ -52,7 +53,7 @@ def submit(db: ArcadeDB, domain: str, need: str, backend: str | None = None, gro
     j = {"id": f"code_{uuid.uuid4().hex[:10]}", "domain": domain, "need": need.strip(), "backend": backend,
          "status": "queued", "created_at": now(), "finished_at": None, "seconds": None, "sensor": None,
          "note": "", "error": "", "log": [], "result": None, "code": None, "group": group, "candidates": [],
-         "sources": None}
+         "sources": None, "repair": repair or []}
     _jobs[j["id"]] = j
     task = asyncio.get_running_loop().create_task(_run(db, j))
     _tasks.add(task)  # the loop keeps only weak references to tasks

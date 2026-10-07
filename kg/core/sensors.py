@@ -19,15 +19,19 @@ A sensor is one small Python module in a fixed shape (CONTRACT). It never runs i
 
 import ast
 import asyncio
+import functools
 import json
 import os
 import re
+import statistics
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Annotated
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import httpx
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, create_model
 
 from core import accounts, auth
 from core import database as kgdb
@@ -39,7 +43,7 @@ SANDBOX_DIR = Path(__file__).resolve().parents[2] / "docker" / "sandbox"
 RUN_TIMEOUT = 40          # seconds per container (the runner gives run() 25 s)
 MAX_CODE = 20_000
 MAX_RESULT = 8_000        # characters of a reading handed to agents
-SENSOR_JSON = ("params", "sample", "key_fields", "misses")
+SENSOR_JSON = ("params", "sample", "key_fields", "misses", "schema")
 PAGE_CHARS = 40_000       # text of a rendered page handed to a module
 AGREE = 0.01              # two sources agree when their values are within 1 % (live quotes: < 0.2 % apart)
 HISTORY = 20              # outcomes kept per source for its success rate
@@ -328,6 +332,14 @@ def clip(result) -> str:
 
 # ── Stored sensors and groups ──────────────────────────────────────────────
 
+def url_of(sensor: dict) -> str:
+    """The URL template a source reads: stored by the Scout, or a page module's PAGES."""
+    if sensor.get("url"):
+        return sensor["url"]
+    meta, _ = inspect_code(sensor.get("code") or "")
+    return next(iter((meta.get("pages") or {}).values()), "")
+
+
 def group_of(sensor: dict) -> str:
     return sensor.get("group") or sensor["name"]
 
@@ -418,11 +430,127 @@ async def groups(db: ArcadeDB, domain: str) -> list[dict]:
     return out
 
 
+# ── Shape: whichever source answers, agents get the same checked fields ────────────────────────────────────────
+
+_JUNK = re.compile(r"\]\(|\[skip|skip to (main )?content|navigation-container|accept (all )?cookies", re.I)
+
+
+def _number(v):
+    """"1,234.5", "$237.05", "−2.31" (a Unicode minus), "0.92%" → float; anything else is left for pydantic to refuse."""
+    if isinstance(v, str):
+        cleaned = v.strip().replace("\u2212", "-").replace(",", "").replace("$", "").replace("%", "").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return v
+    return v
+
+
+def _text(v: str) -> str:
+    if len(v) > 300 or _JUNK.search(v) or v.count("\n") > 3:
+        raise ValueError("not a clean value — page markup or navigation text")
+    return v
+
+
+Number = Annotated[float, BeforeValidator(_number)]
+Text = Annotated[str, AfterValidator(_text)]
+_KINDS = {"number": Number, "string": Text, "boolean": bool, "list": list, "object": dict}
+
+
+def _kind_of(value) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "list" if isinstance(value, list) else "object" if isinstance(value, dict) else "string"
+
+
+def schema_of(member: dict) -> list[dict]:
+    """The group's fields ({name, type, required}): the Scout's, or — for a sensor from before — its sample's."""
+    if member.get("schema"):
+        return member["schema"]
+    sample = sample_of(member)
+    if not isinstance(sample, dict):
+        return []
+    keys = set(member.get("key_fields") or [])
+    return [{"name": k, "type": _kind_of(v) if v is not None else "string", "required": k in keys}
+            for k, v in sample.items() if k != "source"]
+
+
+@functools.lru_cache(maxsize=256)
+def _model(fields: tuple) -> type[BaseModel]:
+    spec = {f"f{i}": ((_KINDS[kind] if required else _KINDS[kind] | None), Field(... if required else None, alias=name))
+            for i, (name, kind, required) in enumerate(fields)}
+    return create_model("Reading", __config__=ConfigDict(extra="ignore", populate_by_name=True), **spec)
+
+
+def conform(result, schema: list[dict]) -> tuple[dict | None, str]:
+    """A source's answer checked against the group's fields (pydantic): numbers parsed ("$1,234.5"), required fields
+    present, text free of page markup; fields outside the shape — or optional ones that don't pass — dropped.
+    (answer, "") or (None, why)."""
+    if not schema:
+        return result, ""
+    if not isinstance(result, dict):
+        return None, "the answer is not a dict"
+    model = _model(tuple((f["name"], f.get("type") or "string", bool(f.get("required"))) for f in schema))
+    required = {f["name"] for f in schema if f.get("required")}
+    result = dict(result)
+    for _ in range(2):   # a bad optional field is dropped; a bad required one fails the answer
+        try:
+            data = model.model_validate(result).model_dump(by_alias=True, exclude_none=True)
+            break
+        except ValidationError as e:
+            bad = {str(err["loc"][0]) for err in e.errors() if err["loc"]}
+            if bad & required or not bad:
+                problems = "; ".join(f"{'.'.join(map(str, err['loc']))}: {err['msg']}" for err in e.errors()[:4])
+                return None, f"the answer doesn't fit the sensor's fields — {problems}"
+            for key in bad:
+                result.pop(key, None)
+    else:
+        return None, "the answer doesn't fit the sensor's fields"
+    if result.get("source"):
+        data["source"] = result["source"]
+    return data, ""
+
+
+# ── Robust statistics: thresholds from the data, not constants ───────────────────────────────────────────────────
+
+def center(values: list[float]) -> tuple[float, float]:
+    """(median, robust spread): 1.4826 × the median absolute deviation (≈ σ for a normal spread, unmoved by
+    outliers)."""
+    median = statistics.median(values)
+    return median, 1.4826 * statistics.median(abs(v - median) for v in values)
+
+
+def relative_spread(values: list[float]) -> float | None:
+    if len(values) < 3:
+        return None
+    median, spread = center(values)
+    return spread / abs(median) if median else None
+
+
+def outliers(values: list[float], k: float = 4.0, floor: float = 0.002) -> list[bool]:
+    """Which values are off the others by more than k robust spreads (and at least `floor` of the median): one
+    source that read another number (a previous close) stands out from many that agree."""
+    median, spread = center(values)
+    limit = max(k * spread, floor * abs(median), 1e-9)
+    return [abs(v - median) > limit for v in values]
+
+
+def tolerance(member: dict) -> float:
+    """How far two sources of this group may differ and still agree: 4× the spread its sources usually show
+    (measured each night), between 0.2 % and 5 %; 1 % until measured."""
+    spread = member.get("spread")
+    return AGREE if spread is None else min(max(4 * spread, 0.002), 0.05)
+
+
+# ── Stored sources ───────────────────────────────────────────────────────────────────────────────────────────────
+
 async def save(db: ArcadeDB, domain: str, code: str, need: str, author: str, sample: dict, *, name: str | None = None,
                group: str | None = None, description: str | None = None, key_fields: list[str] | None = None,
-               url: str = "") -> dict:
+               url: str = "", schema: list[dict] | None = None) -> dict:
     """Store a tested module (replacing a sensor of the same name). `name` / `group`: a source joining a group
-    (default: the module's NAME, a group of its own)."""
+    (default: the module's NAME, a group of its own); `schema`: the group's fields, checked on every reading."""
     meta, problems = inspect_code(code, domain)
     if problems:
         raise SensorError("; ".join(problems))
@@ -431,22 +559,29 @@ async def save(db: ArcadeDB, domain: str, code: str, need: str, author: str, sam
     doc = {"name": name or meta["name"], "group": group or name or meta["name"],
            "description": (description or meta["description"]).strip(), "params": meta["params"], "code": code,
            "need": need, "author": author, "status": "active", "sample": json.dumps(shrink(sample), default=str)[:3000],
-           "tested_at": now(),
-           "last_run_at": None, "last_ok": True, "kind": "page" if pages else "api",
-           "host": urlsplit(source).netloc.lower().removeprefix("www.") if source else "", "key_fields": key_fields or [], "history": "1",
-           "avg_seconds": None, "last_error": None}
+           "tested_at": now(), "last_run_at": None, "last_ok": True, "kind": "page" if pages else "api",
+           "host": urlsplit(source).netloc.lower().removeprefix("www.") if source else "", "url": source,
+           "key_fields": key_fields or [], "schema": schema or [], "history": "1", "avg_seconds": None,
+           "last_error": None, "repairs": 0, "refusals": 0, "cooldown_until": None}
     if existing := await get_sensor(db, domain, doc["name"]):
         await kgdb.update_doc(db, domain, "Sensor", existing["uid"], doc, SENSOR_JSON)
         return {**existing, **doc}
     return await kgdb.insert_doc(db, domain, "Sensor", doc, SENSOR_JSON)
 
 
-async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict) -> dict:
-    """One source, with its outcome recorded: success history, speed, last error, which parameters it failed for,
-    and — when the site refused us — a rest that doubles with every refusal in a row (6 h … 48 h)."""
+async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict, schema: list[dict] | None = None,
+                      doubted: str = "") -> dict:
+    """One source, its answer checked against the group's fields, and its outcome recorded: success history,
+    speed, last error, which parameters it failed for, and — when the site refused us — a rest that doubles with
+    every refusal in a row (6 h … 48 h). `doubted`: the answer came back but the other sources outvoted it."""
     started = time.monotonic()
     out = await run_code(member["code"], args, domain)
     seconds = round(time.monotonic() - started, 2)
+    if out["ok"] and schema is not None:
+        data, problem = conform(out["result"], schema)
+        out = {"ok": True, "result": data} if data is not None else {"ok": False, "error": problem}
+    if doubted:
+        out = {"ok": False, "error": doubted}
     avg = member.get("avg_seconds")
     misses = dict(member.get("misses") or {})
     key = _params_key(args)
@@ -482,10 +617,18 @@ def agree(a, b, tolerance: float = AGREE) -> bool:
             and abs(a - b) <= tolerance * max(abs(a), abs(b), 1e-9))
 
 
+# The last value each group read per parameters: a reading far from it gets a second opinion.
+_last: dict[tuple, tuple[float, float]] = {}
+SURPRISE = 0.03          # a 3 % move since the last reading within SURPRISE_HOURS is checked against another source
+SURPRISE_HOURS = 6
+
+
 async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
                verify_field: str | None = None) -> dict:
-    """Read a sensor now: its sources best first until one answers. Missing parameters take their example values.
-    `verify_field`: also read the next working source and compare that field ("agreement")."""
+    """Read a sensor now: its sources best first until one answers in the group's shape. Missing parameters take
+    their example values. A second source is asked when `verify_field` is given (compared on it, "agreement") or
+    when the main value moved surprisingly since the last reading; if those two disagree, a third settles it and the
+    source that was outvoted is recorded as having failed."""
     from core.playbooks import value_at  # noqa: PLC0415 — playbooks imports this module
 
     sources = await members(db, domain, name)
@@ -496,38 +639,68 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
     if unknown:
         raise SensorError(f"Unknown parameters {sorted(unknown)}; {name} takes {list(spec)}")
     args = {**{k: v.get("example") for k, v in spec.items()}, **(params or {})}
+    schema = next((m["schema"] for m in sources if m.get("schema")), None) or schema_of(sources[0])
+    keys = next((m["key_fields"] for m in sources if m.get("key_fields")), [])
+    field = verify_field or (keys[0] if keys else None)
+    tol = tolerance(sources[0])
     answers, failed = [], []
     queue = _route(sources, args)
     if not queue:
         return {"sensor": name, "params": args, "read_at": now(), "ok": False,
                 "error": "every source of this sensor is resting after refusing automated reads (robots.txt)"}
-    while queue:
+
+    def wanted() -> int:
+        """How many answers are needed: 1; 2 to verify or after a surprising move; 3 when those two disagree."""
+        if not answers or not field:
+            return 1
+        first = value_at(answers[0][1].get("result"), field)
+        if len(answers) >= 2:
+            second = value_at(answers[1][1].get("result"), field)
+            return 3 if isinstance(first, (int, float)) and not agree(first, second, tol) else 2
+        if verify_field:
+            return 2
+        last = _last.get((domain, name, _params_key(args)))
+        recent = last and time.monotonic() - last[1] < SURPRISE_HOURS * 3600
+        return 2 if recent and isinstance(first, (int, float)) and not agree(first, last[0], SURPRISE) else 1
+
+    while queue and len(answers) < wanted():
         member = queue.pop(0)
-        out = await _run_member(db, domain, member, args)
+        out = await _run_member(db, domain, member, args, schema)
         if out["ok"]:
             answers.append((member, out))
-            if not verify_field or len(answers) == 2:
-                break
-            # The check should come from another provider (sg.finance.yahoo.com confirming finance.yahoo.com
-            # proves little): sources of other sites first.
-            first = _site(host_of(member))
-            queue.sort(key=lambda m: (_site(host_of(m)) == first, cooling(m)))
+            # A second opinion should come from another provider (sg.finance.yahoo.com confirming
+            # finance.yahoo.com proves little): sources of other sites first.
+            sites = {_site(host_of(m)) for m, _ in answers}
+            queue.sort(key=lambda m: (_site(host_of(m)) in sites, cooling(m)))
         else:
             failed.append({"source": host_of(member) or member["name"], "error": str(out.get("error"))[:200]})
     if not answers:
         return {"sensor": name, "params": args, "read_at": now(), "ok": False,
                 "error": "every source failed — " + "; ".join(f"{f['source']}: {f['error']}" for f in failed)[:1500]}
-    member, out = answers[0]
+
+    chosen = answers[0]
+    if field and len(answers) == 3:
+        values = [value_at(a[1].get("result"), field) for a in answers]
+        if all(isinstance(v, (int, float)) for v in values):
+            odd = outliers(values, floor=tol)
+            chosen = next(a for a, o in zip(answers, odd) if not o)
+            for (m, _), o in zip(answers, odd):
+                if o:   # outvoted: this source read something else this time
+                    await _run_member(db, domain, m, args, schema,
+                                      doubted=f"disagreed with the other sources on {field}")
+    member, out = chosen
     reading = {"sensor": name, "source": host_of(member) or member["name"], "params": args, "read_at": now(), **out}
     if failed:
         reading["failed_sources"] = failed
-    if verify_field:
-        other = answers[1] if len(answers) > 1 else None
-        mine = value_at(out.get("result"), verify_field)
-        theirs = value_at(other[1].get("result"), verify_field) if other else None
-        reading["agreement"] = {"field": verify_field, "value": mine,
-                                "other_source": (host_of(other[0]) or other[0]["name"]) if other else None,
-                                "other_value": theirs, "agree": agree(mine, theirs) if other else None}
+    value = value_at(out.get("result"), field) if field else None
+    if isinstance(value, (int, float)):
+        _last[(domain, name, _params_key(args))] = (value, time.monotonic())
+    if len(answers) > 1 and field:
+        other = next(a for a in answers if a is not chosen)
+        theirs = value_at(other[1].get("result"), field)
+        reading["agreement"] = {"field": field, "value": value, "other_source": host_of(other[0]) or other[0]["name"],
+                                "other_value": theirs, "agree": agree(value, theirs, tol),
+                                "sources_read": len(answers)}
     return reading
 
 
