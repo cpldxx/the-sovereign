@@ -11,13 +11,14 @@ import json
 from contextlib import asynccontextmanager
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 import auth
-from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, connect_kg
+import voice
+from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, connect_kg, warm_up
 
 
 @asynccontextmanager
@@ -27,7 +28,10 @@ async def lifespan(app: FastAPI):
         await asyncio.to_thread(connect_kg)
     except Exception as e:
         print(f"[Hermes] KG MCP not reachable at startup: {type(e).__name__}: {e}")
+    # Load the speech model in the background, so the first spoken question isn't the slow one.
+    warm = asyncio.create_task(asyncio.to_thread(voice.warm_up))
     yield
+    warm.cancel()
 
 
 app = FastAPI(title="Sovereign Hermes", description="Head Agent over the Sovereign KG", lifespan=lifespan)
@@ -51,6 +55,7 @@ class AskRequest(BaseModel):
     message: str = Field(..., min_length=1)
     history: list[Turn] = []
     max_iterations: int = Field(default=8, ge=1, le=30)
+    voice: bool = Field(default=False, description="Spoken conversation: short answers meant to be read aloud")
 
 
 @app.post("/domains/{domain_name}/ask")
@@ -62,7 +67,8 @@ async def ask(domain_name: str, request: AskRequest):
     history = [t.model_dump() for t in request.history]
     try:
         answer = await asyncio.to_thread(
-            ask_head, domain_name, request.message, history, max_iterations=request.max_iterations
+            ask_head, domain_name, request.message, history, max_iterations=request.max_iterations,
+            voice=request.voice,
         )
     except DomainNotFound:
         raise HTTPException(status_code=404, detail=f"Domain '{domain_name}' does not exist")
@@ -98,6 +104,7 @@ async def ask_stream(domain_name: str, request: AskRequest):
                 [t.model_dump() for t in request.history],
                 max_iterations=request.max_iterations,
                 on_event=emit,
+                voice=request.voice,
             )
             emit({"type": "answer", "text": answer})
         except DomainNotFound:
@@ -117,6 +124,51 @@ async def ask_stream(domain_name: str, request: AskRequest):
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
+class SpeakRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=20_000)
+
+
+_background: set[asyncio.Task] = set()
+
+
+@app.post("/voice/warm", status_code=202)
+async def voice_warm(domain: str | None = None):
+    """Load the speech model, the Head's LLM and the domain's embedding model now (when a voice conversation
+    starts), so the first spoken question isn't the slow one."""
+    for job in (asyncio.to_thread(voice.warm_up), asyncio.to_thread(warm_up, domain)):
+        task = asyncio.create_task(job)
+        _background.add(task)
+        task.add_done_callback(_background.discard)
+    return {"status": "warming"}
+
+
+@app.post("/voice/transcribe")
+async def voice_transcribe(request: Request, language: str | None = None):
+    """Speech → text, on this machine. Body: the recorded audio (webm/opus, mp4, wav, ogg). `language`: ISO code
+    to force one (default: detected)."""
+    audio = await request.body()
+    if not audio:
+        raise HTTPException(status_code=422, detail="No audio in the request body")
+    if len(audio) > 25_000_000:
+        raise HTTPException(status_code=413, detail="Audio too long")
+    try:
+        return await asyncio.to_thread(voice.transcribe, audio, language)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not transcribe: {type(e).__name__}: {e}")
+
+
+@app.post("/voice/speak")
+async def voice_speak(request: SpeakRequest):
+    """Text → speech audio (markdown, tables, URLs and uids are left out; the voice follows the language)."""
+    try:
+        audio, media_type = await asyncio.to_thread(voice.speak, request.text)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Speech failed: {type(e).__name__}: {e}")
+    return Response(audio, media_type=media_type)
+
+
 @app.get("/")
 async def root():
     return {"status": "Sovereign Hermes is alive"}
@@ -124,7 +176,8 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"hermes": True, "model": HEAD_MODEL, "tracing": TRACING}
+    return {"hermes": True, "model": HEAD_MODEL, "tracing": TRACING,
+            "voice": {"stt": voice.stt_engine(), "tts": voice.tts_engine()}}
 
 
 if __name__ == "__main__":

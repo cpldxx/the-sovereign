@@ -126,7 +126,7 @@ Your memory is a knowledge graph:
 - ENTITIES (types: {entity_types}) are the things this domain is about.
 - FACTS connect entities (relations: {relation_types}, plus has_state for a fact about one entity). Each fact
   has a weight from 0 to 1 that grows as independent sources confirm it, an evidence count, and its source
-  episodes. Superseded facts are kept with valid=false — they are history, not current truth.
+  episodes. Superseded facts carry a `superseded` note — they are history, not current truth.
 - Every KG tool takes a `domain` argument. Your domain is always "{domain}".
 
 How you work:
@@ -244,14 +244,42 @@ def _model_kwargs() -> dict:
     return kwargs
 
 
-def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSink | None = None) -> AIAgent:
+VOICE_MODE = """
+
+VOICE: the user is talking to you out loud and hears your answer read aloud. Answer in at most three short
+sentences, in the language the user spoke. No markdown, lists, tables, uids or URLs. Keep numbers, names and
+tickers exactly as your tools returned them, written as digits (the voice reads them; don't spell them out).
+Lead with the answer. If there is more worth knowing, offer to go deeper. Use your tools exactly as you would
+otherwise."""
+
+
+def warm_up(domain: str | None = None) -> None:
+    """Load the Head's model (and the domain's embedding model, through one tiny KG query) so the first question
+    after a pause doesn't pay for loading them (~20-30 s for a 29 GB local model). Never raises."""
+    provider, _, model = HEAD_MODEL.partition(":")
+    try:
+        with httpx.Client(timeout=120) as client:
+            if provider == "ollama":
+                client.post(f"{OLLAMA_BASE_URL}/chat/completions", json={
+                    "model": model, "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1,
+                    "reasoning_effort": "none"})
+            if domain:
+                client.post(f"{KG_URL}/domains/{domain}/query", json={"query": "warm-up", "k": 1},
+                            headers=auth.headers())
+    except httpx.HTTPError as e:
+        print(f"[Hermes] warm-up failed: {type(e).__name__}", flush=True)
+
+
+def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSink | None = None,
+                      voice: bool = False) -> AIAgent:
     """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools."""
     description, ontology, actions = _domain_context(domain)
     connect_kg()
     return AIAgent(
         **_model_kwargs(),
         enabled_toolsets=[KG_TOOLSET],
-        ephemeral_system_prompt=_system_prompt(domain, description, ontology, actions),
+        ephemeral_system_prompt=(_system_prompt(domain, description, ontology, actions)
+                                 + (VOICE_MODE if voice else "")),
         max_iterations=max_iterations,
         tool_delay=0.0,
         quiet_mode=True,
@@ -267,17 +295,18 @@ def ask_head(
     *,
     max_iterations: int = 8,
     on_event: EventSink | None = None,
+    voice: bool = False,
 ) -> str:
     """One turn with the Head Agent. `history` is prior [{role, content}] turns, oldest first.
 
     `on_event` (optional) receives live progress events while the agent works.
     """
-    agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event)
+    agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice)
     answer = agent.run_conversation(message, conversation_history=history or None)["final_response"]
     if _TEXT_TOOL_CALL.match(answer or ""):
         # With reasoning off, local models occasionally write a tool call as plain text instead of
         # calling it. Retry once on a fresh agent with a nudge.
-        agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event)
+        agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice)
         nudge = f"{message}\n\n(Call the tools through the tool-calling interface — do not write them as text.)"
         answer = agent.run_conversation(nudge, conversation_history=history or None)["final_response"]
     return answer

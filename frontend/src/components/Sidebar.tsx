@@ -11,10 +11,11 @@ interface Health {
   search: boolean | null;
   crawler: boolean | null;
   tracing: boolean | null;
+  voice: string | null;
 }
 
 function useHealth(): Health {
-  const [health, setHealth] = useState<Health>({ kg: null, arcadedb: null, hermes: null, research: null, search: null, crawler: null, tracing: null });
+  const [health, setHealth] = useState<Health>({ kg: null, arcadedb: null, hermes: null, research: null, search: null, crawler: null, tracing: null, voice: null });
   useEffect(() => {
     let alive = true;
     const check = async () => {
@@ -28,6 +29,7 @@ function useHealth(): Health {
         search: r.status === 'fulfilled' ? r.value.searxng : null,
         crawler: r.status === 'fulfilled' ? r.value.crawler : null,
         tracing: k.status === 'fulfilled' ? k.value.tracing : null,
+        voice: h.status === 'fulfilled' && h.value.voice ? `${h.value.voice.stt} · ${h.value.voice.tts}` : null,
       });
     };
     void check();
@@ -99,6 +101,7 @@ export function Sidebar({ domains, active, onSelect, onCreate }: {
         <Status label="KG API" ok={health.kg} hint="kg/ — http://localhost:8080" />
         <Status label="ArcadeDB" ok={health.arcadedb} hint="docker compose up -d — http://localhost:2480" />
         <Status label="Hermes" ok={health.hermes} hint="hermes/ — http://localhost:8090" />
+        <Status label="Voice (local)" ok={health.hermes === null ? null : !!health.voice} hint={health.voice ?? 'speech runs in Hermes'} />
         <Status label="Research" ok={health.research} hint="research/ — http://localhost:8070" />
         <Status label="Search · Crawler" ok={health.search === null ? null : !!(health.search && health.crawler)} hint="docker compose up -d (searxng, crawl4ai)" />
         {health.tracing && (

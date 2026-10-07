@@ -146,7 +146,8 @@ then use official data APIs instead of unofficial endpoints) · `ANTHROPIC_API_K
 One screen per domain: the knowledge graph on the left, tools on the right.
 
 - **Graph** — entities colored by type and sized by mentions; edges thicken as facts gain evidence; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
-- **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph. Optional voice in (mic) and out (read answers aloud), using the browser's speech APIs.
+- **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph.
+- **Voice** — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.
 - **Ingest** — paste text + source; shows new/known entities and created/strengthened/superseded/rejected facts with reasons.
 - **Search** — Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources.
 - **Review** — the Head review queue: approve/dismiss yourself, or let the Head Agent decide everything.
@@ -227,7 +228,10 @@ Search uses the local SearXNG by default. Its free engines throttle heavy use (s
 | Method | Path | What |
 |---|---|---|
 | `POST` | `/domains/{domain}/ask` | One turn with the Head Agent `{message, history?}` → `{answer}` |
-| `POST` | `/domains/{domain}/ask/stream` | Same, as Server-Sent Events: `tool_start`, `tool_end` (with the node `uids` it read/stored), `delta`, then `answer` or `error` |
+| `POST` | `/domains/{domain}/ask/stream` | Same, as Server-Sent Events: `tool_start`, `tool_end` (with the node `uids` it read/stored), `delta`, then `answer` or `error`. `voice: true` → short answers meant to be spoken |
+| `POST` | `/voice/transcribe` | Speech → text on this machine (body: the audio — webm, wav, mp4, ogg) |
+| `POST` | `/voice/speak` | Text → speech (`{text}` → audio; markdown, URLs and uids left out; voice follows the language) |
+| `POST` | `/voice/warm?domain=` | Load the speech model, the Head's LLM and the embedding model before the first spoken question |
 | `GET` | `/health` | Hermes status + Head model |
 
 ---
@@ -245,7 +249,7 @@ Search uses the local SearXNG by default. Its free engines throttle heavy use (s
 | Frontend | React 19 + Vite + Tailwind + Cytoscape.js | — |
 | Research / collection | DeerFlow 2.1 + SearXNG + crawl4ai | MIT / AGPL-3.0 (run unmodified as a separate service) / Apache 2.0 + attribution |
 | Observability | LangFuse (self-hosted, optional) | MIT (core) |
-| Voice (planned) | Hermes TTS | — |
+| Voice | mlx-whisper / faster-whisper (local STT), macOS voices or Hermes TTS providers | MIT |
 
 ---
 
@@ -283,8 +287,11 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - Playbooks written nightly from the graph, triggered by new facts or live sensor conditions
 - Sensors: live-data tools written by the Coder Agent (OpenHands, built-in fallback), run in a locked sandbox
 
-### Phase F — Voice · Phase G — SaaS
-- Hermes TTS / always-on voice · auth, multi-tenant, per-user isolation
+### ✅ Phase F — Voice
+- Local speech in and out (Whisper on the GPU, macOS voices; Hermes TTS providers optional), hands-free turns with barge-in, wake word, spoken answers, daily briefing on start
+
+### Phase G — SaaS
+- Auth, multi-tenant, per-user isolation
 
 ---
 

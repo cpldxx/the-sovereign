@@ -76,27 +76,54 @@ def list_domains() -> list[str]:
     return registry.list_domains()
 
 
+# What agents get back is compacted: every token of a tool result is re-read on each later model turn, and the
+# full records (timestamps, alias lists, per-fact source lists) tripled a query's size for nothing an answer uses.
+MAX_FACTS = 25
+
+
+def _entity(e: dict) -> dict:
+    return {"uid": e["uid"], "name": e["name"], "type": e.get("type"), "summary": (e.get("summary") or "")[:240]}
+
+
+def _fact(f: dict) -> dict:
+    out = {"uid": f["uid"], "fact": f["fact"], "relation": f["relation"], "source_uid": f["source_uid"],
+           "source": f["source_name"], "target_uid": f["target_uid"], "target": f["target_name"],
+           "weight": round(f["weight"], 2), "evidence": f.get("evidence")}
+    if not f.get("valid", True):
+        out["superseded"] = (f.get("invalid_reason") or "")[:200]
+    return out
+
+
 @tool("readonly")
 async def query_knowledge_graph(domain: str, query: str, k: int = 5) -> dict:
     """Search a domain's knowledge graph by meaning (Graph RAG).
 
-    Returns `entities` (closest ones carry a `similarity`), `facts` (closest first, then the strongest valid
-    facts around those entities; each with relation, fact text, weight 0-1, evidence count and source episode
-    uids) and `episodes` (the sources behind the facts: URL/name, title, collection status).
+    Returns `entities` (the closest first), `facts` (closest first, then the strongest valid facts around those
+    entities — at most 25; each with relation, its two entities, weight 0-1 and evidence count) and `sources`
+    (the episodes behind the facts: URL/name, title, collection status).
     """
     _require(domain)
-    return await kg.query(db, domain, query, max(1, min(k, 50)))
+    result = await kg.query(db, domain, query, max(1, min(k, 50)))
+    return {"entities": [_entity(e) for e in result["entities"][:15]],
+            "facts": [_fact(f) for f in result["facts"][:MAX_FACTS]],
+            "sources": [{"uid": ep["uid"], "title": ep.get("title") or "", "source": ep["source"],
+                         "status": ep.get("content_status")} for ep in result["episodes"][:10]]}
 
 
 @tool("readonly")
 async def get_entity(domain: str, uid: str) -> dict:
-    """Everything the graph knows about one entity: its summary and aliases, every fact touching it
-    (strongest first, superseded ones marked valid=false) and the episodes that mention it."""
+    """Everything the graph knows about one entity: its summary and aliases, the facts touching it (strongest
+    first, at most 40; superseded ones carry a `superseded` note) and the sources that mention it."""
     _require(domain)
     detail = await kgdb.entity_detail(db, domain, uid)
     if not detail:
         raise ToolError(f"Entity {uid} not found in {domain}")
-    return detail
+    facts = detail["facts"]
+    return {"entity": {**_entity(detail["entity"]), "aliases": detail["entity"].get("aliases") or [],
+                       "mentions": detail["entity"].get("mentions")},
+            "facts": [_fact(f) for f in facts[:40]], "more_facts": max(0, len(facts) - 40),
+            "sources": [{"uid": ep["uid"], "title": ep.get("title") or "", "source": ep["source"]}
+                        for ep in detail["episodes"][:15]]}
 
 
 @tool()

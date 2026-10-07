@@ -501,7 +501,30 @@ export const research = {
 // ── Hermes (Head Agent) ─────────────────────────────────────────────────────
 
 export const hermes = {
-  health: () => request<{ hermes: boolean; model: string; tracing: boolean }>(HERMES_API, '/health'),
+  health: () => request<{ hermes: boolean; model: string; tracing: boolean; voice?: { stt: string; tts: string } }>(
+    HERMES_API, '/health'),
+
+  /** Load the speech model and the Head's LLM before the first spoken question. */
+  warm: (id: string) => request<unknown>(HERMES_API, `/voice/warm?domain=${encodeURIComponent(id)}`, { method: 'POST' }),
+
+  /** Speech → text on this machine (local Whisper). */
+  async transcribe(audio: Blob, language?: string): Promise<{ text: string; language: string; seconds: number }> {
+    const res = await fetch(`${HERMES_API}/voice/transcribe${language ? `?language=${language}` : ''}`, {
+      method: 'POST', body: audio, headers: { 'Content-Type': audio.type || 'application/octet-stream', ...AUTH },
+    }).catch(() => { throw new ApiError('Cannot reach Hermes (port 8090) for speech'); });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new ApiError(body.detail ?? `HTTP ${res.status}`);
+    return body;
+  },
+
+  /** Text → spoken audio (local voices by default; markdown, URLs and uids left out). */
+  async speak(text: string): Promise<Blob> {
+    const res = await fetch(`${HERMES_API}/voice/speak`, {
+      ...json({ text }), headers: { 'Content-Type': 'application/json', ...AUTH },
+    }).catch(() => { throw new ApiError('Cannot reach Hermes (port 8090) for speech'); });
+    if (!res.ok) throw new ApiError(`Speech failed: HTTP ${res.status}`);
+    return res.blob();
+  },
 
   /** Streams Head Agent progress; resolves when the final `answer` or `error` event arrives. */
   async askStream(
@@ -511,11 +534,12 @@ export const hermes = {
     onEvent: (e: AgentEvent) => void,
     signal?: AbortSignal,
     maxIterations = 8,
+    voice = false,
   ): Promise<void> {
     let res: Response;
     try {
       res = await fetch(`${HERMES_API}${d(id)}/ask/stream`, {
-        ...json({ message, history, max_iterations: maxIterations }),
+        ...json({ message, history, max_iterations: maxIterations, voice }),
         headers: { 'Content-Type': 'application/json', ...AUTH },
         signal,
       });
