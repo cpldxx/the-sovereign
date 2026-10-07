@@ -25,3 +25,4 @@ research/.deer-flow/
 # ./sovereign launcher: logs and pids
 .logs/
 .run/
+kg/.scout-catalog.json

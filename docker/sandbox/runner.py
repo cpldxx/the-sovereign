@@ -1,8 +1,10 @@
-"""Runs one sensor: reads {"code", "params", "secrets"} as JSON on stdin, executes the module's run(**params) and
-writes {"ok": true, "result": ...} or {"ok": false, "error": ...} as one JSON line on stdout.
+"""Runs one sensor: reads {"code", "params", "secrets", "pages"} as JSON on stdin, executes the module's run(**params)
+and writes {"ok": true, "result": ...} or {"ok": false, "error": ...} as one JSON line on stdout.
 
 Secrets (API keys the module declared in SECRETS) arrive on stdin, never in the environment; the module reads them
-with secret("NAME"), and their values are masked in everything written back."""
+with secret("NAME"), and their values are masked in everything written back.
+Pages (the module's PAGES, opened in a browser by the KG before this container starts — robots.txt respected) arrive
+on stdin too; the module reads one with page("name")."""
 
 import json
 import signal
@@ -19,13 +21,21 @@ def _timeout(*_):
 def main() -> None:
     job = json.loads(sys.stdin.read())
     secrets: dict = job.get("secrets") or {}
+    pages: dict = job.get("pages") or {}
 
     def secret(name: str) -> str:
         if name not in secrets:
             raise KeyError(f"secret {name!r} is not available (declare it in SECRETS and set it in kg/.env)")
         return secrets[name]
 
-    namespace: dict = {"__name__": "sensor", "secret": secret}
+    def page(name: str) -> str:
+        if name not in pages:
+            raise KeyError(f"page {name!r} is not declared in PAGES")
+        if pages[name].get("error"):
+            raise RuntimeError(f"page {name!r} could not be opened: {pages[name]['error']}")
+        return pages[name]["text"]
+
+    namespace: dict = {"__name__": "sensor", "secret": secret, "page": page}
     try:
         exec(compile(job["code"], "sensor.py", "exec"), namespace)
         signal.signal(signal.SIGALRM, _timeout)

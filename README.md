@@ -155,7 +155,7 @@ One screen per domain: the knowledge graph on the left, tools on the right.
 - **Review** — the Head review queue: approve/dismiss yourself, or let the Head Agent decide everything.
 - **Ontology** — the domain's grammar with per-type counts; edit it or have the Ontologist regenerate it.
 - **Report** — the daily briefing: what the graph learned, what changed (superseded and confirmed facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now.
-- **Actions** — the fast path. *Inbox*: proposals waiting for your confirmation (rationale, the facts behind it, a dry run of exactly what will happen) plus the activity feed (alerts, drafts, executed and rejected actions). *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*: live-data tools written by the Coder Agent — read one now, see its code. *Catalog*: built-in actions and your own external actions (webhooks).
+- **Actions** — the fast path. *Inbox*: proposals waiting for your confirmation (rationale, the facts behind it, a dry run of exactly what will happen) plus the activity feed (alerts, drafts, executed and rejected actions). *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*: live-data tools, each backed by many sources (APIs and web pages) — read one now, see which source answered and each source's success rate and code, or have the Scout find more sources. *Catalog*: built-in actions and your own external actions (webhooks).
 - **Research** — bootstrap, "what's new" and custom missions; each run shows the pages read, what each added to the graph (and how long it took), failures and the report.
 - **Status** — KG API / ArcadeDB / Hermes / Research / search + crawler health in the sidebar, plus a link to the LangFuse traces when tracing is on (admins).
 - **Accounts** — sign in; Members (header) shares a domain with other accounts as viewer / editor / owner; Account (sidebar) changes the password, makes API tokens for MCP clients and, for admins, invite links.
@@ -176,6 +176,13 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
   URL receives the parameters as JSON. If the endpoint understands `dry_run: true`, its answer becomes the preview.
 - **Playbooks can watch live data**: a playbook may carry a sensor condition (e.g. AMD `change_percent <= -8`, every
   60 min). The KG checks due conditions around the clock and fires the playbook's action the moment one holds.
+- **Sensors have many sources.** The Scout tries 20-30 public sources for a need — APIs, and web pages opened in a
+  real browser for sites without one — and keeps every one that works and agrees with the others (a source more
+  than 3 % off the median read the wrong number). Reading a sensor uses its best source and falls back to the next;
+  a live trigger fires only when a second source confirms it. Every night each source is read once, and a sensor
+  left with fewer than two working sources is scouted again. robots.txt, bot protection, logins and paywalls are
+  never worked around — such sources are recorded as unavailable. (Measured for a stock price: 11 of 25 sites
+  readable.) With no sensor for something, the Head opens a page that shows it (`read_webpage`, a real browser).
 - **Sensors run in a locked sandbox** (`docker/sandbox`): a fresh container per run — read-only, non-root, no
   capabilities, memory/CPU/process limits — and an egress guard so code can only reach public internet addresses, never
   this machine's services. Sensor code is statically checked (whitelisted imports, no eval/exec/file access) and never
@@ -230,8 +237,9 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
 | `GET` / `POST` / `DELETE` | `/domains/{domain}/actions`, `/actions/{name}` | Action catalog / add a webhook action `{name, description, url, params, dry_run}` / remove it |
 | `GET` / `POST` | `/domains/{domain}/proposals`, `/proposals/{uid}` | Proposals (`?status=proposed`) / decide one `{approve, note}` — the user's call |
 | `GET` / `POST` / `PATCH` | `/domains/{domain}/playbooks`, `/playbooks/cycle`, `/playbooks/{uid}` | Playbooks / evaluate + rewrite `{hours, refresh, wait}` / retire one |
-| `GET` / `POST` / `DELETE` | `/domains/{domain}/sensors`, `/sensors/{name}`, `/sensors/{name}/read` | Sensors (with code) / ask the Coder for one `{need, backend?}` / read one now `{params}` |
-| `GET` | `/sensor-requests/{id}` | A Coder request: status, live log, result |
+| `GET` / `POST` / `DELETE` | `/domains/{domain}/sensors`, `/sensors/{name}`, `/sensors/{name}/read` | Sensors (groups of sources) / ask for one `{need, backend?, group?}` — the Scout by default; `group`: more sources for that sensor / read one now `{params}` |
+| `POST` | `/domains/{domain}/sensors/check` | Read every source once; scout again where fewer than two work (nightly) |
+| `GET` | `/sensor-requests/{id}` | A sensor request: status, every candidate source and its outcome, live log |
 | `GET` | `/health` | KG API + ArcadeDB status, tracing on/off |
 | MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `list_playbooks`, `list_actions`, `propose_action`, `list_proposals`, `web_search`, `read_webpage`, `list_sensors`, `read_sensor`, `request_sensor`, `start_research`, `research_status`, `list_research` |
 | MCP | `/mcp/readonly` | The reading tools only (no ingest, ontology, review, proposal, sensor or research requests) |
@@ -275,7 +283,7 @@ Search uses the local SearXNG by default. Its free engines throttle heavy use (s
 | Schema enforcement | Pydantic AI 2.x | MIT |
 | API + MCP | FastAPI + MCP Python SDK | MIT |
 | LLMs + embeddings | Ollama (qwen3.6:35b, nomic-embed) by default; Claude via env | — |
-| Coder Agent (sensors) | built-in pydantic-ai coder, or OpenHands (`CODER_BACKEND`) | MIT |
+| Sensors | Scout (many sources, pydantic-ai), built-in coder or OpenHands (`SENSOR_BACKEND`); pages via crawl4ai | MIT |
 | Frontend | React 19 + Vite + Tailwind + Cytoscape.js | — |
 | Research / collection | DeerFlow 2.1 + SearXNG + crawl4ai | MIT / AGPL-3.0 (run unmodified as a separate service) / Apache 2.0 + attribution |
 | Observability | LangFuse (self-hosted, optional) | MIT (core) |
@@ -315,7 +323,8 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - Roles as MCP endpoints (`/mcp`, `/mcp/readonly`); only the user confirms external actions
 - Actions: built-in alert / draft / research, user webhooks; proposals with dry run, executed once, expire in 24 h
 - Playbooks written nightly from the graph, triggered by new facts or live sensor conditions
-- Sensors: live-data tools written by the Coder Agent (OpenHands, built-in fallback), run in a locked sandbox
+- Sensors: live-data tools backed by many sources (APIs + browser-rendered pages) found by the Scout, cross-checked,
+  falling back from source to source, run in a locked sandbox
 
 ### ✅ Phase F — Voice
 - Local speech in and out (Whisper on the GPU, macOS voices; Hermes TTS providers optional), hands-free turns with barge-in, wake word, spoken answers, daily briefing on start

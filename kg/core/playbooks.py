@@ -1,8 +1,9 @@
 """Playbooks — the slow path's pre-computed decisions, and how new knowledge triggers them.
 
 A playbook can also carry a live TRIGGER — a condition on a sensor reading (NVDA change_percent < -5, checked
-every 60 min). check_triggers() runs around the clock in the KG process: the comparison is code; the Watcher
-only fills in the action's parameters once the condition holds.
+every 60 min). check_triggers() runs around the clock in the KG process: the comparison is code; when it holds, a
+second source of the sensor must agree before the playbook fires (one source can misread or lag); the Watcher only
+fills in the action's parameters.
 
 Nightly cycle (after the daily report):
   evaluate  each active playbook against the period's changes on the entities it watches (the Watcher LLM
@@ -15,7 +16,6 @@ be derived from the very facts they are then checked against.
 """
 
 import asyncio
-import json
 import operator
 import os
 import time
@@ -80,10 +80,7 @@ def numeric_fields(data, prefix: str = "", depth: int = 0) -> list[str]:
 
 
 def _sample(sensor: dict):
-    try:
-        return json.loads(sensor.get("sample") or "null")
-    except ValueError:
-        return None
+    return sensors.sample_of(sensor)
 
 
 def _sensor_line(sensor: dict) -> str:
@@ -150,7 +147,7 @@ async def refresh(db: ArcadeDB, domain: str) -> dict:
     description = load_domain(domain)["config"].get("description") or domain
     catalog = await actions.catalog(db, domain)
     current = {p["uid"]: p for p in await list_playbooks(db, domain)}
-    sensor_list = [x for x in await sensors.list_sensors(db, domain) if x["status"] == "active"]
+    sensor_list = await sensors.groups(db, domain)
     with observe("playbooks_refresh", metadata={"domain": domain}):
         answer = await write_playbooks(await _context(db, domain, description, catalog, list(current.values()),
                                                       sensor_list))
@@ -339,18 +336,28 @@ async def check_triggers(db: ArcadeDB, domain: str) -> list[dict]:
         if (pb.get("trigger_checked_at") or "") > due.isoformat(timespec="seconds"):
             continue
         try:
-            out = await sensors.read(db, domain, t["sensor"], t["params"])
+            out = await sensors.read(db, domain, t["sensor"], t["params"], verify_field=t["field"])
         except sensors.SensorError as e:
             out = {"ok": False, "error": str(e)}
         value = value_at(out.get("result"), t["field"]) if out.get("ok") else None
-        await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {"trigger_checked_at": now(), "trigger_value": value})
-        if not isinstance(value, (int, float)) or not OPS[t["op"]](value, t["value"]):
+        check = {"trigger_checked_at": now(), "trigger_value": value, "trigger_source": out.get("source"),
+                 "trigger_note": None}
+        holds = isinstance(value, (int, float)) and OPS[t["op"]](value, t["value"])
+        other = (out.get("agreement") or {}).get("other_value")
+        if holds and isinstance(other, (int, float)) and not OPS[t["op"]](other, t["value"]):
+            # One source says yes, the next says no: a misread or a stale page — don't act on it.
+            check["trigger_note"] = (f"{out['source']} read {value} but {out['agreement']['other_source']} read "
+                                     f"{other} — not fired")
+            holds = False
+        await kgdb.update_doc(db, domain, "Playbook", pb["uid"], check)
+        if not holds:
             continue
         quiet = datetime.now(timezone.utc) - timedelta(hours=REFIRE_HOURS)
         if (pb.get("last_fired_at") or "") > quiet.isoformat(timespec="seconds"):
             continue
         args = ", ".join(f"{k}={v}" for k, v in t["params"].items())
-        why = f"live {t['sensor']}({args}) {t['field']} = {value} ({t['op']} {t['value']})"
+        confirmed = f", confirmed by {out['agreement']['other_source']} ({other})" if isinstance(other, (int, float)) else ""
+        why = f"live {t['sensor']}({args}) {t['field']} = {value} from {out['source']} ({t['op']} {t['value']}){confirmed}"
         proposal = await _fire(db, domain, pb, f"{why}, read {now()}", why)
         await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {"last_fired_at": now(),
                                                                   "fired": (pb.get("fired") or 0) + 1})

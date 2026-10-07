@@ -1,6 +1,8 @@
-"""Sensor requests: a Coder backend writes a module for a need, then the acceptance test decides.
+"""Sensor requests: a need becomes a sensor.
 
-backends   openhands  OpenHands in Docker (integrations/openhands.py) — the default (CODER_BACKEND)
+backends   scout      many sources for the need, each one that works joins the sensor's group (core/scout.py) —
+                      the default (SENSOR_BACKEND); with `group`, more sources for an existing sensor
+           openhands  OpenHands in Docker (integrations/openhands.py): one module
            builtin    the KG's own Coder agent (agents/coder.py): search → docs → probe → write → test → fix;
                       also the fallback when OpenHands fails, and the only one for domains not owned by an admin
                       (OpenHands drives Docker on this machine)
@@ -18,13 +20,13 @@ import time
 import uuid
 
 from agents import coder
-from core import accounts, sensors
+from core import accounts, scout, sensors
 from core.database import ArcadeDB, now
 from domains.registry import load_domain
 from integrations import openhands
 
-BACKENDS = ("builtin", "openhands")
-DEFAULT_BACKEND = os.getenv("CODER_BACKEND", "openhands")
+BACKENDS = ("scout", "builtin", "openhands")
+DEFAULT_BACKEND = os.getenv("SENSOR_BACKEND", "scout")
 
 _jobs: dict[str, dict] = {}
 _tasks: set[asyncio.Task] = set()
@@ -40,7 +42,7 @@ def job(job_id: str) -> dict | None:
     return _jobs.get(job_id)
 
 
-def submit(db: ArcadeDB, domain: str, need: str, backend: str | None = None) -> dict:
+def submit(db: ArcadeDB, domain: str, need: str, backend: str | None = None, group: str | None = None) -> dict:
     load_domain(domain)
     backend = backend or DEFAULT_BACKEND
     if backend not in BACKENDS:
@@ -49,7 +51,8 @@ def submit(db: ArcadeDB, domain: str, need: str, backend: str | None = None) -> 
         backend = "builtin"  # OpenHands drives Docker on this machine: only for the operator's own domains
     j = {"id": f"code_{uuid.uuid4().hex[:10]}", "domain": domain, "need": need.strip(), "backend": backend,
          "status": "queued", "created_at": now(), "finished_at": None, "seconds": None, "sensor": None,
-         "note": "", "error": "", "log": [], "result": None, "code": None}
+         "note": "", "error": "", "log": [], "result": None, "code": None, "group": group, "candidates": [],
+         "sources": None}
     _jobs[j["id"]] = j
     task = asyncio.get_running_loop().create_task(_run(db, j))
     _tasks.add(task)  # the loop keeps only weak references to tasks
@@ -86,19 +89,23 @@ async def _run(db: ArcadeDB, j: dict) -> None:
         j["status"] = "coding"
         try:
             description = load_domain(j["domain"])["config"].get("description") or j["domain"]
-            try:
-                code, sample = await _attempt(j, j["backend"], description)
-            except Exception as e:
-                if j["backend"] != "openhands":
-                    raise
-                # OpenHands is heavier (Docker-in-Docker, a 10 GB runtime): when it fails, the built-in Coder tries.
-                j["log"].append(f"openhands failed ({type(e).__name__}: {str(e)[:200]}) — trying the built-in Coder")
-                j.update(backend="openhands→builtin", status="coding")
-                code, sample = await _attempt(j, "builtin", description)
-            j["result"] = sensors.clip(sample)[:3000]
-            author = "coder:" + ("builtin" if j["backend"].endswith("builtin") else j["backend"])
-            stored = await sensors.save(db, j["domain"], code, j["need"], author, sample)
-            j.update(status="done", sensor=stored["name"])
+            if j["backend"] == "scout":
+                await scout.discover(db, j, description)
+                j["status"] = "done"
+            else:
+                try:
+                    code, sample = await _attempt(j, j["backend"], description)
+                except Exception as e:
+                    if j["backend"] != "openhands":
+                        raise
+                    # OpenHands is heavier (Docker-in-Docker, a 10 GB runtime): when it fails, the built-in Coder tries.
+                    j["log"].append(f"openhands failed ({type(e).__name__}: {str(e)[:200]}) — trying the built-in Coder")
+                    j.update(backend="openhands→builtin", status="coding")
+                    code, sample = await _attempt(j, "builtin", description)
+                j["result"] = sensors.clip(sample)[:3000]
+                author = "coder:" + ("builtin" if j["backend"].endswith("builtin") else j["backend"])
+                stored = await sensors.save(db, j["domain"], code, j["need"], author, sample)
+                j.update(status="done", sensor=stored["name"])
         except Exception as e:
             j.update(status="failed", error=f"{type(e).__name__}: {e}"[:1000])
         j.update(finished_at=now(), seconds=round(time.monotonic() - started))

@@ -1,8 +1,13 @@
 """Sensors — live-data tools: the fast path's senses, checked right before acting.
 
 The knowledge graph can be a day old; a sensor reads the world now (a price, a status page, today's headlines).
-Each domain gets its own sensors, written by the Coder Agent for a need ("latest stock price for a ticker"),
-tested, and stored in the domain's database. The Head reads them through `read_sensor`.
+Each domain gets its own sensors, written for a need ("latest stock price for a ticker"), tested, and stored in the
+domain's database. The Head reads them through `read_sensor`.
+
+A sensor is a GROUP of sources for one need — every source a module with the same parameters and fields: an API, or a
+web page opened in a real browser (PAGES, for sites without an API). Reading a group tries its sources best first
+(success rate, then speed) and falls back to the next when one fails; `verify_field` reads a second source and
+compares. Scout (core/scout.py) collects the sources; sensors written before groups are groups of one.
 
 A sensor is one small Python module in a fixed shape (CONTRACT). It never runs in this process:
     static check  only whitelisted imports; no eval/exec/open/getattr, no dunder attributes; the module's
@@ -17,18 +22,26 @@ import asyncio
 import json
 import os
 import re
+import time
 from pathlib import Path
+from urllib.parse import quote, urlsplit
 
-from core import accounts
+import httpx
+
+from core import accounts, auth
 from core import database as kgdb
 from core.database import ArcadeDB, now
 
-IMAGE = os.getenv("SANDBOX_IMAGE", "sovereign-sandbox:2")
+IMAGE = os.getenv("SANDBOX_IMAGE", "sovereign-sandbox:3")
+RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
 SANDBOX_DIR = Path(__file__).resolve().parents[2] / "docker" / "sandbox"
 RUN_TIMEOUT = 40          # seconds per container (the runner gives run() 25 s)
 MAX_CODE = 20_000
 MAX_RESULT = 8_000        # characters of a reading handed to agents
-SENSOR_JSON = ("params", "sample")
+SENSOR_JSON = ("params", "sample", "key_fields")
+PAGE_CHARS = 40_000       # text of a rendered page handed to a module
+AGREE = 0.01              # two sources agree when their values are within 1 % (live quotes: < 0.2 % apart)
+HISTORY = 20              # outcomes kept per source for its success rate
 
 ALLOWED_IMPORTS = {"httpx", "json", "re", "math", "statistics", "datetime", "time", "urllib.parse",
                    "xml.etree.ElementTree", "html", "csv", "io", "zoneinfo", "decimal"}
@@ -69,6 +82,11 @@ Rules:
 - No file access, no eval/exec/getattr, no dunder attributes. No API keys: use free public endpoints that need none.
 - PARAMS: every parameter of run() with a type ({", ".join(sorted(_TYPES))}), a description and an example value.
 - Always pass timeout=15 and a browser-like User-Agent header. Follow redirects.
+- A source without an API (a web page, JavaScript pages too): declare PAGES = {{"main": "https://site/quote/{{symbol}}"}}
+  (URL templates whose placeholders are parameters of run()). Each page is opened in a real browser before run()
+  starts (robots.txt respected); page("main") returns its text as markdown. Parse it with re / str methods (no httpx
+  needed for it); anchor on the labels next to the value, never "the first number". page() raises if the site
+  refused (robots.txt, bot protection).
 - Return a small JSON-serializable dict: only the useful fields (at most 50 items), plus "source" (the URL read)
   and the data's own timestamp when the source gives one.
 - If the data can't be fetched or parsed, raise an exception with a clear message — never return made-up values.'''
@@ -103,7 +121,7 @@ def inspect_code(code: str, domain: str | None = None) -> tuple[dict, list[str]]
     run_args: list[str] | None = None
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            if node.targets[0].id in ("NAME", "DESCRIPTION", "PARAMS", "SECRETS"):
+            if node.targets[0].id in ("NAME", "DESCRIPTION", "PARAMS", "SECRETS", "PAGES"):
                 try:
                     meta[node.targets[0].id.lower()] = ast.literal_eval(node.value)
                 except ValueError:
@@ -127,6 +145,15 @@ def inspect_code(code: str, domain: str | None = None) -> tuple[dict, list[str]]
     else:
         problems += [f"secret {x} is not available (SENSOR_SECRETS in kg/.env)" for x in secrets
                      if x not in available_secrets(domain)]
+    pages = meta.get("pages") or {}
+    if not isinstance(pages, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in pages.items()):
+        problems.append("PAGES must map names to URL templates")
+    else:
+        for name, url in pages.items():
+            if urlsplit(url).scheme not in ("http", "https") or not urlsplit(url).netloc:
+                problems.append(f"PAGES[{name!r}] must be an http(s) URL")
+            problems += [f"PAGES[{name!r}] uses {{{p}}}, which is not a parameter"
+                         for p, _ in _PLACEHOLDER.findall(url) if p not in params]
     if run_args is None:
         problems.append("a module-level function run(...) is required")
     elif set(run_args) != set(params):
@@ -168,19 +195,74 @@ async def _ensure_image() -> None:
     _image_ready = True
 
 
+_PLACEHOLDER = re.compile(r"{(\w+)(?:\|(lower|upper))?}")
+
+
+def fill(template: str, params: dict) -> str:
+    """A URL template with the parameters filled in (URL-encoded); {symbol|lower} / {symbol|upper} change the case."""
+    def value(m: re.Match) -> str:
+        v = str(params.get(m[1], ""))
+        return quote(v.lower() if m[2] == "lower" else v.upper() if m[2] == "upper" else v, safe="")
+    return _PLACEHOLDER.sub(value, template)
+
+
+async def render(url: str, domain: str | None = None) -> dict:
+    """A web page opened in a browser by the research service (robots.txt, per-site pacing, public addresses only)
+    → {"text"} or {"error"}."""
+    try:
+        async with httpx.AsyncClient(timeout=120, headers=auth.headers(domain)) as client:
+            r = await client.post(f"{RESEARCH_URL}/fetch", json={"url": url, "max_chars": PAGE_CHARS})
+        page = r.json()
+    except (httpx.HTTPError, ValueError) as e:
+        return {"error": f"research service unreachable ({type(e).__name__})"}
+    if r.is_error or page.get("status") == "failed":
+        return {"error": page.get("error") or page.get("detail") or f"HTTP {r.status_code}"}
+    return {"text": page.get("markdown") or ""}
+
+
+async def robots_allows(url: str, domain: str | None = None) -> bool:
+    """robots.txt for an API endpoint too (pages are checked by render)."""
+    try:
+        async with httpx.AsyncClient(timeout=30, headers=auth.headers(domain)) as client:
+            r = await client.get(f"{RESEARCH_URL}/robots", params={"url": url})
+        return bool(r.json().get("allowed")) if r.is_success else False
+    except (httpx.HTTPError, ValueError):
+        return False
+
+
+PROBE = '''import httpx
+NAME = "probe"
+DESCRIPTION = "probe"
+PARAMS = {"url": {"type": "string", "description": "url", "example": ""}}
+
+def run(url: str) -> dict:
+    r = httpx.get(url, timeout=15, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (Macintosh)"})
+    return {"status": r.status_code, "content_type": r.headers.get("content-type", ""), "body": r.text[:6000]}
+'''
+
+
+async def probe(url: str) -> dict:
+    """GET a URL from the sandbox → {"ok", "result": {status, content_type, body}} (no robots check: see
+    robots_allows)."""
+    return await run_code(PROBE, {"url": url})
+
+
 async def run_code(code: str, params: dict, domain: str | None = None) -> dict:
     """Run a checked module's run(**params) in a fresh sandbox container, with the API keys it declares if the
-    domain may use them. Returns {"ok", "result" | "error"}."""
+    domain may use them and its PAGES opened first. Returns {"ok", "result" | "error"}."""
     meta, problems = inspect_code(code, domain)
     if problems:
         return {"ok": False, "error": "; ".join(problems)}
     await _ensure_image()
+    names = list(meta.get("pages") or {})
+    rendered = await asyncio.gather(*(render(fill(meta["pages"][n], params), domain) for n in names))
+    pages = dict(zip(names, rendered))
     try:
         _, out, err = await _docker(
             "run", "--rm", "-i", "--read-only", "--tmpfs", "/tmp:rw,size=16m", "--memory", "256m", "--cpus", "0.5",
             "--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--add-host", "host.docker.internal:127.0.0.1", "--add-host", "gateway.docker.internal:127.0.0.1",
-            IMAGE, stdin=json.dumps({"code": code, "params": params, "secrets": {
+            IMAGE, stdin=json.dumps({"code": code, "params": params, "pages": pages, "secrets": {
                 name: os.environ[name] for name in (meta.get("secrets") or []) if name in available_secrets(domain)}}
             ).encode(),
         )
@@ -192,12 +274,65 @@ async def run_code(code: str, params: dict, domain: str | None = None) -> dict:
         return {"ok": False, "error": f"sandbox failed: {err.decode()[-500:] or 'no output'}"}
 
 
+def shrink(value, depth: int = 0):
+    """A reading cut down to a small valid JSON value: lists to 3 items, strings to 200 characters."""
+    if isinstance(value, dict):
+        return {k: shrink(v, depth + 1) for k, v in list(value.items())[:40]}
+    if isinstance(value, list):
+        return [shrink(v, depth + 1) for v in value[:3]]
+    if isinstance(value, str):
+        return value[:200]
+    return value
+
+
+def sample_of(sensor: dict):
+    """A stored sample as data. Samples stored before shrink() were cut mid-JSON: their top-level keys are kept."""
+    text = sensor.get("sample") or ""
+    try:
+        return json.loads(text) if text else None
+    except ValueError:
+        depth, keys = 0, []
+        for m in re.finditer(r'[{}\[\]]|"(\w+)"\s*:', text):
+            if m[0] in "{[":
+                depth += 1
+            elif m[0] in "}]":
+                depth -= 1
+            elif depth == 1:
+                keys.append(m[1])
+        return dict.fromkeys(keys) or None
+
+
 def clip(result) -> str:
     text = json.dumps(result, ensure_ascii=False, default=str)
     return text if len(text) <= MAX_RESULT else text[:MAX_RESULT] + "…(truncated)"
 
 
-# ── Stored sensors ─────────────────────────────────────────────────────────
+# ── Stored sensors and groups ──────────────────────────────────────────────
+
+def group_of(sensor: dict) -> str:
+    return sensor.get("group") or sensor["name"]
+
+
+def host_of(sensor: dict) -> str:
+    """The site a source reads (sensors from before groups: from the "source" URL in their sample)."""
+    host = sensor.get("host") or ""
+    if not host:
+        try:
+            host = urlsplit(str(json.loads(sensor.get("sample") or "{}").get("source", ""))).netloc
+        except (ValueError, AttributeError):
+            host = ""
+    return host.lower().removeprefix("www.")
+
+
+def score(sensor: dict) -> float:
+    """Recent success rate (an untried source counts as even)."""
+    history = sensor.get("history") or ""
+    return (history.count("1") + 1) / (len(history) + 2)
+
+
+def _order(members: list[dict]) -> list[dict]:
+    return sorted(members, key=lambda m: (-score(m), m.get("avg_seconds") or 99.0))
+
 
 async def list_sensors(db: ArcadeDB, domain: str, *, with_code: bool = False) -> list[dict]:
     rows = await kgdb.find_docs(db, domain, "Sensor", SENSOR_JSON, order="name ASC")
@@ -209,35 +344,134 @@ async def get_sensor(db: ArcadeDB, domain: str, name: str) -> dict | None:
     return rows[0] if rows else None
 
 
-async def save(db: ArcadeDB, domain: str, code: str, need: str, author: str, sample: dict) -> dict:
-    """Store a tested module (replacing a sensor of the same name)."""
-    meta, problems = inspect_code(code)
+async def members(db: ArcadeDB, domain: str, name: str, *, with_code: bool = True) -> list[dict]:
+    """The active sources of a group, best first — or the one sensor called `name`."""
+    rows = [s for s in await list_sensors(db, domain, with_code=with_code) if s["status"] == "active"]
+    group = [s for s in rows if group_of(s) == name]
+    return _order(group or [s for s in rows if s["name"] == name])
+
+
+async def groups(db: ArcadeDB, domain: str) -> list[dict]:
+    """What agents see: one entry per group with its best source's description, parameters and sample."""
+    by: dict[str, list[dict]] = {}
+    for s in await list_sensors(db, domain):
+        if s["status"] == "active":
+            by.setdefault(group_of(s), []).append(s)
+    out = []
+    for name, ms in sorted(by.items()):
+        ms = _order(ms)
+        best = ms[0]
+        out.append({
+            "name": name, "description": best["description"], "params": best["params"], "need": best.get("need"),
+            "sample": best.get("sample"), "key_fields": best.get("key_fields") or [],
+            "tested_at": max(m.get("tested_at") or "" for m in ms),
+            "last_run_at": max((m.get("last_run_at") or "" for m in ms), default="") or None,
+            "last_ok": any(m.get("last_ok") for m in ms),
+            "working": sum(1 for m in ms if m.get("last_ok") is not False),
+            "sources": [{"name": m["name"], "host": host_of(m), "kind": m.get("kind") or "api",
+                         "last_ok": m.get("last_ok"), "score": round(score(m), 2), "avg_seconds": m.get("avg_seconds"),
+                         "last_error": m.get("last_error"), "author": m.get("author")} for m in ms],
+        })
+    return out
+
+
+async def save(db: ArcadeDB, domain: str, code: str, need: str, author: str, sample: dict, *, name: str | None = None,
+               group: str | None = None, description: str | None = None, key_fields: list[str] | None = None,
+               url: str = "") -> dict:
+    """Store a tested module (replacing a sensor of the same name). `name` / `group`: a source joining a group
+    (default: the module's NAME, a group of its own)."""
+    meta, problems = inspect_code(code, domain)
     if problems:
         raise SensorError("; ".join(problems))
-    doc = {"name": meta["name"], "description": meta["description"].strip(), "params": meta["params"],
-           "code": code, "need": need, "author": author, "status": "active", "sample": clip(sample)[:3000],
-           "tested_at": now(), "last_run_at": None, "last_ok": True}
-    if existing := await get_sensor(db, domain, meta["name"]):
+    pages = meta.get("pages") or {}
+    source = url or next(iter(pages.values()), "")
+    doc = {"name": name or meta["name"], "group": group or name or meta["name"],
+           "description": (description or meta["description"]).strip(), "params": meta["params"], "code": code,
+           "need": need, "author": author, "status": "active", "sample": json.dumps(shrink(sample), default=str)[:3000],
+           "tested_at": now(),
+           "last_run_at": None, "last_ok": True, "kind": "page" if pages else "api",
+           "host": urlsplit(source).netloc.lower().removeprefix("www.") if source else "", "key_fields": key_fields or [], "history": "1",
+           "avg_seconds": None, "last_error": None}
+    if existing := await get_sensor(db, domain, doc["name"]):
         await kgdb.update_doc(db, domain, "Sensor", existing["uid"], doc, SENSOR_JSON)
         return {**existing, **doc}
     return await kgdb.insert_doc(db, domain, "Sensor", doc, SENSOR_JSON)
 
 
-async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None) -> dict:
-    """Run a stored sensor now. Missing parameters take their example values."""
-    sensor = await get_sensor(db, domain, name)
-    if not sensor or sensor["status"] != "active":
+async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict) -> dict:
+    """One source, with its outcome recorded (success history, speed, last error)."""
+    started = time.monotonic()
+    out = await run_code(member["code"], args, domain)
+    seconds = round(time.monotonic() - started, 2)
+    avg = member.get("avg_seconds")
+    await kgdb.update_doc(db, domain, "Sensor", member["uid"], {
+        "last_run_at": now(), "last_ok": out["ok"], "history": ((member.get("history") or "") + "01"[out["ok"]])[-HISTORY:],
+        "avg_seconds": seconds if avg is None else round(0.7 * avg + 0.3 * seconds, 2),
+        "last_error": None if out["ok"] else str(out.get("error"))[:300]})
+    return out
+
+
+def _site(host: str) -> str:
+    """finance.yahoo.com / query1.finance.yahoo.com → yahoo.com (good enough to tell providers apart)."""
+    return ".".join(host.split(".")[-2:])
+
+
+def agree(a, b, tolerance: float = AGREE) -> bool:
+    return (isinstance(a, (int, float)) and isinstance(b, (int, float))
+            and abs(a - b) <= tolerance * max(abs(a), abs(b), 1e-9))
+
+
+async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
+               verify_field: str | None = None) -> dict:
+    """Read a sensor now: its sources best first until one answers. Missing parameters take their example values.
+    `verify_field`: also read the next working source and compare that field ("agreement")."""
+    from core.playbooks import value_at  # noqa: PLC0415 — playbooks imports this module
+
+    sources = await members(db, domain, name)
+    if not sources:
         raise SensorError(f"No active sensor {name!r}")
-    unknown = set(params or {}) - set(sensor["params"])
+    spec = sources[0]["params"]
+    unknown = set(params or {}) - set(spec)
     if unknown:
-        raise SensorError(f"Unknown parameters {sorted(unknown)}; {name} takes {list(sensor['params'])}")
-    args = {**{k: v.get("example") for k, v in sensor["params"].items()}, **(params or {})}
-    out = await run_code(sensor["code"], args, domain)
-    await kgdb.update_doc(db, domain, "Sensor", sensor["uid"], {"last_run_at": now(), "last_ok": out["ok"]})
-    return {"sensor": name, "params": args, "read_at": now(), **out}
+        raise SensorError(f"Unknown parameters {sorted(unknown)}; {name} takes {list(spec)}")
+    args = {**{k: v.get("example") for k, v in spec.items()}, **(params or {})}
+    answers, failed = [], []
+    queue = list(sources)
+    while queue:
+        member = queue.pop(0)
+        out = await _run_member(db, domain, member, args)
+        if out["ok"]:
+            answers.append((member, out))
+            if not verify_field or len(answers) == 2:
+                break
+            # The check should come from another provider (sg.finance.yahoo.com confirming finance.yahoo.com
+            # proves little): sources of other sites first.
+            first = _site(host_of(member))
+            queue.sort(key=lambda m: _site(host_of(m)) == first)
+        else:
+            failed.append({"source": host_of(member) or member["name"], "error": str(out.get("error"))[:200]})
+    if not answers:
+        return {"sensor": name, "params": args, "read_at": now(), "ok": False,
+                "error": "every source failed — " + "; ".join(f"{f['source']}: {f['error']}" for f in failed)[:1500]}
+    member, out = answers[0]
+    reading = {"sensor": name, "source": host_of(member) or member["name"], "params": args, "read_at": now(), **out}
+    if failed:
+        reading["failed_sources"] = failed
+    if verify_field:
+        other = answers[1] if len(answers) > 1 else None
+        mine = value_at(out.get("result"), verify_field)
+        theirs = value_at(other[1].get("result"), verify_field) if other else None
+        reading["agreement"] = {"field": verify_field, "value": mine,
+                                "other_source": (host_of(other[0]) or other[0]["name"]) if other else None,
+                                "other_value": theirs, "agree": agree(mine, theirs) if other else None}
+    return reading
 
 
 async def remove(db: ArcadeDB, domain: str, name: str) -> None:
-    if not (sensor := await get_sensor(db, domain, name)):
+    """Remove one source — or, by its group name, the whole group."""
+    targets = [s for s in await list_sensors(db, domain) if s["name"] == name] or \
+        [s for s in await list_sensors(db, domain) if group_of(s) == name]
+    if not targets:
         raise SensorError(f"No sensor {name!r}")
-    await kgdb.delete_doc(db, domain, "Sensor", sensor["uid"])
+    for sensor in targets:
+        await kgdb.delete_doc(db, domain, "Sensor", sensor["uid"])

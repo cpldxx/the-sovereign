@@ -63,7 +63,7 @@ async def nightly() -> None:
 
 
 async def daily_reports(domains: list[str]) -> None:
-    """Each domain's daily report and playbook cycle, as soon as its research runs are finished (runs are
+    """Each domain's sensor check, daily report and playbook cycle, as soon as its research runs are finished (runs are
     sequential). A run still going after REPORT_WAIT doesn't hold them back — nor the next night, which waits
     on this loop."""
     pending = list(domains)
@@ -75,6 +75,10 @@ async def daily_reports(domains: list[str]) -> None:
             try:
                 # Summary refresh + report is LLM work on the KG side: minutes with a local model.
                 async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=httpx.Timeout(3600, connect=10)) as kg:
+                    # Every sensor source read once: broken ones sink, thin sensors get scouted again.
+                    r = await kg.post(f"/domains/{d}/sensors/check")
+                    print(f"[Research] nightly: sensors for {d}: "
+                          f"{r.json().get('sensors') if r.is_success else f'failed ({r.status_code})'}", flush=True)
                     r = await kg.post(f"/domains/{d}/reports", json={"hours": 24, "wait": True})
                     print(f"[Research] nightly: report for {d}: "
                           f"{r.json().get('headline', '') if r.is_success else f'failed ({r.status_code})'}", flush=True)
@@ -141,6 +145,16 @@ async def fetch_now(request: FetchRequest):
     page = await fetch.fetch_page(request.url)
     return {"url": page.url, "title": page.title, "status": page.status, "error": page.error,
             "chars": len(page.markdown), "markdown": page.markdown[: max(0, min(request.max_chars, 50_000))]}
+
+
+@app.get("/robots")
+async def robots(url: str):
+    """Whether robots.txt lets Sovereign read this URL (and it is a public address) — sensors check API endpoints
+    with it; pages are checked by /fetch itself."""
+    if await asyncio.to_thread(fetch.validate_public_http_url, url, allow_private_addresses=False):
+        return {"allowed": False, "reason": "not a public http(s) address"}
+    allowed = await fetch._robots_allows(url)
+    return {"allowed": allowed, "reason": "" if allowed else "disallowed by robots.txt"}
 
 
 @app.get("/search")

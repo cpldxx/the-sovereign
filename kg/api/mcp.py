@@ -296,25 +296,31 @@ async def web_search(query: str, recent: bool = False) -> list[dict]:
 
 @tool("readonly")
 async def read_webpage(url: str) -> dict:
-    """Read one public web page right now, as text (robots.txt respected; some sites can't be read).
-    Nothing is stored — ingest_data it if it is worth keeping."""
+    """Read one public web page right now, as text: it is opened in a real browser, so pages built by JavaScript work
+    too (robots.txt respected; sites that refuse automated visitors can't be read — try another site). Use it for
+    live data no sensor covers: a quote page, an official announcement, a status page. Nothing is stored —
+    ingest_data it if it is worth keeping."""
     return await _research("POST", "/fetch", json={"url": url, "max_chars": 12000}, timeout=120)
 
 
 @tool("readonly")
 async def list_sensors(domain: str) -> list[dict]:
-    """The domain's live-data sensors (written by the Coder Agent): name, what it returns, its parameters."""
+    """The domain's live-data sensors: name, what it returns, its parameters, and how many independent sources
+    (APIs and web pages) back it — reading one falls back from source to source by itself."""
     _require(domain)
-    return [{k: s[k] for k in ("name", "description", "params", "last_run_at", "last_ok")}
-            for s in await sensors.list_sensors(db, domain) if s["status"] == "active"]
+    return [{"name": g["name"], "description": g["description"], "params": g["params"],
+             "sources": f"{g['working']} working of {len(g['sources'])}", "last_run_at": g["last_run_at"]}
+            for g in await sensors.groups(db, domain)]
 
 
 @tool("readonly")
-async def read_sensor(domain: str, name: str, params: dict | None = None) -> dict:
-    """Read a live-data sensor now (runs in a sandbox, a few seconds). Check live data right before acting."""
+async def read_sensor(domain: str, name: str, params: dict | None = None, verify_field: str | None = None) -> dict:
+    """Read a live-data sensor now (a few seconds; its best working source answers, the next one if that fails).
+    Check live data right before acting. `verify_field`: also read a second source and compare that field — do it
+    before acting on a number."""
     _require(domain)
     try:
-        out = await sensors.read(db, domain, name, params or {})
+        out = await sensors.read(db, domain, name, params or {}, verify_field)
     except sensors.SensorError as e:
         raise ToolError(str(e)) from e
     if out.get("ok"):
@@ -324,9 +330,10 @@ async def read_sensor(domain: str, name: str, params: dict | None = None) -> dic
 
 @tool()
 def request_sensor(domain: str, need: str) -> dict:
-    """Ask the Coder Agent to write a new sensor for a recurring live-data need (e.g. "latest stock price and
-    day change for a ticker"). It finds a free public source, tests the code in a sandbox; takes minutes.
-    Returns a request id; list_sensors shows it once it works."""
+    """Ask for a new sensor for a recurring live-data need (e.g. "latest stock price and day change for a ticker").
+    The Scout tries 20-30 public sources (APIs and web pages), keeps every one that works and agrees with the others,
+    and the sensor reads them in turn; takes 10-20 minutes. Returns a request id; list_sensors shows it once it
+    works."""
     _require(domain)
     j = coding.submit(db, domain, need)
     return {"request": j["id"], "status": j["status"], "need": j["need"]}

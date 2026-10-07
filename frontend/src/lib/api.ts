@@ -372,14 +372,54 @@ export interface Sensor {
   last_run_at: string | null;
   last_ok: boolean;
   code?: string;
+  group?: string;
+  kind?: 'api' | 'page';
+  host?: string;
+}
+
+/** One source of a sensor: an API or a web page opened in a browser. */
+export interface SensorSource {
+  name: string;
+  host: string;
+  kind: 'api' | 'page';
+  last_ok: boolean | null;
+  score: number;
+  avg_seconds: number | null;
+  last_error: string | null;
+  author: string;
+}
+
+/** A sensor as agents see it: one need, read from its best working source. */
+export interface SensorGroup {
+  name: string;
+  description: string;
+  params: Record<string, { type: string; description: string; example: unknown }>;
+  need: string;
+  last_ok: boolean;
+  last_run_at: string | null;
+  working: number;
+  sources: SensorSource[];
+}
+
+/** A candidate source the Scout tried, and what happened. */
+export interface ScoutCandidate {
+  host: string;
+  kind: 'api' | 'page';
+  url: string;
+  outcome: string;
+  seconds?: number;
+  value?: Record<string, unknown>;
 }
 
 export interface SensorRequest {
   id: string;
   domain: string;
   need: string;
-  backend: string;  // builtin | openhands | openhands→builtin (fell back)
-  status: 'queued' | 'coding' | 'testing' | 'done' | 'failed';
+  backend: string;  // scout | builtin | openhands | openhands→builtin (fell back)
+  status: 'queued' | 'planning' | 'collecting' | 'probing' | 'coding' | 'testing' | 'done' | 'failed';
+  group?: string | null;
+  candidates?: ScoutCandidate[];
+  sources?: number | null;
   created_at: string;
   finished_at: string | null;
   seconds: number | null;
@@ -392,11 +432,13 @@ export interface SensorRequest {
 
 export interface SensorReading {
   sensor: string;
+  source?: string;
   params: Record<string, unknown>;
   read_at: string;
   ok: boolean;
   result?: unknown;
   error?: string;
+  failed_sources?: { source: string; error: string }[];
 }
 
 export interface Turn {
@@ -563,7 +605,8 @@ export const kg = {
 
   runPlaybooks: (id: string) => request<unknown>(KG_API, `${d(id)}/playbooks/cycle`, json({ hours: 24 })),
 
-  sensors: (id: string) => request<{ sensors: Sensor[]; requests: SensorRequest[] }>(KG_API, `${d(id)}/sensors`),
+  sensors: (id: string) =>
+    request<{ groups: SensorGroup[]; sensors: Sensor[]; requests: SensorRequest[] }>(KG_API, `${d(id)}/sensors`),
 
   sensor: (id: string, name: string) => request<Sensor>(KG_API, `${d(id)}/sensors/${encodeURIComponent(name)}`),
 
@@ -573,8 +616,12 @@ export const kg = {
   removeSensor: (id: string, name: string) =>
     request<unknown>(KG_API, `${d(id)}/sensors/${encodeURIComponent(name)}`, { method: 'DELETE' }),
 
-  requestSensor: (id: string, need: string, backend?: 'builtin' | 'openhands') =>
-    request<SensorRequest>(KG_API, `${d(id)}/sensors`, json({ need, backend })),
+  requestSensor: (id: string, need: string, backend?: 'scout' | 'builtin' | 'openhands', group?: string) =>
+    request<SensorRequest>(KG_API, `${d(id)}/sensors`, json({ need, backend, group })),
+
+  checkSensors: (id: string) =>
+    request<{ sensors: Record<string, { working: number; sources: number; rescout?: string }> }>(
+      KG_API, `${d(id)}/sensors/check`, { method: 'POST' }),
 
   retirePlaybook: (id: string, uid: string) =>
     request<unknown>(KG_API, `${d(id)}/playbooks/${encodeURIComponent(uid)}`, {

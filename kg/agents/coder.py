@@ -89,22 +89,13 @@ async def read_webpage(ctx: RunContext[Deps], url: str) -> str:
     return page.get("markdown", "")
 
 
-_PROBE = '''import httpx
-NAME = "probe"
-DESCRIPTION = "probe"
-PARAMS = {"url": {"type": "string", "description": "url", "example": ""}}
-
-def run(url: str) -> dict:
-    r = httpx.get(url, timeout=15, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0 (Macintosh)"})
-    return {"status": r.status_code, "content_type": r.headers.get("content-type", ""), "body": r.text[:2500]}
-'''
-
-
 @_agent.tool
 async def http_get(ctx: RunContext[Deps], url: str) -> str:
     """GET a URL from the sandbox and show the raw response (status, content type, first 2500 characters)."""
     ctx.deps.log.append(f"probe: {url}")
-    out = await sensors.run_code(_PROBE, {"url": url})
+    out = await sensors.probe(url)
+    if out["ok"]:
+        out["result"]["body"] = out["result"]["body"][:2500]
     return json.dumps(out.get("result") if out["ok"] else out, ensure_ascii=False)
 
 

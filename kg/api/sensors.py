@@ -1,11 +1,11 @@
-"""Sensors — live-data tools written by the Coder Agent, run in the sandbox."""
+"""Sensors — live-data tools: groups of sources (APIs and web pages) found by the Scout, run in the sandbox."""
 
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core import auth, coding, sensors
+from core import auth, coding, scout, sensors
 from domains.registry import load_domain
 
 router = APIRouter(tags=["sensors"])
@@ -20,7 +20,8 @@ def _require(domain: str) -> None:
 
 class SensorRequest(BaseModel):
     need: str = Field(min_length=5, description='What to sense, e.g. "latest stock price and day change for a ticker"')
-    backend: Literal["builtin", "openhands"] | None = None
+    backend: Literal["scout", "builtin", "openhands"] | None = None
+    group: str | None = Field(default=None, description="Scout: find more sources for this existing sensor")
 
 
 class ReadRequest(BaseModel):
@@ -30,7 +31,8 @@ class ReadRequest(BaseModel):
 @router.get("/domains/{domain_name}/sensors")
 async def list_sensors(domain_name: str, req: Request):
     _require(domain_name)
-    return {"sensors": await sensors.list_sensors(req.app.state.db, domain_name),
+    db = req.app.state.db
+    return {"groups": await sensors.groups(db, domain_name), "sensors": await sensors.list_sensors(db, domain_name),
             "requests": coding.jobs(domain_name)[:20]}
 
 
@@ -64,9 +66,21 @@ async def delete_sensor(domain_name: str, name: str, req: Request):
 
 @router.post("/domains/{domain_name}/sensors", status_code=202)
 async def request_sensor(domain_name: str, request: SensorRequest, req: Request):
-    """Ask the Coder for a sensor (minutes). Poll /sensor-requests/{id}."""
+    """Ask for a sensor (minutes): by default the Scout tries many sources and keeps every one that works; with
+    `group`, it looks for more sources for that sensor. Poll /sensor-requests/{id}."""
     _require(domain_name)
-    return coding.submit(req.app.state.db, domain_name, request.need, request.backend)
+    if request.group and not await sensors.members(req.app.state.db, domain_name, request.group, with_code=False):
+        raise HTTPException(status_code=404, detail=f"No sensor {request.group!r}")
+    backend = "scout" if request.group else request.backend
+    return coding.submit(req.app.state.db, domain_name, request.need, backend, group=request.group)
+
+
+@router.post("/domains/{domain_name}/sensors/check")
+async def check_sensors(domain_name: str, req: Request):
+    """Read every source of every sensor once; sensors with fewer than two working sources get scouted again.
+    Runs every night before the report."""
+    _require(domain_name)
+    return {"sensors": await scout.health_check(req.app.state.db, domain_name)}
 
 
 @router.get("/sensor-requests/{job_id}")
