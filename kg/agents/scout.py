@@ -6,11 +6,13 @@ Three focused calls (core/scout.py runs the probing, testing and cross-checking 
     parser      one candidate + what it actually returned → a sensor module for it (fixed once with the test error)
 """
 
+import asyncio
 import re
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
 from core import sensors
 from core.llm import model_for, model_settings
@@ -149,16 +151,27 @@ _parser = Agent(MODEL, name="scout_parser", model_settings=model_settings(decisi
 _CODE = re.compile(r"```(?:python)?\s*\n(.*?)```", re.S)
 
 
+async def _again(agent: Agent, prompt: str, attempts: int = 3):
+    """A local model sometimes writes a broken tool call (Ollama answers 500: "XML syntax error"): ask again."""
+    for attempt in range(attempts):
+        try:
+            return (await agent.run(prompt)).output
+        except (ModelHTTPError, UnexpectedModelBehavior):
+            if attempt == attempts - 1:
+                raise
+            await asyncio.sleep(2)
+
+
 async def plan(need: str, domain: str, existing: str = "") -> Plan:
     prompt = f"DOMAIN: {domain}\nNEED: {need}" + (f"\n\nEXISTING SHAPE:\n{existing}" if existing else "")
-    return (await _plan.run(prompt)).output
+    return await _again(_plan, prompt)
 
 
 async def candidates(need: str, shape: str, hits: str, tried: list[str] = ()) -> list[Candidate]:
     prompt = f"NEED: {need}\n\nSENSOR SHAPE:\n{shape}\n\nSEARCH HITS:\n{hits or '(none)'}"
     if tried:
         prompt += f"\n\nALREADY TRIED (list 20 OTHER sites): {', '.join(tried)}"
-    text = (await _candidates.run(prompt)).output
+    text = await _again(_candidates, prompt)
     return [Candidate(kind=kind.lower(), url=url.rstrip(".,;)`")) for kind, url in _LINE.findall(text)]
 
 
@@ -166,7 +179,7 @@ async def parser(shape: str, kind: str, url: str, sample: str, problem: str = ""
     prompt = f"SENSOR:\n{shape}\n\nSOURCE: kind={kind} url={url}\n\nSAMPLE (for the example parameters):\n{sample}"
     if problem:
         prompt += f"\n\nYOUR MODULE:\n```python\n{code}\n```\n\nIT FAILED THE TEST: {problem}\nFix it (or answer NO DATA)."
-    text = (await _parser.run(prompt)).output.strip()
+    text = (await _again(_parser, prompt)).strip()
     if m := _CODE.search(text):
         return Parser(code=m.group(1).strip())
     if "def run" in text and "NAME" in text:

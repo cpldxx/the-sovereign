@@ -465,6 +465,8 @@ async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict) -> di
             hours = min(COOLDOWN_HOURS * 2 ** (refusals - 1), 48)
             changes |= {"refusals": refusals, "cooldown_until": (datetime.now(timezone.utc) + timedelta(hours=hours))
                         .isoformat(timespec="seconds")}
+            if "robots" in error.lower() and refusals >= 2:
+                changes["status"] = "retired"   # the site said no twice, hours apart: it doesn't want to be read
     changes["misses"] = dict(sorted(misses.items(), key=lambda kv: kv[1])[-50:])
     await kgdb.update_doc(db, domain, "Sensor", member["uid"], changes, SENSOR_JSON)
     return out

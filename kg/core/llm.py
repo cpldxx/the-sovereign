@@ -12,6 +12,8 @@ Model strings are pydantic-ai's "<provider>:<model>" (ollama:, anthropic:, opena
 import os
 
 from dotenv import load_dotenv
+from pydantic_ai.models import Model, infer_model
+from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.settings import ModelSettings
 
 load_dotenv()
@@ -21,11 +23,15 @@ THINKING = os.getenv("LLM_THINKING", "false").strip().lower() in ("1", "true", "
 # Sampling temperature for the agents that make yes/no decisions (Validator, Resolver, Linker). Replaying the
 # Linker on recorded inputs, two runs agreed on 7/23 decisions at the model's default and 10/20 at 0.1.
 DECISION_TEMPERATURE = float(os.getenv("LLM_DECISION_TEMPERATURE", "0.1"))
+# A local model now and then writes a broken tool call and Ollama answers 500 ("XML syntax error on line 14: element
+# <function> closed by </parameter>") — one of those stopped a whole sensor search. The same model is asked again.
+MODEL_RETRIES = int(os.getenv("LLM_MODEL_RETRIES", "2"))
 
 
-def model_for(agent: str) -> str:
-    """The model an agent should use: its own override, else LLM_MODEL."""
-    return os.getenv(f"LLM_MODEL_{agent.upper()}") or os.getenv("LLM_MODEL") or DEFAULT_MODEL
+def model_for(agent: str) -> Model:
+    """The model an agent should use (its own override, else LLM_MODEL), asked again on a server error."""
+    model = infer_model(os.getenv(f"LLM_MODEL_{agent.upper()}") or os.getenv("LLM_MODEL") or DEFAULT_MODEL)
+    return FallbackModel(model, *[model] * MODEL_RETRIES) if MODEL_RETRIES > 0 else model
 
 
 def model_settings(decisive: bool = False) -> ModelSettings:

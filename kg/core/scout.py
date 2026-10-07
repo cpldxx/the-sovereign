@@ -50,6 +50,7 @@ MAX_SOURCES = int(os.getenv("SCOUT_MAX_SOURCES", "12"))   # parsers written per 
 MIN_WORKING = 2
 CONSENSUS = 0.005     # a new source more than 0.5 % off the median read something else (3 % let a previous close in)
 RESCOUT_DAYS = 7
+DEAD_RESCOUT_HOURS = 6   # a sensor with no working source is searched again after this long
 SAMPLE_CHARS = 9000
 
 
@@ -268,8 +269,9 @@ def _agreement(works: list[dict], current: list[dict], keys: list[str], numeric:
                others: list[str] = ()) -> None:
     """Drop the sources whose main key value is off the median of every working source (3+ needed to tell). Only
     the first key is voted on that strictly: values near zero (a day's change) differ by more than 0.5 % between
-    sources read seconds apart. The group's other numbers are checked loosely (10 %, at least 0.05) — that catches a
-    lost sign or a percent written as a fraction (a Morningstar parser gave +0.9 for a -0.92 % day)."""
+    sources read seconds apart. The group's other numbers are only checked for the opposite sign, both clearly off
+    zero: a Morningstar parser gave +0.9 for a -0.92 % day. Closer checks (10 %, a 20x scale) rejected good sources
+    after hours, when pages differ on which session's change they show (-0.30 … -0.74 %, or +0.04 vs -1.2)."""
     if not numeric:
         return
     for key in keys[:1]:
@@ -290,7 +292,9 @@ def _agreement(works: list[dict], current: list[dict], keys: list[str], numeric:
         median = statistics.median(values)
         for c in works:
             v = c["result"].get(field) if c["outcome"] == "works" else None
-            if number(v) and abs(v - median) > max(0.1 * abs(median), 0.05):
+            if not number(v):
+                continue
+            if abs(v) > 0.2 and abs(median) > 0.2 and (v > 0) != (median > 0):
                 c["outcome"] = f"disagrees: {field} {v} vs {median} elsewhere"
 
 
@@ -378,7 +382,8 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
     reachable = [c for c in cands if c["outcome"] == "reachable"]
 
     j["status"] = "coding"
-    reachable.sort(key=lambda c: (c["kind"] != "api", c["seconds"]))
+    # Templates that worked before first, then APIs (fast), then by speed.
+    reachable.sort(key=lambda c: (c.get("from") != "catalog", c["kind"] != "api", c["seconds"]))
     for c in reachable[MAX_SOURCES:]:
         c["outcome"] = "reachable (not tried: SCOUT_MAX_SOURCES)"
     for c in reachable[:MAX_SOURCES]:
@@ -432,7 +437,9 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
             working += (await sensors._run_member(db, domain, m, args))["ok"]
         report[group["name"]] = {"working": working, "sources": len(sources), "resting": resting}
         last = max((m.get("scouted_at") or "" for m in sources), default="")
-        stale = last < (datetime.now(timezone.utc) - timedelta(days=RESCOUT_DAYS)).isoformat(timespec="seconds")
+        # A dead sensor is searched again soon (a search that found nothing mustn't park it for a week).
+        wait = timedelta(hours=DEAD_RESCOUT_HOURS) if working == 0 else timedelta(days=RESCOUT_DAYS)
+        stale = last < (datetime.now(timezone.utc) - wait).isoformat(timespec="seconds")
         busy = any(r.get("group") == group["name"] and r["status"] not in ("done", "failed")
                    for r in coding.jobs(domain))
         if working < MIN_WORKING and group.get("need") and stale and not busy:
