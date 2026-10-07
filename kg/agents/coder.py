@@ -13,7 +13,7 @@ import httpx
 from pydantic import BaseModel, Field, model_validator
 from pydantic_ai import Agent, RunContext, UsageLimits
 
-from core import sensors
+from core import auth, sensors
 from core.llm import model_for, model_settings
 
 MODEL = model_for("coder")
@@ -35,11 +35,11 @@ class SensorCode(BaseModel):
 
 SYSTEM = f"""You are the Sovereign's Coder. You write SENSORS: small Python modules that read live data for a need.
 
-{sensors.CONTRACT}
+{sensors.contract()}
 
 How to work:
-1. Find a free, keyless, public data source for the need: a documented API or feed (JSON, CSV, RSS/Atom) meant for
-   programmatic use. Use web_search and read_webpage to find it and read its documentation. Do not scrape pages
+1. Find a public data source for the need: a documented API or feed (JSON, CSV, RSS/Atom) meant for programmatic
+   use — an official one when an available API key is for it, otherwise a free keyless one. Use web_search and read_webpage to find it and read its documentation. Do not scrape pages
    whose robots.txt forbids it, and never work around a login, paywall, CAPTCHA or rate limit.
 2. Probe the endpoint with http_get to see exactly what it returns.
 3. Write the module and run test_sensor. Fix it until the test passes AND the output really answers the need.
@@ -62,7 +62,7 @@ async def web_search(ctx: RunContext[Deps], query: str) -> str:
     """Search the web. Returns titles, URLs and snippets."""
     ctx.deps.log.append(f"search: {query}")
     try:
-        async with httpx.AsyncClient(timeout=60) as client:
+        async with httpx.AsyncClient(timeout=60, headers=auth.headers()) as client:
             r = await client.get(f"{RESEARCH_URL}/search", params={"q": query, "limit": 8})
         return json.dumps(r.json().get("results", []), ensure_ascii=False)
     except httpx.HTTPError as e:
@@ -74,7 +74,7 @@ async def read_webpage(ctx: RunContext[Deps], url: str) -> str:
     """Read a web page (e.g. API documentation) as text. Respects robots.txt."""
     ctx.deps.log.append(f"read: {url}")
     try:
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=90, headers=auth.headers()) as client:
             r = await client.post(f"{RESEARCH_URL}/fetch", json={"url": url, "max_chars": 6000})
         page = r.json()
     except (httpx.HTTPError, ValueError) as e:

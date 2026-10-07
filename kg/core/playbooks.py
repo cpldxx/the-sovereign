@@ -21,7 +21,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from agents.strategist import MAX_PLAYBOOKS, write_playbooks
+from agents.strategist import MAX_PLAYBOOKS, write_playbooks, write_trigger
 from agents.watcher import judge
 from core import actions, sensors
 from core import database as kgdb
@@ -92,20 +92,35 @@ def _sensor_line(sensor: dict) -> str:
     return f"- {sensor['name']}({params}): {sensor['description']} — numeric fields: {fields}"
 
 
-def _check_trigger(t, sensor_index: dict) -> dict | None:
-    """A Strategist trigger made safe to run: known sensor and parameters, a numeric field present in the sensor's
-    sample output, a known comparison. None when it doesn't hold up."""
+async def _check_trigger(db: ArcadeDB, domain: str, t, sensor_index: dict) -> tuple[dict | None, str]:
+    """A Strategist trigger made safe to run: known sensor, parameters and comparison; then one live reading with
+    ITS parameters (an AMD trigger is checked against AMD, not the sensor's example): the field is a number, the
+    threshold is on its scale, and the condition doesn't hold already — a trigger detects a change.
+    (trigger, "") or (None, the problem)."""
     sensor = sensor_index.get(t.sensor)
-    if not sensor or t.op not in OPS or set(t.params) - set(sensor["params"]):
-        return None
-    sample = value_at(_sample(sensor), t.field)
-    if not isinstance(sample, (int, float)):
-        return None
+    if not sensor:
+        return None, f"no sensor named {t.sensor!r}"
+    if t.op not in OPS:
+        return None, f"op must be one of {', '.join(OPS)}"
+    if unknown := set(t.params) - set(sensor["params"]):
+        return None, f"{t.sensor} has no parameters {sorted(unknown)}; it takes {list(sensor['params'])}"
+    if not isinstance(value_at(_sample(sensor), t.field), (int, float)):
+        fields = ", ".join(numeric_fields(_sample(sensor))[:25])
+        return None, f"{t.field!r} is not a numeric field of {t.sensor}; its numeric fields: {fields}"
+    try:
+        out = await sensors.read(db, domain, t.sensor, t.params)
+    except sensors.SensorError as e:
+        return None, str(e)
+    live = value_at(out.get("result"), t.field) if out.get("ok") else None
+    if not isinstance(live, (int, float)):
+        return None, f"reading {t.sensor}({t.params}) gave no number for {t.field}: {out.get('error', '')[:200]}"
     # A threshold of another scale than the live value is a confusion (a "price >= 1e12" meant market cap).
-    if abs(t.value) > 1000 * max(abs(sample), 1):
-        return None
+    if abs(t.value) > 1000 * max(abs(live), 1):
+        return None, f"threshold {t.value} is not on the scale of {t.field} (now {live})"
+    if OPS[t.op](live, t.value):
+        return None, f"the condition holds already ({t.field} is {live} now) — a trigger must detect a change"
     return {"sensor": t.sensor, "params": t.params, "field": t.field, "op": t.op, "value": t.value,
-            "every_minutes": max(15, min(int(t.every_minutes or 60), 1440))}
+            "every_minutes": max(15, min(int(t.every_minutes or 60), 1440))}, ""
 
 
 async def _context(db: ArcadeDB, domain: str, description: str, catalog: list[dict], current: list[dict],
@@ -141,11 +156,16 @@ async def refresh(db: ArcadeDB, domain: str) -> dict:
                                                       sensor_list))
     sensor_index = {x["name"]: x for x in sensor_list}
     names = {a["name"] for a in catalog}
-    counts = {"revised": 0, "created": 0, "retired": 0}
+    counts = {"revised": 0, "created": 0, "retired": 0, "held": 0}
     kept: set[str] = set()
+    # Stability, enforced here rather than asked for: a playbook may only be revised or retired when the knowledge
+    # behind it moved since it was written. A local model rewrites freely from night to night otherwise.
+    movable = {uid for uid, pb in current.items() if await _moved(db, domain, pb)}
     # Retire only what the Strategist names: one terse answer from a local model must not wipe the set.
     for uid in answer.retire:
-        if uid in current:
+        if uid in current and uid not in movable:
+            counts["held"] += 1
+        elif uid in current:
             await set_status(db, domain, uid, "retired")
             current.pop(uid)
             counts["retired"] += 1
@@ -160,8 +180,13 @@ async def refresh(db: ArcadeDB, domain: str) -> dict:
         evidence = [f["uid"] for f in await kgdb.get_facts(db, domain, d.evidence[:20])]
         doc = {"name": d.name.strip(), "situation": d.situation.strip(), "watch": watch, "response": d.response.strip(),
                "action": d.action if d.action in names else "alert", "evidence": evidence, "updated_at": now(),
-               "trigger": _check_trigger(d.trigger, sensor_index) if d.trigger else None}
-        if d.uid in current and d.uid not in kept:
+               "trigger": (await _check_trigger(db, domain, d.trigger, sensor_index))[0] if d.trigger else None}
+        if d.uid in current and d.uid not in movable:
+            counts["held"] += 1
+            kept.add(d.uid)
+        elif d.uid in current and d.uid not in kept:
+            if current[d.uid].get("trigger") and not doc["trigger"]:
+                doc["trigger"] = current[d.uid]["trigger"]  # a revision doesn't silently drop a working trigger
             await kgdb.update_doc(db, domain, "Playbook", d.uid, doc, PLAYBOOK_JSON)
             kept.add(d.uid)
             counts["revised"] += 1
@@ -171,7 +196,62 @@ async def refresh(db: ArcadeDB, domain: str) -> dict:
             room -= 1
             counts["created"] += 1
     counts["unchanged"] = len(set(current) - kept)
+    counts["triggers"] = await _add_triggers(db, domain, sensor_list)
     return counts
+
+
+async def _moved(db: ArcadeDB, domain: str, pb: dict) -> bool:
+    """Has the knowledge behind a playbook changed since it was written? A fact on a watched entity was added,
+    confirmed or superseded, or one of its evidence facts is no longer valid."""
+    since = pb.get("updated_at") or pb["created_at"]
+    if any(not f["valid"] for f in await kgdb.get_facts(db, domain, pb.get("evidence") or [])):
+        return True
+    return await kgdb.facts_changed_on(db, domain, [w["uid"] for w in pb["watch"]], since) > 0
+
+
+async def _add_triggers(db: ArcadeDB, domain: str, sensor_list: list[dict]) -> int:
+    """Give playbooks without a live trigger one, when a sensor measures their situation. Each playbook is considered
+    again only when it was revised or a sensor was added since."""
+    if not sensor_list:
+        return 0
+    newest = max(x.get("tested_at") or "" for x in sensor_list)
+    added = 0
+    for pb in await list_playbooks(db, domain):
+        considered = pb.get("trigger_considered_at") or ""
+        if pb.get("trigger") or (considered >= newest and considered >= (pb.get("updated_at") or "")):
+            continue
+        trigger = await _trigger_for(db, domain, pb, sensor_list)
+        await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {"trigger": trigger, "trigger_considered_at": now()},
+                              PLAYBOOK_JSON)
+        added += trigger is not None
+    return added
+
+
+async def _trigger_for(db: ArcadeDB, domain: str, pb: dict, sensor_list: list[dict]) -> dict | None:
+    """One focused question per playbook, with the sensors' numeric fields and their current values; a rejected
+    answer gets one retry with the reason."""
+    lines = [f"PLAYBOOK: {pb['name']}", f"SITUATION: {pb['situation']}",
+             f"WATCHED ENTITIES: {', '.join(w['name'] for w in pb['watch'])}", "", "SENSORS:"]
+    for x in sensor_list:
+        sample = _sample(x)
+        fields = ", ".join(f"{f} = {value_at(sample, f)}" for f in numeric_fields(sample)[:25]) or "none"
+        params = ", ".join(f"{k} ({v.get('description', '')}; e.g. {v.get('example')})" for k, v in x["params"].items())
+        lines.append(f"- {x['name']}({params}): {x['description']}\n  numeric fields, current values: {fields}")
+    prompt = "\n".join(lines)
+    index = {x["name"]: x for x in sensor_list}
+    for _ in range(2):
+        try:
+            answer = await write_trigger(prompt)
+        except Exception as e:
+            print(f"[Strategist] trigger for {pb['name']!r} failed: {type(e).__name__}: {e}", flush=True)
+            return None
+        if not answer.trigger:
+            return None
+        trigger, problem = await _check_trigger(db, domain, answer.trigger, index)
+        if trigger:
+            return trigger
+        prompt += f"\n\nYour trigger was rejected: {problem}. Fix it, or return trigger = null."
+    return None
 
 
 # ── Evaluate (Watcher) ─────────────────────────────────────────────────────

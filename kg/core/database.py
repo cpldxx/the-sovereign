@@ -691,6 +691,19 @@ async def top_facts(db: ArcadeDB, domain: str, limit: int, valid: bool = True) -
     return [_fact(r) for r in rows]
 
 
+async def facts_changed_on(db: ArcadeDB, domain: str, entity_uids: list[str], since: str) -> int:
+    """How many facts touching these entities were added, confirmed or superseded since `since`."""
+    if not entity_uids:
+        return 0
+    rows = await db.cypher(
+        domain,
+        "MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE (a.uid IN $w OR b.uid IN $w) AND (r.created_at >= datetime($s) "
+        "OR r.updated_at >= datetime($s) OR r.invalid_at >= datetime($s)) RETURN count(r) AS n",
+        w=entity_uids, s=since,
+    )
+    return rows[0]["n"] if rows else 0
+
+
 async def set_entity_summary(db: ArcadeDB, domain: str, uid: str, summary: str) -> None:
     """A rewritten summary. The embedding stays the one from the entity's first description: entity
     resolution's similarity threshold is calibrated on description-vs-description."""

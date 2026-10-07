@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+import auth
 from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, connect_kg
 
 
@@ -31,6 +32,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Sovereign Hermes", description="Head Agent over the Sovereign KG", lifespan=lifespan)
 
+# Added before CORS, so CORS stays outermost and a 401 still carries CORS headers.
+app.add_middleware(auth.TokenAuth)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],

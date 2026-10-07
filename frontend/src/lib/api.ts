@@ -4,6 +4,9 @@ export const KG_API: string = import.meta.env.VITE_KG_URL ?? 'http://localhost:8
 export const HERMES_API: string = import.meta.env.VITE_HERMES_URL ?? 'http://localhost:8090';
 export const RESEARCH_API: string = import.meta.env.VITE_RESEARCH_URL ?? 'http://localhost:8070';
 export const LANGFUSE_URL: string = import.meta.env.VITE_LANGFUSE_URL ?? 'http://localhost:3000';
+/** SOVEREIGN_TOKEN of the services, when they require one (frontend/.env.local: VITE_SOVEREIGN_TOKEN=…). */
+const TOKEN: string = import.meta.env.VITE_SOVEREIGN_TOKEN ?? '';
+const AUTH: Record<string, string> = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -377,7 +380,7 @@ async function request<T>(base: string, path: string, init?: RequestInit): Promi
   try {
     res = await fetch(`${base}${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json', ...init?.headers },
+      headers: { 'Content-Type': 'application/json', ...AUTH, ...init?.headers },
     });
   } catch {
     throw new ApiError(`Cannot reach ${base} — is the server running?`);
@@ -513,7 +516,7 @@ export const hermes = {
     try {
       res = await fetch(`${HERMES_API}${d(id)}/ask/stream`, {
         ...json({ message, history, max_iterations: maxIterations }),
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...AUTH },
         signal,
       });
     } catch (e) {

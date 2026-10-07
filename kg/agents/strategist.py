@@ -94,3 +94,24 @@ _agent = Agent(MODEL, name="strategist", model_settings=model_settings(), system
 async def write_playbooks(context: str) -> Playbooks:
     """Raises on failure (the caller keeps the current playbooks)."""
     return (await _agent.run(context)).output
+
+
+class TriggerAnswer(BaseModel):
+    trigger: SensorTrigger | None = None
+    reason: str = ""
+
+
+TRIGGER_SYSTEM = """You are the Sovereign's Strategist, wiring one PLAYBOOK to live data. Decide whether one of the
+SENSORS measures the playbook's situation itself, and if so write the condition that means "it is happening":
+sensor, params (for the entity concerned — e.g. its ticker), field (one of the listed numeric fields), op (< > <= >=),
+value (on the same scale as the field's current value), every_minutes (15-1440).
+Return trigger = null when no sensor measures the situation itself: a share price says nothing about a factory's
+capacity or a qualification decision. A wrong trigger is worse than none. Give a one-line reason either way."""
+
+_trigger_agent = Agent(MODEL, name="trigger_writer", model_settings=model_settings(decisive=True),
+                       system_prompt=TRIGGER_SYSTEM, output_type=TriggerAnswer, retries=3)
+
+
+async def write_trigger(prompt: str) -> TriggerAnswer:
+    """Raises on failure (the playbook stays without a trigger)."""
+    return (await _trigger_agent.run(prompt)).output

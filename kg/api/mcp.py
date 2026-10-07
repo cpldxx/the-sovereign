@@ -21,7 +21,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import actions, coding, digest, kg, playbooks, sensors
+from core import actions, auth, coding, digest, kg, playbooks, sensors
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -53,7 +53,7 @@ RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstr
 
 async def _research(method: str, path: str, timeout: float = 30, **kw) -> dict:
     try:
-        async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=timeout) as client:
+        async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=timeout, headers=auth.headers()) as client:
             r = await client.request(method, path, **kw)
     except httpx.HTTPError as e:
         raise ToolError(f"Research service unreachable at {RESEARCH_URL} ({type(e).__name__})") from e
@@ -219,8 +219,8 @@ async def list_proposals(domain: str, status: str = "proposed") -> list[dict]:
 async def web_search(query: str, recent: bool = False) -> list[dict]:
     """Search the web right now: titles, URLs, snippets. recent=true prefers the last day's results.
     Nothing is stored — use start_research for knowledge worth keeping."""
-    out = await _research("GET", "/search", params={"q": query, "time_range": "day" if recent else None, "limit": 8},
-                          timeout=60)
+    params = {"q": query, "limit": 8} | ({"time_range": "day"} if recent else {})
+    out = await _research("GET", "/search", params=params, timeout=60)
     return out.get("results", [])
 
 

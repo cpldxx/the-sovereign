@@ -22,7 +22,7 @@ from pathlib import Path
 from core import database as kgdb
 from core.database import ArcadeDB, now
 
-IMAGE = os.getenv("SANDBOX_IMAGE", "sovereign-sandbox:1")
+IMAGE = os.getenv("SANDBOX_IMAGE", "sovereign-sandbox:2")
 SANDBOX_DIR = Path(__file__).resolve().parents[2] / "docker" / "sandbox"
 RUN_TIMEOUT = 40          # seconds per container (the runner gives run() 25 s)
 MAX_CODE = 20_000
@@ -35,6 +35,21 @@ FORBIDDEN_NAMES = {"eval", "exec", "compile", "open", "__import__", "globals", "
                    "breakpoint", "getattr", "setattr", "delattr", "memoryview", "help", "exit", "quit"}
 _NAME = re.compile(r"[a-z][a-z0-9_]{2,40}")
 _TYPES = {"string", "number", "integer", "boolean"}
+
+def available_secrets() -> list[str]:
+    """API keys the owner lets sensors use: names listed in SENSOR_SECRETS that have a value in the environment."""
+    names = [n.strip() for n in os.getenv("SENSOR_SECRETS", "").split(",") if n.strip()]
+    return [n for n in names if os.getenv(n)]
+
+
+def contract() -> str:
+    """The module contract, with the API keys currently available to sensors."""
+    keys = available_secrets()
+    return CONTRACT + (
+        f"\n- API keys available: {', '.join(keys)}. Prefer an official API: when one of these keys is for it, declare "
+        "SECRETS = [\"NAME\"] and read it with secret(\"NAME\") (provided at run time, no import). Never return or "
+        "print a key." if keys else "")
+
 
 CONTRACT = f'''Write ONE Python module (sensor.py) that reads live data from the public internet, in exactly this shape:
 
@@ -84,7 +99,7 @@ def inspect_code(code: str) -> tuple[dict, list[str]]:
     run_args: list[str] | None = None
     for node in tree.body:
         if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            if node.targets[0].id in ("NAME", "DESCRIPTION", "PARAMS"):
+            if node.targets[0].id in ("NAME", "DESCRIPTION", "PARAMS", "SECRETS"):
                 try:
                     meta[node.targets[0].id.lower()] = ast.literal_eval(node.value)
                 except ValueError:
@@ -102,6 +117,12 @@ def inspect_code(code: str) -> tuple[dict, list[str]]:
     for name, spec in params.items():
         if not isinstance(spec, dict) or spec.get("type") not in _TYPES or "example" not in spec:
             problems.append(f"PARAMS[{name!r}] needs a type ({', '.join(sorted(_TYPES))}), a description, an example")
+    secrets = meta.get("secrets") or []
+    if not isinstance(secrets, list) or not all(isinstance(x, str) for x in secrets):
+        problems.append("SECRETS must be a list of key names")
+    else:
+        problems += [f"secret {x} is not available (SENSOR_SECRETS in kg/.env)" for x in secrets
+                     if x not in available_secrets()]
     if run_args is None:
         problems.append("a module-level function run(...) is required")
     elif set(run_args) != set(params):
@@ -145,7 +166,7 @@ async def _ensure_image() -> None:
 
 async def run_code(code: str, params: dict) -> dict:
     """Run a checked module's run(**params) in a fresh sandbox container. Returns {"ok", "result" | "error"}."""
-    _, problems = inspect_code(code)
+    meta, problems = inspect_code(code)
     if problems:
         return {"ok": False, "error": "; ".join(problems)}
     await _ensure_image()
@@ -154,7 +175,8 @@ async def run_code(code: str, params: dict) -> dict:
             "run", "--rm", "-i", "--read-only", "--tmpfs", "/tmp:rw,size=16m", "--memory", "256m", "--cpus", "0.5",
             "--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--add-host", "host.docker.internal:127.0.0.1", "--add-host", "gateway.docker.internal:127.0.0.1",
-            IMAGE, stdin=json.dumps({"code": code, "params": params}).encode(),
+            IMAGE, stdin=json.dumps({"code": code, "params": params, "secrets": {
+                name: os.environ[name] for name in (meta.get("secrets") or []) if name in available_secrets()}}).encode(),
         )
     except TimeoutError:
         return {"ok": False, "error": f"timed out after {RUN_TIMEOUT} s"}

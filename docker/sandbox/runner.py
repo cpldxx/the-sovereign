@@ -1,5 +1,8 @@
-"""Runs one sensor: reads {"code", "params"} as JSON on stdin, executes the module's run(**params) and writes
-{"ok": true, "result": ...} or {"ok": false, "error": ...} as one JSON line on stdout."""
+"""Runs one sensor: reads {"code", "params", "secrets"} as JSON on stdin, executes the module's run(**params) and
+writes {"ok": true, "result": ...} or {"ok": false, "error": ...} as one JSON line on stdout.
+
+Secrets (API keys the module declared in SECRETS) arrive on stdin, never in the environment; the module reads them
+with secret("NAME"), and their values are masked in everything written back."""
 
 import json
 import signal
@@ -15,7 +18,14 @@ def _timeout(*_):
 
 def main() -> None:
     job = json.loads(sys.stdin.read())
-    namespace: dict = {"__name__": "sensor"}
+    secrets: dict = job.get("secrets") or {}
+
+    def secret(name: str) -> str:
+        if name not in secrets:
+            raise KeyError(f"secret {name!r} is not available (declare it in SECRETS and set it in kg/.env)")
+        return secrets[name]
+
+    namespace: dict = {"__name__": "sensor", "secret": secret}
     try:
         exec(compile(job["code"], "sensor.py", "exec"), namespace)
         signal.signal(signal.SIGALRM, _timeout)
@@ -27,7 +37,11 @@ def main() -> None:
     except Exception as e:
         tb = traceback.format_exc(limit=4)
         out = {"ok": False, "error": f"{type(e).__name__}: {e}", "trace": tb[-1500:]}
-    sys.stdout.write(json.dumps(out, default=str)[:200_000] + "\n")
+    text = json.dumps(out, default=str)[:200_000]
+    for value in secrets.values():
+        if value:
+            text = text.replace(value, "***")
+    sys.stdout.write(text + "\n")
 
 
 main()

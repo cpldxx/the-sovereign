@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
-from sovereign_research import fetch, runner, search  # noqa: E402
+from sovereign_research import auth, fetch, runner, search  # noqa: E402
 from sovereign_research.jobs import KG_URL, Jobs  # noqa: E402
 
 NIGHTLY = os.getenv("RESEARCH_NIGHTLY", "on").lower() in ("1", "on", "true", "yes")
@@ -48,7 +48,7 @@ async def nightly() -> None:
             continue
         ran_on = today
         try:
-            async with httpx.AsyncClient(base_url=KG_URL, timeout=30) as kg:
+            async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=30) as kg:
                 domains = [d["id"] for d in (await kg.get("/domains")).json()["domains"]]
         except httpx.HTTPError as e:
             print(f"[Research] nightly: KG unreachable ({type(e).__name__})", flush=True)
@@ -74,7 +74,7 @@ async def daily_reports(domains: list[str]) -> None:
             pending.remove(d)
             try:
                 # Summary refresh + report is LLM work on the KG side: minutes with a local model.
-                async with httpx.AsyncClient(base_url=KG_URL, timeout=httpx.Timeout(3600, connect=10)) as kg:
+                async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=httpx.Timeout(3600, connect=10)) as kg:
                     r = await kg.post(f"/domains/{d}/reports", json={"hours": 24, "wait": True})
                     print(f"[Research] nightly: report for {d}: "
                           f"{r.json().get('headline', '') if r.is_success else f'failed ({r.status_code})'}", flush=True)
@@ -100,6 +100,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Sovereign Research", description="DeerFlow research → KG episodes", lifespan=lifespan)
+# Added before CORS, so CORS stays outermost and a 401 still carries CORS headers.
+app.add_middleware(auth.TokenAuth)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -114,7 +116,7 @@ async def research(domain: str, request: ResearchRequest):
     update: what's new since the last runs; mission: answer `question`."""
     if request.mode == "mission" and not request.question.strip():
         raise HTTPException(status_code=422, detail="A mission needs a question")
-    async with httpx.AsyncClient(base_url=KG_URL, timeout=10) as kg:
+    async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=10) as kg:
         try:
             r = await kg.get(f"/domains/{domain}")
         except httpx.HTTPError:

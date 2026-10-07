@@ -1,6 +1,7 @@
 # Python
 .venv/
 .env
+.env.local
 __pycache__/
 *.pyc
 
@@ -20,3 +21,7 @@ hermes/.hermes-home/
 research/.data/
 research/.deerflow-home/
 research/.deer-flow/
+
+# ./sovereign launcher: logs and pids
+.logs/
+.run/

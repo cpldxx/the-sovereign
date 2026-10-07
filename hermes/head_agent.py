@@ -48,6 +48,7 @@ if TRACING:
             os.environ.setdefault(f"HERMES_LANGFUSE_{_key}", os.environ[f"LANGFUSE_{_key}"])
     _enable_hermes_plugin("observability/langfuse")
 
+import auth  # noqa: E402
 from run_agent import AIAgent  # noqa: E402
 from tools.mcp_tool import register_mcp_servers  # noqa: E402
 
@@ -86,6 +87,7 @@ def connect_kg() -> list[str]:
             "url": f"{KG_URL}/mcp",
             "timeout": 900,  # ingest_data runs the full LLM pipeline (minutes)
             "connect_timeout": 30,
+            "headers": auth.headers(),
             # The KG exposes tools only; skip Hermes's resource/prompt helper tools.
             "tools": {"resources": False, "prompts": False},
         }
@@ -94,7 +96,7 @@ def connect_kg() -> list[str]:
 
 def _domain_context(domain: str) -> tuple[str, dict, list[dict]]:
     """Domain description, ontology and action catalog from the KG REST API."""
-    with httpx.Client(base_url=KG_URL, timeout=10.0) as client:
+    with httpx.Client(base_url=KG_URL, timeout=10.0, headers=auth.headers()) as client:
         r = client.get(f"/domains/{domain}")
         if r.status_code == 404:
             raise DomainNotFound(domain)

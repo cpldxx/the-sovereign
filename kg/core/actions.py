@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from core import auth
 from core import database as kgdb
 from core.database import ArcadeDB, now
 
@@ -215,7 +216,7 @@ async def _execute(db: ArcadeDB, domain: str, proposal: dict, spec: dict, decide
 async def _builtin(name: str, params: dict, domain: str) -> dict:
     if name in ("alert", "draft"):
         return {"shown": True}
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, headers=auth.headers()) as client:
         r = await client.post(f"{RESEARCH_URL}/domains/{domain}/research",
                               json={"mode": "mission", "question": params["question"]})
     if r.is_error:

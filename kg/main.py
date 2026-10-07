@@ -1,6 +1,7 @@
 """The Sovereign - Main entry point."""
 
 import asyncio
+import os
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import FastAPI
@@ -18,7 +19,7 @@ from api.query import router as query_router
 from api.reports import router as reports_router
 from api.reviews import router as reviews_router
 from api.sensors import router as sensors_router
-from core import playbooks, tracing
+from core import auth, playbooks, tracing
 from core.database import get_db
 
 
@@ -53,6 +54,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Added before CORS, so CORS stays outermost and a 401 still carries CORS headers.
+app.add_middleware(auth.TokenAuth)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -91,4 +94,6 @@ app.router.routes.extend(mcp_routes)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8080, reload=True)
+    # KG_RELOAD=1 restarts on code changes (development) — off by default: a reload kills running jobs.
+    uvicorn.run("main:app", host="127.0.0.1", port=8080,
+                reload=os.getenv("KG_RELOAD", "").lower() in ("1", "true", "yes", "on"))

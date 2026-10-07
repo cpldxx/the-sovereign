@@ -15,7 +15,7 @@ from pathlib import Path
 
 import docker
 
-from core.sensors import CONTRACT
+from core.sensors import contract
 
 OPENHANDS_IMAGE = os.getenv("OPENHANDS_IMAGE", "ghcr.io/all-hands-ai/openhands:0.40")
 RUNTIME_IMAGE = os.getenv("OPENHANDS_RUNTIME_IMAGE", "ghcr.io/all-hands-ai/runtime:0.40.0-nikolaik")
@@ -47,7 +47,7 @@ def _run(need: str, domain: str, description: str) -> tuple[str | None, list[str
         workspace, state = Path(root) / "workspace", Path(root) / "state"
         workspace.mkdir()
         state.mkdir()
-        (workspace / "CONTRACT.md").write_text(CONTRACT)
+        (workspace / "CONTRACT.md").write_text(contract())
         # OpenHands runs as another uid inside its containers.
         for d in (workspace, state):
             d.chmod(0o777)

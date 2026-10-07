@@ -18,6 +18,7 @@ import httpx
 
 from agents.reporter import write_briefing
 from agents.summarizer import summarize
+from core import auth
 from core import database as kgdb
 from core.database import ArcadeDB
 from core.tracing import llm_usage, observe
@@ -56,7 +57,7 @@ async def refresh_summaries(db: ArcadeDB, domain: str, since: str) -> dict:
 async def _research_runs(domain: str, since: str) -> list[dict] | None:
     """Research jobs created or finished in the period; None when the research service is unreachable."""
     try:
-        async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=10) as client:
+        async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=10, headers=auth.headers()) as client:
             jobs = (await client.get("/jobs", params={"domain": domain, "limit": 100})).json()["jobs"]
     except (httpx.HTTPError, ValueError, KeyError):
         return None

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Sovereign — run the whole system from one place.
+#
+#   ./sovereign start [--observability]   docker services (+ LangFuse), then KG, Hermes, Research and the UI,
+#                                          detached — they keep running after this terminal closes
+#   ./sovereign stop                       stop the four app services (docker containers keep running)
+#   ./sovereign restart [--observability]
+#   ./sovereign status                     what is up
+#   ./sovereign logs <kg|hermes|research|frontend>
+#   ./sovereign autostart on|off           start at login (macOS LaunchAgent; Docker Desktop must start at login too)
+#
+# Logs: .logs/<service>.log · PIDs: .run/<service>.pid
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOGS="$ROOT/.logs"
+RUN="$ROOT/.run"
+AGENT="$HOME/Library/LaunchAgents/com.sovereign.start.plist"
+mkdir -p "$LOGS" "$RUN"
+
+# name  directory  port  command
+SERVICES=(
+  "kg|kg|8080|uv run python main.py"
+  "hermes|hermes|8090|uv run python server.py"
+  "research|research|8070|uv run python server.py"
+  "frontend|frontend|5173|npm run dev"
+)
+
+field() { echo "$1" | cut -d'|' -f"$2"; }
+port_pid() { lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
+
+start_service() {
+  local name dir port cmd
+  name=$(field "$1" 1); dir=$(field "$1" 2); port=$(field "$1" 3); cmd=$(field "$1" 4)
+  if [[ -n "$(port_pid "$port")" ]]; then
+    echo "  $name: already running on :$port"
+    return
+  fi
+  (cd "$ROOT/$dir" && nohup bash -c "exec $cmd" >>"$LOGS/$name.log" 2>&1 & echo $! >"$RUN/$name.pid")
+  echo "  $name: starting on :$port (log: .logs/$name.log)"
+}
+
+stop_service() {
+  local name port pid
+  name=$(field "$1" 1); port=$(field "$1" 3)
+  pid=$(cat "$RUN/$name.pid" 2>/dev/null || true)
+  [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  # The process that holds the port (uvicorn / vite may run under the recorded one).
+  pid=$(port_pid "$port"); [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  rm -f "$RUN/$name.pid"
+  echo "  $name: stopped"
+}
+
+status() {
+  for s in "${SERVICES[@]}"; do
+    local name port; name=$(field "$s" 1); port=$(field "$s" 3)
+    if [[ -n "$(port_pid "$port")" ]]; then echo "  ● $name  :$port"; else echo "  ○ $name  :$port (down)"; fi
+  done
+  (cd "$ROOT" && docker compose ps --format '  ● {{.Service}}  {{.Status}}' 2>/dev/null) || echo "  docker: not running"
+}
+
+start() {
+  local profile=()
+  [[ "${1:-}" == "--observability" ]] && profile=(--profile observability)
+  echo "docker services"
+  (cd "$ROOT" && docker compose ${profile[@]+"${profile[@]}"} up -d >/dev/null 2>&1) && echo "  up"
+  echo "app services"
+  for s in "${SERVICES[@]}"; do start_service "$s"; done
+  echo "UI: http://localhost:5173"
+}
+
+case "${1:-}" in
+  start) start "${2:-}" ;;
+  stop) for s in "${SERVICES[@]}"; do stop_service "$s"; done ;;
+  restart) for s in "${SERVICES[@]}"; do stop_service "$s"; done; sleep 2; start "${2:-}" ;;
+  status) status ;;
+  logs) tail -n 100 -f "$LOGS/${2:?which service: kg | hermes | research | frontend}.log" ;;
+  autostart)
+    case "${2:-}" in
+      on)
+        mkdir -p "$(dirname "$AGENT")"
+        cat >"$AGENT" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.sovereign.start</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>-lc</string><string>sleep 60; '$ROOT/sovereign' start</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$LOGS/autostart.log</string>
+  <key>StandardErrorPath</key><string>$LOGS/autostart.log</string>
+</dict>
+</plist>
+EOF
+        launchctl unload "$AGENT" 2>/dev/null || true
+        launchctl load "$AGENT"
+        echo "Sovereign starts at login ($AGENT)" ;;
+      off)
+        launchctl unload "$AGENT" 2>/dev/null || true
+        rm -f "$AGENT"
+        echo "autostart removed" ;;
+      *) echo "usage: ./sovereign autostart on|off"; exit 1 ;;
+    esac ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

@@ -107,32 +107,39 @@ The ontology is the grammar of a domain's KG — which node categories and relat
 
 Requirements: Docker, [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node.js. Python 3.12 is installed by uv.
 
-Run each step from the repo root, steps 2–5 each in their own terminal.
+First time — models, config, dependencies:
 
 ```bash
-# 0. Models (every model is an env var — see kg/.env.example and hermes/.env.example)
 ollama pull qwen3.6:35b              # every agent (MoE, fast); thinking off by default
 ollama pull nomic-embed-text-v2-moe  # embeddings
 # Claude instead: set LLM_MODEL / HEAD_MODEL=anthropic:<model> + ANTHROPIC_API_KEY in kg/.env and hermes/.env
 
-# 1. ArcadeDB (Studio http://localhost:2480, root / sovereign_pass) + SearXNG search + crawl4ai crawler
-docker compose up -d
-# Optional: LangFuse tracing → http://localhost:3000 (sign up there; you join the "sovereign" project).
-# The .env files already carry its local keys; without it running, traces are simply dropped.
-docker compose --profile observability up -d
+for s in kg hermes research; do cp $s/.env.example $s/.env; (cd $s && uv sync); done
+(cd frontend && npm install)
 
-# 2. KG API  → http://localhost:8080  (OpenAPI docs at /docs, MCP at /mcp)
-cd kg && cp .env.example .env && uv sync && uv run python main.py
-
-# 3. Hermes (Head Agent)  → http://localhost:8090
-cd hermes && cp .env.example .env && uv sync && uv run python server.py
-
-# 4. Research (DeerFlow)  → http://localhost:8070 — first install pulls DeerFlow from GitHub
-cd research && cp .env.example .env && uv sync && uv run python server.py
-
-# 5. Frontend  → http://localhost:5173
-cd frontend && npm install && npm run dev
+# Optional but recommended: one shared token, so nothing else on this machine (or a web page) can drive the agents.
+TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+for s in kg hermes research; do sed -i '' "s/^SOVEREIGN_TOKEN=.*/SOVEREIGN_TOKEN=$TOKEN/" $s/.env; done
+echo "VITE_SOVEREIGN_TOKEN=$TOKEN" > frontend/.env.local
 ```
+
+Then everything runs from one command — detached, so it keeps running after the terminal closes:
+
+```bash
+./sovereign start --observability   # docker (ArcadeDB, SearXNG, crawl4ai, LangFuse) + KG, Hermes, Research, UI
+./sovereign status                  # what is up
+./sovereign logs kg                 # follow a service's log (.logs/)
+./sovereign stop                    # stop the app services (docker keeps running)
+./sovereign autostart on            # start at login (macOS LaunchAgent; Docker Desktop must start at login too)
+```
+
+UI http://localhost:5173 · KG API http://localhost:8080 (`/docs`, MCP at `/mcp`) · Hermes :8090 · Research :8070 ·
+ArcadeDB Studio http://localhost:2480 (root / sovereign_pass) · LangFuse http://localhost:3000 (sign up there; you join
+the "sovereign" project; the `.env` files carry its local keys).
+
+Optional keys that make it better (all in the services' `.env`): `TAVILY_API_KEY` or `BRAVE_API_KEY` (research/.env —
+far better search than the free engines; free tiers) · `SENSOR_SECRETS` + e.g. `FINNHUB_API_KEY` (kg/.env — sensors can
+then use official data APIs instead of unofficial endpoints) · `ANTHROPIC_API_KEY` with `anthropic:` models (per agent).
 
 ### Frontend (`frontend/`, port 5173)
 
