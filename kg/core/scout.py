@@ -424,10 +424,13 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
     for group in await sensors.groups(db, domain):
         sources = await sensors.members(db, domain, group["name"])
         args = {k: v.get("example") for k, v in group["params"].items()}
-        working = 0
+        working = resting = 0
         for m in sources:
+            if sensors.cooling(m):   # it refused us: don't knock again before its rest is over
+                resting += 1
+                continue
             working += (await sensors._run_member(db, domain, m, args))["ok"]
-        report[group["name"]] = {"working": working, "sources": len(sources)}
+        report[group["name"]] = {"working": working, "sources": len(sources), "resting": resting}
         last = max((m.get("scouted_at") or "" for m in sources), default="")
         stale = last < (datetime.now(timezone.utc) - timedelta(days=RESCOUT_DAYS)).isoformat(timespec="seconds")
         busy = any(r.get("group") == group["name"] and r["status"] not in ("done", "failed")

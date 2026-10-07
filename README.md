@@ -183,6 +183,10 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
   left with fewer than two working sources is scouted again. robots.txt, bot protection, logins and paywalls are
   never worked around — such sources are recorded as unavailable. (Measured for a stock price: 11 of 25 sites
   readable.) With no sensor for something, the Head opens a page that shows it (`read_webpage`, a real browser).
+  robots.txt is enforced inside the sandbox for every request a sensor makes, whoever wrote it. A source that refuses
+  us rests (6 h, doubling to 48 h) instead of being asked again; one that failed for these parameters (an
+  exchange-specific page and another exchange's ticker) is tried after the others. A live trigger must measure the
+  situation's own quantity — a "$1 trillion market cap" situation can't be wired to a share price.
 - **Sensors run in a locked sandbox** (`docker/sandbox`): a fresh container per run — read-only, non-root, no
   capabilities, memory/CPU/process limits — and an egress guard so code can only reach public internet addresses, never
   this machine's services. Sensor code is statically checked (whitelisted imports, no eval/exec/file access) and never

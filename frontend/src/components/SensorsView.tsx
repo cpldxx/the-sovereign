@@ -10,9 +10,14 @@ function SourceRow({ domain, source, onChanged }: { domain: string; source: Sens
   return (
     <li className="text-[11px]">
       <div className="flex items-center gap-2">
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${source.last_ok === false ? 'bg-bad' : source.last_ok ? 'bg-good' : 'bg-faint'}`} />
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${source.cooldown_until ? 'bg-gold' : source.last_ok === false ? 'bg-bad' : source.last_ok ? 'bg-good' : 'bg-faint'}`} />
         <Icon size={11} className="shrink-0 text-faint" />
         <span className="min-w-0 flex-1 truncate font-mono text-dim" title={source.last_error ?? source.name}>{source.host || source.name}</span>
+        {source.cooldown_until && (
+          <span className="shrink-0 text-[10px] text-gold" title={`The site refused us; not asked again before ${source.cooldown_until}`}>
+            resting
+          </span>
+        )}
         <span className="shrink-0 font-mono text-[10px] text-faint" title="recent success rate · average seconds">
           {Math.round(source.score * 100)}%{source.avg_seconds != null ? ` · ${source.avg_seconds}s` : ''}
         </span>

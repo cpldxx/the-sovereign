@@ -4,14 +4,64 @@ and writes {"ok": true, "result": ...} or {"ok": false, "error": ...} as one JSO
 Secrets (API keys the module declared in SECRETS) arrive on stdin, never in the environment; the module reads them
 with secret("NAME"), and their values are masked in everything written back.
 Pages (the module's PAGES, opened in a browser by the KG before this container starts — robots.txt respected) arrive
-on stdin too; the module reads one with page("name")."""
+on stdin too; the module reads one with page("name"). Requests the module makes itself are checked against robots.txt
+here."""
 
 import json
 import signal
 import sys
 import traceback
+import urllib.robotparser
+from urllib.parse import urlsplit
+
+import httpx
 
 LIMIT = 25  # seconds for run() itself; the container has its own hard timeout
+BOT = "SovereignBot"
+
+
+# robots.txt, enforced here for every request a module makes (each redirect hop too): whatever the code says, a
+# site that asks automated readers to stay out isn't read. Unreachable robots.txt = no rules; 401/403 = keep out.
+_robots: dict[str, urllib.robotparser.RobotFileParser] = {}
+_send = httpx.Client._send_single_request
+
+
+def _allowed(url: httpx.URL) -> bool:
+    site = f"{url.scheme}://{url.netloc.decode()}"
+    if site not in _robots:
+        parser = urllib.robotparser.RobotFileParser()
+        try:
+            with httpx.Client(timeout=10, follow_redirects=True, headers={"User-Agent": BOT}) as client:
+                r = client.get(f"{site}/robots.txt")
+            if r.status_code in (401, 403):
+                parser.disallow_all = True
+            elif r.status_code == 200:
+                parser.parse(r.text.splitlines())
+            else:
+                parser.allow_all = True
+        except httpx.HTTPError:
+            parser.allow_all = True
+        _robots[site] = parser
+    return _robots[site].can_fetch(BOT, str(url))
+
+
+def _send_politely(self, request: httpx.Request) -> httpx.Response:
+    if request.url.path != "/robots.txt" and not _allowed(request.url):
+        raise PermissionError(f"robots.txt of {urlsplit(str(request.url)).netloc} disallows {request.url}")
+    return _send(self, request)
+
+
+_send_async = httpx.AsyncClient._send_single_request
+
+
+async def _send_politely_async(self, request: httpx.Request) -> httpx.Response:
+    if request.url.path != "/robots.txt" and not _allowed(request.url):
+        raise PermissionError(f"robots.txt of {urlsplit(str(request.url)).netloc} disallows {request.url}")
+    return await _send_async(self, request)
+
+
+httpx.Client._send_single_request = _send_politely
+httpx.AsyncClient._send_single_request = _send_politely_async
 
 
 def _timeout(*_):

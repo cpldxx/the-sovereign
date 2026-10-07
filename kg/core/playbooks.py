@@ -21,7 +21,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 
-from agents.strategist import MAX_PLAYBOOKS, write_playbooks, write_trigger
+from agents.strategist import MAX_PLAYBOOKS, check_trigger, write_playbooks, write_trigger
 from agents.watcher import judge
 from core import actions, sensors
 from core import database as kgdb
@@ -89,11 +89,12 @@ def _sensor_line(sensor: dict) -> str:
     return f"- {sensor['name']}({params}): {sensor['description']} — numeric fields: {fields}"
 
 
-async def _check_trigger(db: ArcadeDB, domain: str, t, sensor_index: dict) -> tuple[dict | None, str]:
+async def _check_trigger(db: ArcadeDB, domain: str, t, sensor_index: dict, situation: str) -> tuple[dict | None, str]:
     """A Strategist trigger made safe to run: known sensor, parameters and comparison; then one live reading with
     ITS parameters (an AMD trigger is checked against AMD, not the sensor's example): the field is a number, the
-    threshold is on its scale, and the condition doesn't hold already — a trigger detects a change.
-    (trigger, "") or (None, the problem)."""
+    threshold is on its scale, and the condition doesn't hold already — a trigger detects a change. Last, a separate
+    check that the field measures what the situation is about (a "$1 trillion market cap" situation once got a
+    "price >= 1000" trigger). (trigger, "") or (None, the problem)."""
     sensor = sensor_index.get(t.sensor)
     if not sensor:
         return None, f"no sensor named {t.sensor!r}"
@@ -116,8 +117,50 @@ async def _check_trigger(db: ArcadeDB, domain: str, t, sensor_index: dict) -> tu
         return None, f"threshold {t.value} is not on the scale of {t.field} (now {live})"
     if OPS[t.op](live, t.value):
         return None, f"the condition holds already ({t.field} is {live} now) — a trigger must detect a change"
+    if problem := await _meaning(situation, t.sensor, t.params, t.field, t.op, t.value, live, sensor["description"]):
+        return None, problem
     return {"sensor": t.sensor, "params": t.params, "field": t.field, "op": t.op, "value": t.value,
-            "every_minutes": max(15, min(int(t.every_minutes or 60), 1440))}, ""
+            "every_minutes": max(15, min(int(t.every_minutes or 60), 1440)), "meaning_checked": True}, ""
+
+
+def _trigger_text(sensor: str, params: dict, field: str, op: str, value, live, description: str) -> str:
+    args = ", ".join(f"{k}={v}" for k, v in params.items())
+    return (f"{sensor}({args}).{field} {op} {value} — FIELD {field!r} is {live} now; the sensor: {description}")
+
+
+async def _meaning(situation: str, sensor: str, params: dict, field: str, op: str, value, live,
+                   description: str) -> str:
+    """"" if the trigger measures the situation's own quantity, else why not."""
+    try:
+        verdict = await check_trigger(situation, _trigger_text(sensor, params, field, op, value, live, description))
+    except Exception as e:
+        return f"the meaning check failed ({type(e).__name__})"
+    return "" if verdict.same_quantity else f"it doesn't measure the situation: {verdict.reason}"
+
+
+async def recheck_triggers(db: ArcadeDB, domain: str) -> int:
+    """Triggers written before the meaning check get it once; one that fails is removed (with a note) and its
+    playbook waits for a new trigger until it is revised or a sensor is added. Returns how many were removed."""
+    groups = {g["name"]: g for g in await sensors.groups(db, domain)}
+    removed = 0
+    for pb in await list_playbooks(db, domain):
+        t = pb.get("trigger")
+        if not t or t.get("meaning_checked"):
+            continue
+        group = groups.get(t["sensor"])
+        problem = await _meaning(pb["situation"], t["sensor"], t["params"], t["field"], t["op"], t["value"],
+                                 pb.get("trigger_value"), group["description"] if group else "")
+        if problem.startswith("the meaning check failed"):
+            continue
+        if problem:
+            await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {
+                "trigger": None, "trigger_note": f"trigger removed: {problem}"[:400], "trigger_considered_at": now()},
+                PLAYBOOK_JSON)
+            removed += 1
+        else:
+            await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {"trigger": {**t, "meaning_checked": True}},
+                                  PLAYBOOK_JSON)
+    return removed
 
 
 async def _context(db: ArcadeDB, domain: str, description: str, catalog: list[dict], current: list[dict],
@@ -177,7 +220,8 @@ async def refresh(db: ArcadeDB, domain: str) -> dict:
         evidence = [f["uid"] for f in await kgdb.get_facts(db, domain, d.evidence[:20])]
         doc = {"name": d.name.strip(), "situation": d.situation.strip(), "watch": watch, "response": d.response.strip(),
                "action": d.action if d.action in names else "alert", "evidence": evidence, "updated_at": now(),
-               "trigger": (await _check_trigger(db, domain, d.trigger, sensor_index))[0] if d.trigger else None}
+               "trigger": (await _check_trigger(db, domain, d.trigger, sensor_index, d.situation))[0]
+               if d.trigger else None}
         if d.uid in current and d.uid not in movable:
             counts["held"] += 1
             kept.add(d.uid)
@@ -193,6 +237,7 @@ async def refresh(db: ArcadeDB, domain: str) -> dict:
             room -= 1
             counts["created"] += 1
     counts["unchanged"] = len(set(current) - kept)
+    counts["triggers_removed"] = await recheck_triggers(db, domain)
     counts["triggers"] = await _add_triggers(db, domain, sensor_list)
     return counts
 
@@ -244,7 +289,7 @@ async def _trigger_for(db: ArcadeDB, domain: str, pb: dict, sensor_list: list[di
             return None
         if not answer.trigger:
             return None
-        trigger, problem = await _check_trigger(db, domain, answer.trigger, index)
+        trigger, problem = await _check_trigger(db, domain, answer.trigger, index, pb["situation"])
         if trigger:
             return trigger
         prompt += f"\n\nYour trigger was rejected: {problem}. Fix it, or return trigger = null."

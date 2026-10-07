@@ -387,6 +387,7 @@ export interface SensorSource {
   avg_seconds: number | null;
   last_error: string | null;
   author: string;
+  cooldown_until: string | null;  // resting after the site refused us (bot protection, robots.txt)
 }
 
 /** A sensor as agents see it: one need, read from its best working source. */

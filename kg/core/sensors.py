@@ -23,6 +23,7 @@ import json
 import os
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -32,16 +33,20 @@ from core import accounts, auth
 from core import database as kgdb
 from core.database import ArcadeDB, now
 
-IMAGE = os.getenv("SANDBOX_IMAGE", "sovereign-sandbox:3")
+IMAGE = os.getenv("SANDBOX_IMAGE", "sovereign-sandbox:4")
 RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
 SANDBOX_DIR = Path(__file__).resolve().parents[2] / "docker" / "sandbox"
 RUN_TIMEOUT = 40          # seconds per container (the runner gives run() 25 s)
 MAX_CODE = 20_000
 MAX_RESULT = 8_000        # characters of a reading handed to agents
-SENSOR_JSON = ("params", "sample", "key_fields")
+SENSOR_JSON = ("params", "sample", "key_fields", "misses")
 PAGE_CHARS = 40_000       # text of a rendered page handed to a module
 AGREE = 0.01              # two sources agree when their values are within 1 % (live quotes: < 0.2 % apart)
 HISTORY = 20              # outcomes kept per source for its success rate
+MISS_HOURS = 24           # a source that failed for these parameters is tried after the others for this long
+COOLDOWN_HOURS = 6        # a source that refused us (bot protection, 403/429, robots.txt) rests, doubling to 48 h
+PAGE_TTL = 60             # seconds a rendered page is reused (a check and its verification don't open it twice)
+_BLOCKED = re.compile(r"anti-bot|captcha|challenge|robots\.txt|\b403\b|\b429\b|rate.?limit|too many requests", re.I)
 
 ALLOWED_IMPORTS = {"httpx", "json", "re", "math", "statistics", "datetime", "time", "urllib.parse",
                    "xml.etree.ElementTree", "html", "csv", "io", "zoneinfo", "decimal"}
@@ -206,9 +211,23 @@ def fill(template: str, params: dict) -> str:
     return _PLACEHOLDER.sub(value, template)
 
 
+_pages: dict[str, tuple[float, dict]] = {}
+
+
 async def render(url: str, domain: str | None = None) -> dict:
     """A web page opened in a browser by the research service (robots.txt, per-site pacing, public addresses only)
-    → {"text"} or {"error"}."""
+    → {"text"} or {"error"}. Reused for PAGE_TTL seconds."""
+    if (hit := _pages.get(url)) and time.monotonic() - hit[0] < PAGE_TTL:
+        return hit[1]
+    page = await _render(url, domain)
+    if "text" in page:
+        if len(_pages) > 200:
+            _pages.clear()
+        _pages[url] = (time.monotonic(), page)
+    return page
+
+
+async def _render(url: str, domain: str | None) -> dict:
     try:
         async with httpx.AsyncClient(timeout=120, headers=auth.headers(domain)) as client:
             r = await client.post(f"{RESEARCH_URL}/fetch", json={"url": url, "max_chars": PAGE_CHARS})
@@ -334,6 +353,29 @@ def _order(members: list[dict]) -> list[dict]:
     return sorted(members, key=lambda m: (-score(m), m.get("avg_seconds") or 99.0))
 
 
+def _params_key(args: dict) -> str:
+    return json.dumps(args, sort_keys=True, default=str)[:200]
+
+
+def cooling(member: dict) -> bool:
+    """Resting after it refused us — not to be asked again before cooldown_until."""
+    return (member.get("cooldown_until") or "") > now()
+
+
+def _missed(member: dict, args: dict) -> bool:
+    """Failed for exactly these parameters lately (an exchange-specific page and an NYSE ticker)."""
+    since = (datetime.now(timezone.utc) - timedelta(hours=MISS_HOURS)).isoformat(timespec="seconds")
+    return (member.get("misses") or {}).get(_params_key(args), "") > since
+
+
+def _route(members: list[dict], args: dict) -> list[dict]:
+    """Best first; those that failed for these parameters lately after the rest; resting ones last (tried only if
+    nothing else answers — except a robots.txt refusal, which is never retried while it rests)."""
+    ready = [m for m in members if not cooling(m)]
+    resting = [m for m in members if cooling(m) and "robots" not in (m.get("last_error") or "")]
+    return [m for m in ready if not _missed(m, args)] + [m for m in ready if _missed(m, args)] + resting
+
+
 async def list_sensors(db: ArcadeDB, domain: str, *, with_code: bool = False) -> list[dict]:
     rows = await kgdb.find_docs(db, domain, "Sensor", SENSOR_JSON, order="name ASC")
     return [r if with_code else {k: v for k, v in r.items() if k != "code"} for r in rows]
@@ -367,10 +409,11 @@ async def groups(db: ArcadeDB, domain: str) -> list[dict]:
             "tested_at": max(m.get("tested_at") or "" for m in ms),
             "last_run_at": max((m.get("last_run_at") or "" for m in ms), default="") or None,
             "last_ok": any(m.get("last_ok") for m in ms),
-            "working": sum(1 for m in ms if m.get("last_ok") is not False),
+            "working": sum(1 for m in ms if m.get("last_ok") is not False and not cooling(m)),
             "sources": [{"name": m["name"], "host": host_of(m), "kind": m.get("kind") or "api",
                          "last_ok": m.get("last_ok"), "score": round(score(m), 2), "avg_seconds": m.get("avg_seconds"),
-                         "last_error": m.get("last_error"), "author": m.get("author")} for m in ms],
+                         "last_error": m.get("last_error"), "author": m.get("author"),
+                         "cooldown_until": m.get("cooldown_until") if cooling(m) else None} for m in ms],
         })
     return out
 
@@ -399,15 +442,31 @@ async def save(db: ArcadeDB, domain: str, code: str, need: str, author: str, sam
 
 
 async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict) -> dict:
-    """One source, with its outcome recorded (success history, speed, last error)."""
+    """One source, with its outcome recorded: success history, speed, last error, which parameters it failed for,
+    and — when the site refused us — a rest that doubles with every refusal in a row (6 h … 48 h)."""
     started = time.monotonic()
     out = await run_code(member["code"], args, domain)
     seconds = round(time.monotonic() - started, 2)
     avg = member.get("avg_seconds")
-    await kgdb.update_doc(db, domain, "Sensor", member["uid"], {
-        "last_run_at": now(), "last_ok": out["ok"], "history": ((member.get("history") or "") + "01"[out["ok"]])[-HISTORY:],
-        "avg_seconds": seconds if avg is None else round(0.7 * avg + 0.3 * seconds, 2),
-        "last_error": None if out["ok"] else str(out.get("error"))[:300]})
+    misses = dict(member.get("misses") or {})
+    key = _params_key(args)
+    changes = {"last_run_at": now(), "last_ok": out["ok"],
+               "history": ((member.get("history") or "") + "01"[out["ok"]])[-HISTORY:],
+               "avg_seconds": seconds if avg is None else round(0.7 * avg + 0.3 * seconds, 2)}
+    if out["ok"]:
+        misses.pop(key, None)
+        changes |= {"last_error": None, "refusals": 0, "cooldown_until": None}
+    else:
+        error = str(out.get("error"))[:300]
+        misses[key] = now()
+        changes["last_error"] = error
+        if _BLOCKED.search(error):
+            refusals = (member.get("refusals") or 0) + 1
+            hours = min(COOLDOWN_HOURS * 2 ** (refusals - 1), 48)
+            changes |= {"refusals": refusals, "cooldown_until": (datetime.now(timezone.utc) + timedelta(hours=hours))
+                        .isoformat(timespec="seconds")}
+    changes["misses"] = dict(sorted(misses.items(), key=lambda kv: kv[1])[-50:])
+    await kgdb.update_doc(db, domain, "Sensor", member["uid"], changes, SENSOR_JSON)
     return out
 
 
@@ -436,7 +495,10 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
         raise SensorError(f"Unknown parameters {sorted(unknown)}; {name} takes {list(spec)}")
     args = {**{k: v.get("example") for k, v in spec.items()}, **(params or {})}
     answers, failed = [], []
-    queue = list(sources)
+    queue = _route(sources, args)
+    if not queue:
+        return {"sensor": name, "params": args, "read_at": now(), "ok": False,
+                "error": "every source of this sensor is resting after refusing automated reads (robots.txt)"}
     while queue:
         member = queue.pop(0)
         out = await _run_member(db, domain, member, args)
@@ -447,7 +509,7 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
             # The check should come from another provider (sg.finance.yahoo.com confirming finance.yahoo.com
             # proves little): sources of other sites first.
             first = _site(host_of(member))
-            queue.sort(key=lambda m: _site(host_of(m)) == first)
+            queue.sort(key=lambda m: (_site(host_of(m)) == first, cooling(m)))
         else:
             failed.append({"source": host_of(member) or member["name"], "error": str(out.get("error"))[:200]})
     if not answers:

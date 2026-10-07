@@ -115,3 +115,32 @@ _trigger_agent = Agent(MODEL, name="trigger_writer", model_settings=model_settin
 async def write_trigger(prompt: str) -> TriggerAnswer:
     """Raises on failure (the playbook stays without a trigger)."""
     return (await _trigger_agent.run(prompt)).output
+
+
+class TriggerCheck(BaseModel):
+    same_quantity: bool = Field(description="The trigger's field measures exactly what the situation's condition is "
+                                            "about, in the same unit and scale")
+    reason: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap(cls, v):
+        if isinstance(v, dict) and "arguments" in v:
+            return v["arguments"]
+        return v
+
+
+CHECK_SYSTEM = """You check one live TRIGGER someone wrote for a PLAYBOOK's situation. A trigger compares one number
+from a sensor (FIELD, with its current value) to a threshold.
+same_quantity = true only if FIELD measures exactly the quantity the situation's condition is about — the same thing,
+in the same unit and scale. A share price is not a market capitalization; a price is not revenue, a market share or a
+capacity; a percent change is not a price; a count of headlines is not an event. If the situation's condition can't be
+read from this field at all, false. Give a one-line reason."""
+
+_check_agent = Agent(MODEL, name="trigger_check", model_settings=model_settings(decisive=True),
+                     system_prompt=CHECK_SYSTEM, output_type=TriggerCheck, retries=3)
+
+
+async def check_trigger(situation: str, trigger: str) -> TriggerCheck:
+    """Raises on failure (the caller treats it as not checked)."""
+    return (await _check_agent.run(f"SITUATION: {situation}\n\nTRIGGER: {trigger}")).output
