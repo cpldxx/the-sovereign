@@ -11,10 +11,17 @@ Agents (the Head, playbooks) can only PROPOSE. A proposal stores the exact param
 of what will happen; confirming or rejecting it is the user's call through the REST API / UI — no agent
 tool exists for it. A confirmed proposal runs exactly as previewed, once. Proposals expire after
 PROPOSAL_TTL hours: a decision made on stale knowledge should be re-proposed, not executed.
+
+Webhooks reach public addresses only — a tenant's webhook must not reach the services beside the KG (Ollama,
+ArcadeDB, the other Sovereign APIs). ALLOW_PRIVATE_WEBHOOKS=true lifts that for a single-user install whose
+automations run locally (n8n on localhost).
 """
 
+import asyncio
+import ipaddress
 import os
 import re
+import socket
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
@@ -27,6 +34,7 @@ from core.database import ArcadeDB, now
 RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
 PROPOSAL_TTL = float(os.getenv("PROPOSAL_TTL_HOURS", "24"))
 WEBHOOK_TIMEOUT = 20
+ALLOW_PRIVATE_WEBHOOKS = os.getenv("ALLOW_PRIVATE_WEBHOOKS", "false").strip().lower() in ("1", "true", "yes", "on")
 
 ACTION_JSON = ("params",)
 PROPOSAL_JSON = ("params", "evidence", "result")
@@ -85,6 +93,7 @@ async def add_webhook(db: ArcadeDB, domain: str, name: str, description: str, ur
         raise ActionError(f"An action named {name!r} already exists")
     if urlsplit(url).scheme not in ("http", "https") or not urlsplit(url).netloc:
         raise ActionError("url must be an http(s) URL")
+    await _check_destination(url)
     for p in params:
         if not _NAME.fullmatch(p.get("name", "")) or p.get("type") not in _TYPES:
             raise ActionError(f"Invalid parameter {p!r}: needs a name and a type ({', '.join(_TYPES)})")
@@ -93,6 +102,23 @@ async def add_webhook(db: ArcadeDB, domain: str, name: str, description: str, ur
         "params": [{"name": p["name"], "type": p["type"], "description": p.get("description", ""),
                     "required": bool(p.get("required", True))} for p in params],
     }, ACTION_JSON)
+
+
+async def _check_destination(url: str) -> None:
+    """Refuse a webhook URL whose host resolves to a private, loopback or link-local address (checked when it is
+    added and again before every call: DNS can change)."""
+    if ALLOW_PRIVATE_WEBHOOKS:
+        return
+    parts = urlsplit(url)
+    try:
+        infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, parts.port or 443,
+                                                             type=socket.SOCK_STREAM)
+    except (socket.gaierror, UnicodeError) as e:
+        raise ActionError(f"Can't resolve {parts.hostname}") from e
+    for info in infos:
+        if not ipaddress.ip_address(info[4][0].split("%")[0]).is_global:
+            raise ActionError(f"{parts.hostname} is a private address: webhooks go to public endpoints only "
+                              "(ALLOW_PRIVATE_WEBHOOKS=true in kg/.env for a single-user install)")
 
 
 async def remove_webhook(db: ArcadeDB, domain: str, name: str) -> None:
@@ -149,12 +175,13 @@ async def _preview(spec: dict, params: dict, domain: str) -> str:
     preview = f"POST to {host} ({spec['name']}) with {params}"
     if spec.get("dry_run"):
         try:
+            await _check_destination(spec["url"])
             async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT) as client:
                 r = await client.post(spec["url"], json={"domain": domain, "action": spec["name"], "params": params,
                                                          "dry_run": True})
             preview += f"\nEndpoint dry run → {r.status_code}: {r.text[:1500]}"
-        except httpx.HTTPError as e:
-            preview += f"\nEndpoint dry run failed: {type(e).__name__}"
+        except (httpx.HTTPError, ActionError) as e:
+            preview += f"\nEndpoint dry run failed: {type(e).__name__}: {e}"
     return preview
 
 
@@ -197,6 +224,7 @@ async def _execute(db: ArcadeDB, domain: str, proposal: dict, spec: dict, decide
         if spec["kind"] == "builtin":
             result = await _builtin(spec["name"], params, domain)
         else:
+            await _check_destination(spec["url"])
             async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT) as client:
                 r = await client.post(spec["url"], json={
                     "domain": domain, "action": spec["name"], "params": params, "dry_run": False,
@@ -216,7 +244,7 @@ async def _execute(db: ArcadeDB, domain: str, proposal: dict, spec: dict, decide
 async def _builtin(name: str, params: dict, domain: str) -> dict:
     if name in ("alert", "draft"):
         return {"shown": True}
-    async with httpx.AsyncClient(timeout=30, headers=auth.headers()) as client:
+    async with httpx.AsyncClient(timeout=30, headers=auth.headers(domain)) as client:
         r = await client.post(f"{RESEARCH_URL}/domains/{domain}/research",
                               json={"mode": "mission", "question": params["question"]})
     if r.is_error:

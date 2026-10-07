@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from core import actions
+from core import actions, auth
 from domains.registry import load_domain
 
 router = APIRouter(prefix="/domains", tags=["actions"])
@@ -50,9 +50,11 @@ class ProposalRequest(BaseModel):
 
 @router.get("/{domain_name}/actions")
 async def list_actions(domain_name: str, req: Request):
-    """Everything the domain can do: built-in actions and the user's webhooks (with their URLs)."""
+    """Everything the domain can do: built-in actions and the webhooks (their URLs only for owners — a URL is
+    often a secret, like a Slack webhook)."""
     _require(domain_name)
-    return {"actions": await actions.catalog(req.app.state.db, domain_name, with_urls=True)}
+    owner = auth.current.get().can(domain_name, "owner")
+    return {"actions": await actions.catalog(req.app.state.db, domain_name, with_urls=owner)}
 
 
 @router.post("/{domain_name}/actions", status_code=201)

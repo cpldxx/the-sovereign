@@ -117,11 +117,13 @@ ollama pull nomic-embed-text-v2-moe  # embeddings
 for s in kg hermes research; do cp $s/.env.example $s/.env; (cd $s && uv sync); done
 (cd frontend && npm install)
 
-# Optional but recommended: one shared token, so nothing else on this machine (or a web page) can drive the agents.
+# The services' own token for calls between them (required; it never reaches a browser — people sign in).
 TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
 for s in kg hermes research; do sed -i '' "s/^SOVEREIGN_TOKEN=.*/SOVEREIGN_TOKEN=$TOKEN/" $s/.env; done
-echo "VITE_SOVEREIGN_TOKEN=$TOKEN" > frontend/.env.local
 ```
+
+Open the UI and create the first account: it is the admin, owns every domain that already exists, and invites
+everyone else (Account → Invites; `SIGNUP=open` in kg/.env lets anyone sign up instead).
 
 Then everything runs from one command — detached, so it keeps running after the terminal closes:
 
@@ -155,7 +157,8 @@ One screen per domain: the knowledge graph on the left, tools on the right.
 - **Report** — the daily briefing: what the graph learned, what changed (superseded and confirmed facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now.
 - **Actions** — the fast path. *Inbox*: proposals waiting for your confirmation (rationale, the facts behind it, a dry run of exactly what will happen) plus the activity feed (alerts, drafts, executed and rejected actions). *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*: live-data tools written by the Coder Agent — read one now, see its code. *Catalog*: built-in actions and your own external actions (webhooks).
 - **Research** — bootstrap, "what's new" and custom missions; each run shows the pages read, what each added to the graph (and how long it took), failures and the report.
-- **Status** — KG API / ArcadeDB / Hermes / Research / search + crawler health in the sidebar, plus a link to the LangFuse traces when tracing is on.
+- **Status** — KG API / ArcadeDB / Hermes / Research / search + crawler health in the sidebar, plus a link to the LangFuse traces when tracing is on (admins).
+- **Accounts** — sign in; Members (header) shares a domain with other accounts as viewer / editor / owner; Account (sidebar) changes the password, makes API tokens for MCP clients and, for admins, invite links.
 
 Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_URL` (see `frontend/.env.example`).
 
@@ -180,6 +183,24 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
 - **Roles are endpoints.** `/mcp` serves the Head everything; `/mcp/readonly` serves reading tools only (e.g. to point
   another assistant at your graph safely).
 
+### Accounts and isolation (multi-tenant)
+
+- **People sign in** (email + password, scrypt; an httpOnly session cookie good on all three services). Scripts and MCP
+  clients use personal API tokens (`Authorization: Bearer svk_…`). Sign-up needs an admin's invite link by default.
+- **A domain belongs to its members**: viewer (reads, asks the Head — which then gets read-only tools), editor (also
+  ingests, researches, reviews, edits the ontology, confirms actions), owner (also shares, configures webhooks,
+  deletes). Every request is checked on every service; a domain you aren't a member of answers 404, as if it didn't
+  exist. Ids are global (a second "AI Chips" becomes `ai_chips_3f2a`), names are per account.
+- **A Head can't leave its domain.** Hermes connects to the KG once per domain, and the KG limits that connection to
+  the one domain — no prompt (or web page the Head reads) can make it query another tenant's graph.
+- **What other accounts can't use:** the operator's machine and keys. Webhooks reach public addresses only (no
+  Ollama, ArcadeDB or the Sovereign APIs behind them; `ALLOW_PRIVATE_WEBHOOKS=true` for a single-user install with
+  local automations). The OpenHands Coder (it drives Docker) and the API keys in `SENSOR_SECRETS` serve only domains an
+  admin owns; everyone else's sensors come from the built-in Coder and run in the sandbox without keys.
+- **Browser safety:** cookie writes must come from `SOVEREIGN_ORIGINS`; repeated wrong passwords are throttled per
+  account and per address; signing out or changing the password ends the sessions (Hermes and Research notice within
+  15 s). Behind HTTPS set `COOKIE_SECURE=true`.
+
 ---
 
 ## API
@@ -188,9 +209,15 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
 
 | Method | Path | What |
 |---|---|---|
-| `GET` | `/domains` | List domain ids |
-| `POST` | `/domains` | Create a domain `{name, description}` → `{domain: "<id>"}` (id is derived: `"Quant Trading"` → `quant_trading`). Creates its database and generates its ontology in the background |
-| `GET` / `DELETE` | `/domains/{domain}` | Domain config / delete domain and its database |
+| `POST` | `/auth/signup`, `/auth/login`, `/auth/logout` | `{email, password, name?, invite?}` → session cookie. `GET /auth/config` (public): sign-up mode, first account or not |
+| `GET` | `/auth/me` | The caller and their role per domain |
+| `POST` | `/auth/password` | `{current, new}` — other browser sessions are signed out |
+| `GET` / `POST` / `DELETE` | `/auth/tokens`, `/auth/tokens/{uid}` | Personal API tokens `{label}` (shown once) |
+| `GET` / `POST` / `DELETE` | `/auth/invites`, `/auth/invites/{uid}` | Admins: single-use sign-up codes (7 days) |
+| `GET` | `/domains` | Your domains: id, title, description, your role |
+| `POST` | `/domains` | Create a domain `{name, description}` → `{domain: "<id>"}` — you own it (id derived: `"Quant Trading"` → `quant_trading`, plus a short suffix if another account has it). Creates its database and generates its ontology in the background |
+| `GET` / `DELETE` | `/domains/{domain}` | Domain config, stats, your role / delete domain and its database (owner) |
+| `GET` / `PUT` / `DELETE` | `/domains/{domain}/members`, `/members/{uid}` | Members / share with an existing account `{email, role}` (owner) / remove (owner) or leave (yourself) |
 | `POST` | `/domains/{domain}/ingest` | Ingest `{raw_text, source, title?, content_status?}` → what was created / strengthened / superseded / sent to review |
 | `POST` | `/domains/{domain}/query` | Graph RAG `{query, k}` → `entities`, `facts`, `episodes` |
 | `GET` / `PUT` | `/domains/{domain}/ontology` | Read / replace the ontology |
@@ -208,6 +235,9 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
 | `GET` | `/health` | KG API + ArcadeDB status, tracing on/off |
 | MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `list_playbooks`, `list_actions`, `propose_action`, `list_proposals`, `web_search`, `read_webpage`, `list_sensors`, `read_sensor`, `request_sensor`, `start_research`, `research_status`, `list_research` |
 | MCP | `/mcp/readonly` | The reading tools only (no ingest, ontology, review, proposal, sensor or research requests) |
+
+Every endpoint but `/health` and the sign-in ones needs a session cookie or `Authorization: Bearer <API token>`;
+`/mcp` needs editor in the domain a tool touches, `/mcp/readonly` viewer.
 
 ### Research (`research/`, port 8070)
 
@@ -290,8 +320,9 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 ### ✅ Phase F — Voice
 - Local speech in and out (Whisper on the GPU, macOS voices; Hermes TTS providers optional), hands-free turns with barge-in, wake word, spoken answers, daily briefing on start
 
-### Phase G — SaaS
-- Auth, multi-tenant, per-user isolation
+### ✅ Phase G — SaaS
+- Accounts (invite sign-up, sessions, API tokens), domains shared as viewer / editor / owner, every service checks
+  every request, Heads limited to their domain, the operator's machine and keys kept from other tenants
 
 ---
 

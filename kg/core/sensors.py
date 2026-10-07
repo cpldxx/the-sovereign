@@ -19,6 +19,7 @@ import os
 import re
 from pathlib import Path
 
+from core import accounts
 from core import database as kgdb
 from core.database import ArcadeDB, now
 
@@ -36,15 +37,18 @@ FORBIDDEN_NAMES = {"eval", "exec", "compile", "open", "__import__", "globals", "
 _NAME = re.compile(r"[a-z][a-z0-9_]{2,40}")
 _TYPES = {"string", "number", "integer", "boolean"}
 
-def available_secrets() -> list[str]:
-    """API keys the owner lets sensors use: names listed in SENSOR_SECRETS that have a value in the environment."""
+def available_secrets(domain: str | None = None) -> list[str]:
+    """API keys the operator lets sensors use: names listed in SENSOR_SECRETS that have a value in the environment —
+    for the operator's own (trusted) domains only; other accounts' sensors run without them."""
+    if domain and not accounts.trusted(domain):
+        return []
     names = [n.strip() for n in os.getenv("SENSOR_SECRETS", "").split(",") if n.strip()]
     return [n for n in names if os.getenv(n)]
 
 
-def contract() -> str:
-    """The module contract, with the API keys currently available to sensors."""
-    keys = available_secrets()
+def contract(domain: str | None = None) -> str:
+    """The module contract, with the API keys available to the domain's sensors."""
+    keys = available_secrets(domain)
     return CONTRACT + (
         f"\n- API keys available: {', '.join(keys)}. Prefer an official API: when one of these keys is for it, declare "
         "SECRETS = [\"NAME\"] and read it with secret(\"NAME\") (provided at run time, no import). Never return or "
@@ -76,7 +80,7 @@ class SensorError(ValueError):
 
 # ── Checking a module ──────────────────────────────────────────────────────
 
-def inspect_code(code: str) -> tuple[dict, list[str]]:
+def inspect_code(code: str, domain: str | None = None) -> tuple[dict, list[str]]:
     """(metadata {name, description, params}, problems). Reads the module without running it."""
     if len(code) > MAX_CODE:
         return {}, [f"module longer than {MAX_CODE} characters"]
@@ -122,7 +126,7 @@ def inspect_code(code: str) -> tuple[dict, list[str]]:
         problems.append("SECRETS must be a list of key names")
     else:
         problems += [f"secret {x} is not available (SENSOR_SECRETS in kg/.env)" for x in secrets
-                     if x not in available_secrets()]
+                     if x not in available_secrets(domain)]
     if run_args is None:
         problems.append("a module-level function run(...) is required")
     elif set(run_args) != set(params):
@@ -164,9 +168,10 @@ async def _ensure_image() -> None:
     _image_ready = True
 
 
-async def run_code(code: str, params: dict) -> dict:
-    """Run a checked module's run(**params) in a fresh sandbox container. Returns {"ok", "result" | "error"}."""
-    meta, problems = inspect_code(code)
+async def run_code(code: str, params: dict, domain: str | None = None) -> dict:
+    """Run a checked module's run(**params) in a fresh sandbox container, with the API keys it declares if the
+    domain may use them. Returns {"ok", "result" | "error"}."""
+    meta, problems = inspect_code(code, domain)
     if problems:
         return {"ok": False, "error": "; ".join(problems)}
     await _ensure_image()
@@ -176,7 +181,8 @@ async def run_code(code: str, params: dict) -> dict:
             "--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--add-host", "host.docker.internal:127.0.0.1", "--add-host", "gateway.docker.internal:127.0.0.1",
             IMAGE, stdin=json.dumps({"code": code, "params": params, "secrets": {
-                name: os.environ[name] for name in (meta.get("secrets") or []) if name in available_secrets()}}).encode(),
+                name: os.environ[name] for name in (meta.get("secrets") or []) if name in available_secrets(domain)}}
+            ).encode(),
         )
     except TimeoutError:
         return {"ok": False, "error": f"timed out after {RUN_TIMEOUT} s"}
@@ -226,7 +232,7 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None)
     if unknown:
         raise SensorError(f"Unknown parameters {sorted(unknown)}; {name} takes {list(sensor['params'])}")
     args = {**{k: v.get("example") for k, v in sensor["params"].items()}, **(params or {})}
-    out = await run_code(sensor["code"], args)
+    out = await run_code(sensor["code"], args, domain)
     await kgdb.update_doc(db, domain, "Sensor", sensor["uid"], {"last_run_at": now(), "last_ok": out["ok"]})
     return {"sensor": name, "params": args, "read_at": now(), **out}
 

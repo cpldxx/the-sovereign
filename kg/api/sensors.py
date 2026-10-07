@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core import coding, sensors
+from core import auth, coding, sensors
 from domains.registry import load_domain
 
 router = APIRouter(tags=["sensors"])
@@ -71,6 +71,7 @@ async def request_sensor(domain_name: str, request: SensorRequest, req: Request)
 
 @router.get("/sensor-requests/{job_id}")
 async def sensor_request(job_id: str):
-    if not (j := coding.job(job_id)):
+    j = coding.job(job_id)
+    if not j or not auth.current.get().can(j["domain"]):
         raise HTTPException(status_code=404, detail=f"No sensor request {job_id}")
     return j

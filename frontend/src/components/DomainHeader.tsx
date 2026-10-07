@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { Loader2, Trash2 } from 'lucide-react';
-import type { DomainDetail } from '../lib/api';
+import { Loader2, Trash2, Users } from 'lucide-react';
+import type { DomainDetail, User } from '../lib/api';
+import { MembersDialog } from './MembersDialog';
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
@@ -11,15 +12,26 @@ function Stat({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-export function DomainHeader({ detail, onDelete }: { detail: DomainDetail; onDelete: () => Promise<void> }) {
+export function DomainHeader({ detail, me, onDelete, onLeft }: {
+  detail: DomainDetail;
+  me: User;
+  onDelete: () => Promise<void>;
+  onLeft: () => Promise<void>;
+}) {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
-  const { stats } = detail;
+  const [sharing, setSharing] = useState(false);
+  const { stats, role } = detail;
 
   return (
     <header className="flex items-center gap-6 border-b border-line px-5 py-3">
       <div className="min-w-0 flex-1">
-        <h1 className="truncate font-mono text-[15px] text-ink">{detail.domain}</h1>
+        <h1 className="flex items-center gap-2 truncate font-mono text-[15px] text-ink">
+          {detail.domain}
+          {role !== 'owner' && (
+            <span className="rounded-full border border-line-2 px-2 py-px font-sans text-[10px] text-dim" title="Your role in this domain">{role}</span>
+          )}
+        </h1>
         <p className="truncate text-xs text-dim">{detail.config.description}</p>
       </div>
 
@@ -36,7 +48,11 @@ export function DomainHeader({ detail, onDelete }: { detail: DomainDetail; onDel
         {stats.invalid_fact_count > 0 && <Stat label="superseded" value={stats.invalid_fact_count} />}
       </div>
 
-      {confirm ? (
+      <button onClick={() => setSharing(true)} className="rounded p-1.5 text-faint hover:bg-panel-2 hover:text-ink" title="Members">
+        <Users size={14} />
+      </button>
+
+      {role !== 'owner' ? null : confirm ? (
         <div className="flex items-center gap-2 text-xs">
           <span className="text-dim">Delete domain and its graph?</span>
           <button
@@ -52,6 +68,11 @@ export function DomainHeader({ detail, onDelete }: { detail: DomainDetail; onDel
         <button onClick={() => setConfirm(true)} className="rounded p-1.5 text-faint hover:bg-panel-2 hover:text-bad" title="Delete domain">
           <Trash2 size={14} />
         </button>
+      )}
+
+      {sharing && (
+        <MembersDialog domain={detail.domain} me={me} role={role} onClose={() => setSharing(false)}
+          onLeft={async () => { setSharing(false); await onLeft(); }} />
       )}
     </header>
   );

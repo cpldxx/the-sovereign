@@ -3,6 +3,7 @@
 import importlib
 import json
 import re
+import secrets
 import shutil
 import sys
 from pathlib import Path
@@ -19,6 +20,8 @@ DEFAULT_ONTOLOGY = {
 # name at once, so it is kept to lowercase identifiers (macOS paths are
 # case-insensitive, so "Quant" and "quant" would collide on disk).
 _DOMAIN_ID = re.compile(r"[a-z][a-z0-9_]{0,63}")
+# The accounts database lives next to the domain databases: no domain may take its name.
+SYSTEM_DB = "sovereign_system"
 
 
 def domain_id(name: str) -> str:
@@ -33,18 +36,35 @@ def domain_id(name: str) -> str:
 
 def _domain_dir(name: str) -> Path:
     """Directory of an existing domain. Rejects anything that is not a plain id (no path tricks)."""
-    if not _DOMAIN_ID.fullmatch(name) or not (DOMAINS_DIR / name).is_dir():
+    if not _DOMAIN_ID.fullmatch(name) or name == SYSTEM_DB or not (DOMAINS_DIR / name).is_dir():
         raise ValueError(f"Domain '{name}' does not exist")
     return DOMAINS_DIR / name
 
 
-def create_domain(name: str, description: str, data_sources: list[str] = None, keywords: list[str] = None) -> str:
-    """Create a new domain workspace from the template. Returns the domain id."""
-    domain = domain_id(name)
-    domain_dir = DOMAINS_DIR / domain
+def _slug(domain: str) -> str:
+    """The name a domain was created under, as a slug (its id may carry a suffix)."""
+    try:
+        return domain_id(load_domain(domain)["config"].get("title") or domain)
+    except (ValueError, ImportError):
+        return domain
 
-    if domain_dir.exists():
-        raise ValueError(f"Domain '{domain}' already exists")
+
+def _taken(domain: str) -> bool:
+    return domain == SYSTEM_DB or (DOMAINS_DIR / domain).exists()
+
+
+def create_domain(name: str, description: str, data_sources: list[str] = None, keywords: list[str] = None,
+                  mine: set[str] | frozenset[str] = frozenset()) -> str:
+    """Create a new domain workspace from the template. Returns the domain id: the name's slug — or, when someone
+    else's domain already has it, the slug with a short random suffix (ids are global, names are per user).
+    `mine`: the caller's domains, where a repeated name is an error instead."""
+    domain = domain_id(name)
+    if any(_slug(d) == domain for d in mine):
+        raise ValueError(f"You already have a domain named '{name.strip()}'")
+    base = domain[:58]
+    while _taken(domain):
+        domain = f"{base}_{secrets.token_hex(2)}"
+    domain_dir = DOMAINS_DIR / domain
 
     # Copy template
     shutil.copytree(TEMPLATE_DIR, domain_dir)
@@ -53,6 +73,7 @@ def create_domain(name: str, description: str, data_sources: list[str] = None, k
     # break out of the string literals into code.
     config = {
         "name": domain,
+        "title": name.strip(),
         "description": description,
         "data_sources": list(data_sources or []),
         "keywords": list(keywords or []),
@@ -89,7 +110,7 @@ def list_domains() -> list[str]:
     """List all created domains."""
     return sorted(
         d.name for d in DOMAINS_DIR.iterdir()
-        if d.is_dir() and _DOMAIN_ID.fullmatch(d.name)
+        if d.is_dir() and _DOMAIN_ID.fullmatch(d.name) and d.name != SYSTEM_DB
     )
 
 

@@ -105,7 +105,7 @@ class Jobs:
     async def _run(self, job: dict) -> None:
         domain = job["domain"]
         job.update(status="researching", started_at=now())
-        async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=30) as kg:
+        async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain), timeout=30) as kg:
             detail = (await kg.get(f"/domains/{domain}")).raise_for_status().json()
             episodes = (await kg.get(f"/domains/{domain}/episodes", params={"limit": 500})).json()["episodes"]
         description = detail["config"].get("description") or domain
@@ -139,7 +139,7 @@ class Jobs:
         self._step(job, f"read {len(readable)} page(s), {len(pages) - len(readable)} failed")
 
         # Long pages are several chunks of LLM work on the KG side (minutes each): wait up to an hour per call.
-        async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=httpx.Timeout(3600, connect=10)) as kg:
+        async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain), timeout=httpx.Timeout(3600, connect=10)) as kg:
             if job["mode"] == "bootstrap" and readable:
                 job["status"] = "ontology"
                 self._step(job, "deriving the domain's ontology from the pages read")

@@ -9,14 +9,21 @@ where it connects, not by its prompt:
     readonly  /mcp/readonly  reading the graph, reports, playbooks, actions and sensors — for sub-agents and
                              external MCP clients (e.g. a desktop assistant pointed at your graph)
 No role can confirm or execute an action: that is the user's call, through the REST API / UI.
+
+Every call is checked against its caller (auth.py): a person's API token reaches their own domains — /mcp needs
+editor there, /mcp/readonly viewer — and Hermes' per-domain Head connections reach only their one domain.
 """
 
+import contextvars
+import functools
+import inspect
 import os
 from collections.abc import Callable
 from typing import Literal
 
 import httpx
 from mcp.server import MCPServer
+from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
@@ -62,18 +69,54 @@ async def _research(method: str, path: str, timeout: float = 30, **kw) -> dict:
     return r.json()
 
 
+# The caller of the tool call being handled, and the role this endpoint needs (set by _guarded).
+_caller: contextvars.ContextVar[tuple[auth.Principal, str]] = contextvars.ContextVar("mcp_caller")
+
+
+def _guarded(fn: Callable, need: str) -> Callable:
+    """The tool, taking its caller from the HTTP request of each call. (MCP tools run in the session's task, so
+    the middleware's contextvar doesn't reach them; the request does.)"""
+    @functools.wraps(fn)
+    async def call(*args, ctx: Context, **kwargs):
+        principal = ctx.request_context.request.scope.get("state", {}).get("principal")
+        if principal is None:
+            raise ToolError("Not signed in")
+        reset = _caller.set((principal, need))
+        try:
+            result = fn(*args, **kwargs)
+            return await result if inspect.isawaitable(result) else result
+        finally:
+            _caller.reset(reset)
+
+    sig = inspect.signature(fn)
+    call.__signature__ = sig.replace(parameters=[
+        *sig.parameters.values(), inspect.Parameter("ctx", inspect.Parameter.KEYWORD_ONLY, annotation=Context)])
+    call.__annotations__ = {**fn.__annotations__, "ctx": Context}
+    return call
+
+
+def _visible() -> list[str]:
+    principal, _ = _caller.get()
+    return principal.visible(registry.list_domains())
+
+
 def _require(domain: str) -> dict:
-    """Load a domain or fail with a message the agent can act on (plain exceptions reach it unexplained)."""
+    """Load a domain the caller may use here, or fail with a message the agent can act on (plain exceptions reach
+    it unexplained). Other accounts' domains look exactly like missing ones."""
+    principal, need = _caller.get()
+    if problem := auth.denial(principal, domain, need):
+        known = ", ".join(_visible()) or "none"
+        raise ToolError(f"{problem[1]}. Your domains: {known}" if problem[0] == 404 else problem[1])
     try:
         return registry.load_domain(domain)
     except ValueError as e:
-        raise ToolError(f"{e}. Known domains: {registry.list_domains()}") from e
+        raise ToolError(f"{e}. Your domains: {', '.join(_visible()) or 'none'}") from e
 
 
 @tool("readonly")
 def list_domains() -> list[str]:
-    """List the knowledge domains (one isolated knowledge graph each)."""
-    return registry.list_domains()
+    """List the knowledge domains you can use (one isolated knowledge graph each)."""
+    return _visible()
 
 
 # What agents get back is compacted: every token of a tool result is re-read on each later model turn, and the
@@ -303,6 +346,9 @@ async def research_status(job_id: str) -> dict:
     """Status of a research job: queued / researching / ingesting / done / failed, the pages it read
     (with what each added to the graph or why it failed) and, when done, its short report."""
     job = await _research("GET", f"/jobs/{job_id}")
+    principal, _ = _caller.get()
+    if not principal.can(job.get("domain", "")):
+        raise ToolError(f"Research service: 404 Job {job_id} not found")
     for page in job.get("pages", []):
         page.pop("markdown", None)
     return job
@@ -321,7 +367,7 @@ def _server(role: str) -> MCPServer:
     server = MCPServer(f"sovereign-kg-{role}", instructions=INSTRUCTIONS)
     for fn, roles in _TOOLS:
         if role in roles:
-            server.add_tool(fn)
+            server.add_tool(_guarded(fn, "editor" if role == "head" else "viewer"), name=fn.__name__)
     return server
 
 

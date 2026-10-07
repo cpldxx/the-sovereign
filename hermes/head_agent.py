@@ -1,12 +1,10 @@
 """Head Agent — the Sovereign's CEO, built on Hermes AIAgent.
 
 The Head Agent never touches the database. Its only KG access is the Sovereign
-KG's MCP server, registered into Hermes as the `mcp-sovereign` toolset:
-query_knowledge_graph, ingest_data, get_ontology, update_ontology, list_domains.
-Domain context (description, ontology) comes from the KG's REST API.
-
-Every tool takes the domain explicitly, so agents for different domains can run
-side by side without rebinding anything global.
+KG's MCP server, registered into Hermes once per domain (toolset `mcp-kg_<tools>_<domain>`)
+and limited to that domain on the KG side — whatever a prompt says, a Head can't reach
+another domain's graph. Editors get the full tool set (/mcp), viewers the read-only one
+(/mcp/readonly). Domain context (description, ontology) comes from the KG's REST API.
 """
 
 import json
@@ -68,9 +66,7 @@ _TEXT_TOOL_CALL = re.compile(
     re.S,
 )
 
-MCP_SERVER = "sovereign"
-KG_TOOLSET = f"mcp-{MCP_SERVER}"
-_TOOL_PREFIX = f"mcp__{MCP_SERVER}__"
+MCP_PATHS = {"head": "/mcp", "readonly": "/mcp/readonly"}
 
 # Progress events for live UIs: {"type": "tool_start" | "tool_end" | "delta", ...}
 EventSink = Callable[[dict], None]
@@ -80,23 +76,26 @@ class DomainNotFound(LookupError):
     pass
 
 
-def connect_kg() -> list[str]:
-    """Connect to the KG's MCP server and register its tools. Idempotent; retries a failed connect."""
-    return register_mcp_servers({
-        MCP_SERVER: {
-            "url": f"{KG_URL}/mcp",
+def connect_kg(domain: str, tools: str = "head") -> str:
+    """Connect a domain's Head to the KG's MCP server and register its tools → the toolset name. The connection
+    is the service's, limited to this one domain (X-Sovereign-Domain). Idempotent; retries a failed connect."""
+    name = f"kg_{tools}_{domain}"
+    register_mcp_servers({
+        name: {
+            "url": f"{KG_URL}{MCP_PATHS[tools]}",
             "timeout": 900,  # ingest_data runs the full LLM pipeline (minutes)
             "connect_timeout": 30,
-            "headers": auth.headers(),
+            "headers": auth.headers(domain),
             # The KG exposes tools only; skip Hermes's resource/prompt helper tools.
             "tools": {"resources": False, "prompts": False},
         }
     })
+    return f"mcp-{name}"
 
 
 def _domain_context(domain: str) -> tuple[str, dict, list[dict]]:
     """Domain description, ontology and action catalog from the KG REST API."""
-    with httpx.Client(base_url=KG_URL, timeout=10.0, headers=auth.headers()) as client:
+    with httpx.Client(base_url=KG_URL, timeout=10.0, headers=auth.headers(domain)) as client:
         r = client.get(f"/domains/{domain}")
         if r.status_code == 404:
             raise DomainNotFound(domain)
@@ -192,11 +191,12 @@ def _touched_uids(tool: str, data) -> list[str]:
     return list(dict.fromkeys(u for u in uids if u))
 
 
-def _progress_callbacks(on_event: EventSink) -> dict:
+def _progress_callbacks(on_event: EventSink, toolset: str) -> dict:
     """Hermes callbacks → plain JSON-able events (tool names without the MCP prefix)."""
+    prefix = f"mcp__{toolset.removeprefix('mcp-')}__"
 
     def name(tool: str) -> str:
-        return tool.removeprefix(_TOOL_PREFIX)
+        return tool.removeprefix(prefix)
 
     def args(raw) -> dict | str:
         return raw if isinstance(raw, dict) else str(raw)
@@ -252,6 +252,12 @@ tickers exactly as your tools returned them, written as digits (the voice reads 
 Lead with the answer. If there is more worth knowing, offer to go deeper. Use your tools exactly as you would
 otherwise."""
 
+READ_ONLY = """
+
+READ-ONLY: the user is a viewer of this domain. You can read the graph, reports, playbooks, proposals, sensors and
+the web, but you cannot change anything — no ingesting, reviews, ontology changes, research missions or proposed
+actions (those tools aren't yours here). When asked for one, say that an editor of the domain has to do it."""
+
 
 def warm_up(domain: str | None = None) -> None:
     """Load the Head's model (and the domain's embedding model, through one tiny KG query) so the first question
@@ -265,26 +271,28 @@ def warm_up(domain: str | None = None) -> None:
                     "reasoning_effort": "none"})
             if domain:
                 client.post(f"{KG_URL}/domains/{domain}/query", json={"query": "warm-up", "k": 1},
-                            headers=auth.headers())
+                            headers=auth.headers(domain))
     except httpx.HTTPError as e:
         print(f"[Hermes] warm-up failed: {type(e).__name__}", flush=True)
 
 
 def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSink | None = None,
-                      voice: bool = False) -> AIAgent:
-    """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools."""
+                      voice: bool = False, tools: str = "head") -> AIAgent:
+    """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools for that domain
+    (`tools`: "head" — everything, for editors; "readonly" — for viewers)."""
     description, ontology, actions = _domain_context(domain)
-    connect_kg()
+    toolset = connect_kg(domain, tools)
     return AIAgent(
         **_model_kwargs(),
-        enabled_toolsets=[KG_TOOLSET],
+        enabled_toolsets=[toolset],
         ephemeral_system_prompt=(_system_prompt(domain, description, ontology, actions)
-                                 + (VOICE_MODE if voice else "")),
+                                 + (READ_ONLY if tools == "readonly" else "") + (VOICE_MODE if voice else "")),
         max_iterations=max_iterations,
         tool_delay=0.0,
         quiet_mode=True,
         skip_context_files=True,
-        **(_progress_callbacks(on_event) if on_event else {}),
+        skip_memory=True,  # Hermes' own memory is one store for everyone: nothing may carry between accounts
+        **(_progress_callbacks(on_event, toolset) if on_event else {}),
     )
 
 
@@ -296,17 +304,18 @@ def ask_head(
     max_iterations: int = 8,
     on_event: EventSink | None = None,
     voice: bool = False,
+    tools: str = "head",
 ) -> str:
     """One turn with the Head Agent. `history` is prior [{role, content}] turns, oldest first.
 
     `on_event` (optional) receives live progress events while the agent works.
     """
-    agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice)
+    agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice, tools=tools)
     answer = agent.run_conversation(message, conversation_history=history or None)["final_response"]
     if _TEXT_TOOL_CALL.match(answer or ""):
         # With reasoning off, local models occasionally write a tool call as plain text instead of
         # calling it. Retry once on a fresh agent with a nudge.
-        agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice)
+        agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice, tools=tools)
         nudge = f"{message}\n\n(Call the tools through the tool-calling interface — do not write them as text.)"
         answer = agent.run_conversation(nudge, conversation_history=history or None)["final_response"]
     return answer

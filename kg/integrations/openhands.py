@@ -47,7 +47,7 @@ def _run(need: str, domain: str, description: str) -> tuple[str | None, list[str
         workspace, state = Path(root) / "workspace", Path(root) / "state"
         workspace.mkdir()
         state.mkdir()
-        (workspace / "CONTRACT.md").write_text(contract())
+        (workspace / "CONTRACT.md").write_text(contract(domain))
         # OpenHands runs as another uid inside its containers.
         for d in (workspace, state):
             d.chmod(0o777)

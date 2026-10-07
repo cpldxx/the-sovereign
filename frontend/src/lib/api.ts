@@ -4,16 +4,55 @@ export const KG_API: string = import.meta.env.VITE_KG_URL ?? 'http://localhost:8
 export const HERMES_API: string = import.meta.env.VITE_HERMES_URL ?? 'http://localhost:8090';
 export const RESEARCH_API: string = import.meta.env.VITE_RESEARCH_URL ?? 'http://localhost:8070';
 export const LANGFUSE_URL: string = import.meta.env.VITE_LANGFUSE_URL ?? 'http://localhost:3000';
-/** SOVEREIGN_TOKEN of the services, when they require one (frontend/.env.local: VITE_SOVEREIGN_TOKEN=…). */
-const TOKEN: string = import.meta.env.VITE_SOVEREIGN_TOKEN ?? '';
-const AUTH: Record<string, string> = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
+/** Every call carries the session cookie (set by the KG at sign-in, httpOnly — this code never sees it). */
+const SIGNED_OUT = 'sovereign:signed-out';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
+export type Role = 'owner' | 'editor' | 'viewer';
+
 export interface DomainSummary {
   id: string;
+  title: string;
   description: string;
   ontology_generated: boolean;
+  role: Role;
+}
+
+export interface User {
+  uid: string;
+  email: string;
+  name: string;
+  admin: boolean;
+}
+
+export interface Me {
+  kind: 'user';
+  user: User;
+  roles: Record<string, Role>;
+}
+
+export interface Member {
+  uid: string;
+  email: string;
+  name: string;
+  role: Role;
+  since: string;
+}
+
+export interface ApiToken {
+  uid: string;
+  label: string;
+  created_at: string;
+  token?: string;  // only right after creation
+}
+
+export interface Invite {
+  uid: string;
+  created_at: string;
+  expires_at: string;
+  used_by: string | null;
+  code?: string;  // only right after creation
 }
 
 export interface Ontology {
@@ -32,9 +71,10 @@ export interface DomainStats {
 
 export interface DomainDetail {
   domain: string;
-  config: { name: string; description: string };
+  config: { name: string; title?: string; description: string };
   ontology_generated: boolean;
   stats: DomainStats;
+  role: Role;
 }
 
 /** A neuron: one real-world thing. */
@@ -373,14 +413,32 @@ export type AgentEvent =
 
 // ── HTTP ────────────────────────────────────────────────────────────────────
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status = 0) {
+    super(message);
+    this.status = status;
+  }
+}
+
+/** Called when any request finds the session gone (expired, revoked, signed out elsewhere). */
+export function onSignedOut(handler: () => void): () => void {
+  addEventListener(SIGNED_OUT, handler);
+  return () => removeEventListener(SIGNED_OUT, handler);
+}
+
+async function call(url: string, init: RequestInit): Promise<Response> {
+  const res = await fetch(url, { ...init, credentials: 'include' });
+  if (res.status === 401 && !url.includes('/auth/')) dispatchEvent(new Event(SIGNED_OUT));
+  return res;
+}
 
 async function request<T>(base: string, path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${base}${path}`, {
+    res = await call(`${base}${path}`, {
       ...init,
-      headers: { 'Content-Type': 'application/json', ...AUTH, ...init?.headers },
+      headers: { 'Content-Type': 'application/json', ...init?.headers },
     });
   } catch {
     throw new ApiError(`Cannot reach ${base} — is the server running?`);
@@ -388,13 +446,44 @@ async function request<T>(base: string, path: string, init?: RequestInit): Promi
   const body = await res.json().catch(() => ({}));
   if (!res.ok) {
     const detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail ?? body);
-    throw new ApiError(detail || `HTTP ${res.status}`);
+    throw new ApiError(detail || `HTTP ${res.status}`, res.status);
   }
   return body as T;
 }
 
 const json = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) });
 const d = (id: string) => `/domains/${encodeURIComponent(id)}`;
+
+// ── Accounts (KG) ───────────────────────────────────────────────────────────
+
+export const auth = {
+  config: () => request<{ signup: 'invite' | 'open'; first_account: boolean }>(KG_API, '/auth/config'),
+
+  me: () => request<Me>(KG_API, '/auth/me'),
+
+  login: (email: string, password: string) =>
+    request<{ user: User }>(KG_API, '/auth/login', json({ email, password })).then(r => r.user),
+
+  signup: (email: string, password: string, name: string, invite: string) =>
+    request<{ user: User }>(KG_API, '/auth/signup', json({ email, password, name, invite })).then(r => r.user),
+
+  logout: () => request<unknown>(KG_API, '/auth/logout', { method: 'POST' }),
+
+  changePassword: (current: string, next: string) =>
+    request<unknown>(KG_API, '/auth/password', json({ current, new: next })),
+
+  tokens: () => request<{ tokens: ApiToken[] }>(KG_API, '/auth/tokens').then(r => r.tokens),
+
+  createToken: (label: string) => request<ApiToken>(KG_API, '/auth/tokens', json({ label })),
+
+  revokeToken: (uid: string) => request<unknown>(KG_API, `/auth/tokens/${encodeURIComponent(uid)}`, { method: 'DELETE' }),
+
+  invites: () => request<{ invites: Invite[]; signup: string }>(KG_API, '/auth/invites'),
+
+  createInvite: () => request<Invite>(KG_API, '/auth/invites', { method: 'POST' }),
+
+  revokeInvite: (uid: string) => request<unknown>(KG_API, `/auth/invites/${encodeURIComponent(uid)}`, { method: 'DELETE' }),
+};
 
 // ── KG API ──────────────────────────────────────────────────────────────────
 
@@ -409,6 +498,16 @@ export const kg = {
     request<{ domain: string }>(KG_API, '/domains', json({ name, description })).then(r => r.domain),
 
   deleteDomain: (id: string) => request<unknown>(KG_API, d(id), { method: 'DELETE' }),
+
+  members: (id: string) => request<{ members: Member[] }>(KG_API, `${d(id)}/members`).then(r => r.members),
+
+  share: (id: string, email: string, role: Role) =>
+    request<{ members: Member[] }>(KG_API, `${d(id)}/members`, { method: 'PUT', body: JSON.stringify({ email, role }) })
+      .then(r => r.members),
+
+  unshare: (id: string, uid: string) =>
+    request<{ members: Member[] }>(KG_API, `${d(id)}/members/${encodeURIComponent(uid)}`, { method: 'DELETE' })
+      .then(r => r.members),
 
   graph: (id: string) => request<Graph>(KG_API, `/graph/${encodeURIComponent(id)}`),
 
@@ -509,8 +608,8 @@ export const hermes = {
 
   /** Speech → text on this machine (local Whisper). */
   async transcribe(audio: Blob, language?: string): Promise<{ text: string; language: string; seconds: number }> {
-    const res = await fetch(`${HERMES_API}/voice/transcribe${language ? `?language=${language}` : ''}`, {
-      method: 'POST', body: audio, headers: { 'Content-Type': audio.type || 'application/octet-stream', ...AUTH },
+    const res = await call(`${HERMES_API}/voice/transcribe${language ? `?language=${language}` : ''}`, {
+      method: 'POST', body: audio, headers: { 'Content-Type': audio.type || 'application/octet-stream' },
     }).catch(() => { throw new ApiError('Cannot reach Hermes (port 8090) for speech'); });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new ApiError(body.detail ?? `HTTP ${res.status}`);
@@ -519,8 +618,8 @@ export const hermes = {
 
   /** Text → spoken audio (local voices by default; markdown, URLs and uids left out). */
   async speak(text: string): Promise<Blob> {
-    const res = await fetch(`${HERMES_API}/voice/speak`, {
-      ...json({ text }), headers: { 'Content-Type': 'application/json', ...AUTH },
+    const res = await call(`${HERMES_API}/voice/speak`, {
+      ...json({ text }), headers: { 'Content-Type': 'application/json' },
     }).catch(() => { throw new ApiError('Cannot reach Hermes (port 8090) for speech'); });
     if (!res.ok) throw new ApiError(`Speech failed: HTTP ${res.status}`);
     return res.blob();
@@ -538,9 +637,9 @@ export const hermes = {
   ): Promise<void> {
     let res: Response;
     try {
-      res = await fetch(`${HERMES_API}${d(id)}/ask/stream`, {
+      res = await call(`${HERMES_API}${d(id)}/ask/stream`, {
         ...json({ message, history, max_iterations: maxIterations, voice }),
-        headers: { 'Content-Type': 'application/json', ...AUTH },
+        headers: { 'Content-Type': 'application/json' },
         signal,
       });
     } catch (e) {

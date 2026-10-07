@@ -18,17 +18,12 @@ from pydantic import BaseModel, Field
 
 import auth
 import voice
-from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, connect_kg, warm_up
+from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, warm_up
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Best effort: if the KG is not up yet, each /ask retries the connection.
-    try:
-        await asyncio.to_thread(connect_kg)
-    except Exception as e:
-        print(f"[Hermes] KG MCP not reachable at startup: {type(e).__name__}: {e}")
-    # Load the speech model in the background, so the first spoken question isn't the slow one.
+    # (Each domain's KG connection is made on its first question.) Load the speech model in the background, so the first spoken question isn't the slow one.
     warm = asyncio.create_task(asyncio.to_thread(voice.warm_up))
     yield
     warm.cancel()
@@ -37,13 +32,19 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Sovereign Hermes", description="Head Agent over the Sovereign KG", lifespan=lifespan)
 
 # Added before CORS, so CORS stays outermost and a 401 still carries CORS headers.
-app.add_middleware(auth.TokenAuth)
+app.add_middleware(auth.Auth)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=auth.ORIGINS,
+    allow_credentials=True,   # the session cookie
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _tools(domain: str) -> str:
+    """Editors get the Head's full tool set; viewers the read-only one."""
+    return "head" if auth.current.get().can(domain, "editor") else "readonly"
 
 
 class Turn(BaseModel):
@@ -68,7 +69,7 @@ async def ask(domain_name: str, request: AskRequest):
     try:
         answer = await asyncio.to_thread(
             ask_head, domain_name, request.message, history, max_iterations=request.max_iterations,
-            voice=request.voice,
+            voice=request.voice, tools=_tools(domain_name),
         )
     except DomainNotFound:
         raise HTTPException(status_code=404, detail=f"Domain '{domain_name}' does not exist")
@@ -92,6 +93,7 @@ async def ask_stream(domain_name: str, request: AskRequest):
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    tools = _tools(domain_name)
 
     def emit(event: dict | None) -> None:  # called from the agent's worker thread
         loop.call_soon_threadsafe(queue.put_nowait, event)
@@ -105,6 +107,7 @@ async def ask_stream(domain_name: str, request: AskRequest):
                 max_iterations=request.max_iterations,
                 on_event=emit,
                 voice=request.voice,
+                tools=tools,
             )
             emit({"type": "answer", "text": answer})
         except DomainNotFound:
@@ -135,6 +138,8 @@ _background: set[asyncio.Task] = set()
 async def voice_warm(domain: str | None = None):
     """Load the speech model, the Head's LLM and the domain's embedding model now (when a voice conversation
     starts), so the first spoken question isn't the slow one."""
+    if domain:
+        auth.require(domain)
     for job in (asyncio.to_thread(voice.warm_up), asyncio.to_thread(warm_up, domain)):
         task = asyncio.create_task(job)
         _background.add(task)

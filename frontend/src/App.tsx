@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Send, Shapes } from 'lucide-react';
-import { kg, research, type DomainDetail, type DomainSummary, type Fact, type Graph, type Ontology } from './lib/api';
+import { ApiError, auth, kg, onSignedOut, research, type DomainDetail, type DomainSummary, type Fact, type Graph, type Ontology, type User } from './lib/api';
 import { Sidebar } from './components/Sidebar';
+import { SignIn } from './components/SignIn';
 import { DomainHeader } from './components/DomainHeader';
 import { GraphView } from './components/GraphView';
 import { EntityPanel } from './components/EntityPanel';
@@ -33,10 +34,51 @@ const EMPTY_GRAPH: Graph = { entities: [], facts: [] };
 /** Active domain lives in the URL hash (#/quant_trading) so links and reloads keep it. */
 function readHash(): string | null {
   const id = decodeURIComponent(location.hash.replace(/^#\/?/, ''));
-  return id || null;
+  return id && !id.startsWith('invite/') ? id : null;
 }
 
+/** An invite link: #/invite/<code>. */
+function readInvite(): string | null {
+  const m = location.hash.match(/^#\/invite\/([\w-]+)/);
+  return m ? m[1] : null;
+}
+
+/** What this browser kept for the last account (chats, greetings) — not for the next one to see. */
+function clearLocal() {
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith('sovereign.chat.') || key.startsWith('sovereign.greeted')) localStorage.removeItem(key);
+  }
+}
+
+/** Signed in → the workspace; otherwise the sign-in page. */
 export default function App() {
+  const [me, setMe] = useState<User | null | undefined>(undefined);
+  const [invite, setInvite] = useState(readInvite);
+
+  useEffect(() => {
+    auth.me().then(r => setMe(r.user)).catch(e => setMe(e instanceof ApiError && e.status === 401 ? null : undefined));
+    const onHash = () => setInvite(readInvite());
+    addEventListener('hashchange', onHash);
+    const off = onSignedOut(() => { clearLocal(); setMe(null); });
+    return () => { off(); removeEventListener('hashchange', onHash); };
+  }, []);
+
+  if (me === undefined) return <div className="flex h-full items-center justify-center text-xs text-faint">Connecting…</div>;
+  if (me === null) return <SignIn key={invite ?? ''} invite={invite} onSignedIn={setMe} />;
+  return (
+    <Workspace
+      key={me.uid}
+      me={me}
+      onSignOut={async () => {
+        await auth.logout().catch(() => undefined);
+        clearLocal();
+        setMe(null);
+      }}
+    />
+  );
+}
+
+function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void> }) {
   const [domains, setDomains] = useState<DomainSummary[] | null>(null);
   const [active, setActive] = useState<string | null>(readHash);
   const [detail, setDetail] = useState<DomainDetail | null>(null);
@@ -158,7 +200,7 @@ export default function App() {
 
   return (
     <div className="flex h-full">
-      <Sidebar domains={domains ?? []} active={active} onSelect={select} onCreate={createDomain} />
+      <Sidebar domains={domains ?? []} active={active} onSelect={select} onCreate={createDomain} me={me} onSignOut={onSignOut} />
 
       <main className="flex min-w-0 flex-1 flex-col">
         {error && (
@@ -169,7 +211,7 @@ export default function App() {
 
         {active && detail && (
           <>
-            <DomainHeader detail={detail} onDelete={() => deleteDomain(active)} />
+            <DomainHeader detail={detail} me={me} onDelete={() => deleteDomain(active)} onLeft={loadDomains} />
 
             <div className="flex min-h-0 flex-1 max-lg:flex-col max-lg:overflow-y-auto">
               <section className="relative min-w-0 border-line lg:flex-1 lg:border-r max-lg:h-[48vh] max-lg:min-h-[300px] max-lg:shrink-0 max-lg:border-b">

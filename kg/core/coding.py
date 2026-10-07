@@ -2,7 +2,8 @@
 
 backends   openhands  OpenHands in Docker (integrations/openhands.py) — the default (CODER_BACKEND)
            builtin    the KG's own Coder agent (agents/coder.py): search → docs → probe → write → test → fix;
-                      also the fallback when OpenHands fails
+                      also the fallback when OpenHands fails, and the only one for domains not owned by an admin
+                      (OpenHands drives Docker on this machine)
            Measured (qwen3.6:35b, 2026-10-06, 2 needs × 2 backends): both 2/2. OpenHands 231 s / 228 s and picked
            the more standard sources (Yahoo chart API; Google News RSS); built-in 174 s / 98 s (Yahoo; an obscure
            "free news API"). Sensors are written rarely (slow path), so source quality wins over speed.
@@ -17,7 +18,7 @@ import time
 import uuid
 
 from agents import coder
-from core import sensors
+from core import accounts, sensors
 from core.database import ArcadeDB, now
 from domains.registry import load_domain
 from integrations import openhands
@@ -44,6 +45,8 @@ def submit(db: ArcadeDB, domain: str, need: str, backend: str | None = None) -> 
     backend = backend or DEFAULT_BACKEND
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of {BACKENDS}")
+    if backend == "openhands" and not accounts.trusted(domain):
+        backend = "builtin"  # OpenHands drives Docker on this machine: only for the operator's own domains
     j = {"id": f"code_{uuid.uuid4().hex[:10]}", "domain": domain, "need": need.strip(), "backend": backend,
          "status": "queued", "created_at": now(), "finished_at": None, "seconds": None, "sensor": None,
          "note": "", "error": "", "log": [], "result": None, "code": None}
@@ -66,10 +69,10 @@ async def _attempt(j: dict, backend: str, description: str) -> tuple[str, dict]:
     if not code:
         raise sensors.SensorError(j["note"] or "the Coder wrote no module")
     j["status"] = "testing"
-    meta, problems = sensors.inspect_code(code)
+    meta, problems = sensors.inspect_code(code, j["domain"])
     if problems:
         raise sensors.SensorError("; ".join(problems))
-    out = await sensors.run_code(code, sensors.examples(meta))
+    out = await sensors.run_code(code, sensors.examples(meta), j["domain"])
     if not out["ok"]:
         raise sensors.SensorError(f"sandbox test failed: {out['error']}")
     if not out["result"] or (isinstance(out["result"], dict) and not any(out["result"].values())):

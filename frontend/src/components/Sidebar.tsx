@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Plus } from 'lucide-react';
-import { hermes, kg, LANGFUSE_URL, research, type DomainSummary } from '../lib/api';
+import { CircleUser, Plus } from 'lucide-react';
+import { hermes, kg, LANGFUSE_URL, research, type DomainSummary, type User } from '../lib/api';
+import { AccountDialog } from './AccountDialog';
 import { NewDomainDialog } from './NewDomainDialog';
 
 interface Health {
@@ -49,13 +50,16 @@ function Status({ label, ok, hint }: { label: string; ok: boolean | null; hint: 
   );
 }
 
-export function Sidebar({ domains, active, onSelect, onCreate }: {
+export function Sidebar({ domains, active, onSelect, onCreate, me, onSignOut }: {
   domains: DomainSummary[];
   active: string | null;
   onSelect: (id: string) => void;
   onCreate: (name: string, description: string) => Promise<void>;
+  me: User;
+  onSignOut: () => Promise<void>;
 }) {
   const [creating, setCreating] = useState(false);
+  const [account, setAccount] = useState(false);
   const health = useHealth();
 
   return (
@@ -88,6 +92,7 @@ export function Sidebar({ domains, active, onSelect, onCreate }: {
             <div className="flex items-center gap-2">
               <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${d.ontology_generated ? 'bg-gold' : 'bg-faint pulse-dot'}`} />
               <span className="truncate font-mono text-[12px]">{d.id}</span>
+              {d.role !== 'owner' && <span className="ml-auto shrink-0 text-[9.5px] text-faint">{d.role}</span>}
             </div>
             {d.description && (
               <div className="mt-0.5 truncate pl-3.5 text-[10.5px] text-faint">{d.description}</div>
@@ -104,14 +109,25 @@ export function Sidebar({ domains, active, onSelect, onCreate }: {
         <Status label="Voice (local)" ok={health.hermes === null ? null : !!health.voice} hint={health.voice ?? 'speech runs in Hermes'} />
         <Status label="Research" ok={health.research} hint="research/ — http://localhost:8070" />
         <Status label="Search · Crawler" ok={health.search === null ? null : !!(health.search && health.crawler)} hint="docker compose up -d (searxng, crawl4ai)" />
-        {health.tracing && (
+        {health.tracing && me.admin && (
           <a href={LANGFUSE_URL} target="_blank" rel="noreferrer" className="block text-[11px] text-faint hover:text-ink" title="Agent traces — docker compose --profile observability up -d">
             LangFuse traces ↗
           </a>
         )}
       </div>
 
+      <button
+        onClick={() => setAccount(true)}
+        className="flex items-center gap-2 border-t border-line px-4 py-2.5 text-left text-dim hover:bg-panel-2 hover:text-ink"
+        title="Account: password, API tokens, invites, sign out"
+      >
+        <CircleUser size={14} className="shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-[11.5px]">{me.name || me.email}</span>
+        {me.admin && <span className="text-[9.5px] text-gold">admin</span>}
+      </button>
+
       {creating && <NewDomainDialog onCreate={onCreate} onClose={() => setCreating(false)} />}
+      {account && <AccountDialog user={me} onClose={() => setAccount(false)} onSignOut={onSignOut} />}
     </aside>
   );
 }

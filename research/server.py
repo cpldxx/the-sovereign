@@ -101,8 +101,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Sovereign Research", description="DeerFlow research → KG episodes", lifespan=lifespan)
 # Added before CORS, so CORS stays outermost and a 401 still carries CORS headers.
-app.add_middleware(auth.TokenAuth)
-app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(auth.Auth)
+app.add_middleware(CORSMiddleware, allow_origins=auth.ORIGINS, allow_credentials=True, allow_methods=["*"],
+                   allow_headers=["*"])
 
 
 class ResearchRequest(BaseModel):
@@ -116,7 +117,7 @@ async def research(domain: str, request: ResearchRequest):
     update: what's new since the last runs; mission: answer `question`."""
     if request.mode == "mission" and not request.question.strip():
         raise HTTPException(status_code=422, detail="A mission needs a question")
-    async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=10) as kg:
+    async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain), timeout=10) as kg:
         try:
             r = await kg.get(f"/domains/{domain}")
         except httpx.HTTPError:
@@ -157,12 +158,19 @@ async def search_now(q: str, time_range: Literal["day", "week", "month", "year"]
 
 @app.get("/jobs")
 async def list_jobs(domain: str | None = None, limit: int = Query(50, ge=1, le=500)):
-    return {"jobs": jobs.list(domain, limit), "queued": jobs.queue.qsize()}
+    """Research jobs — of one domain, or of every domain the caller can see."""
+    if domain:
+        auth.require(domain)
+        return {"jobs": jobs.list(domain, limit), "queued": jobs.queue.qsize()}
+    principal = auth.current.get()
+    return {"jobs": [j for j in jobs.list(None, 10_000) if principal.can(j["domain"])][:limit],
+            "queued": jobs.queue.qsize()}
 
 
 @app.get("/jobs/{job_id}")
 async def get_job(job_id: str):
-    if not (job := jobs.get(job_id)):
+    job = jobs.get(job_id)
+    if not job or not auth.current.get().can(job["domain"]):
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job
 

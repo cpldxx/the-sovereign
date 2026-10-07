@@ -33,9 +33,7 @@ class SensorCode(BaseModel):
         return v
 
 
-SYSTEM = f"""You are the Sovereign's Coder. You write SENSORS: small Python modules that read live data for a need.
-
-{sensors.contract()}
+SYSTEM = """You are the Sovereign's Coder. You write SENSORS: small Python modules that read live data for a need.
 
 How to work:
 1. Find a public data source for the need: a documented API or feed (JSON, CSV, RSS/Atom) meant for programmatic
@@ -49,12 +47,19 @@ Never invent endpoints or field names: only use what you saw in documentation or
 
 @dataclass
 class Deps:
+    domain: str
     log: list[str] = field(default_factory=list)  # shared with the request, so progress shows while it works
     last_ok_code: str | None = None
 
 
 _agent = Agent(MODEL, name="coder", model_settings=model_settings(), system_prompt=SYSTEM, output_type=SensorCode,
                deps_type=Deps, retries=3)
+
+
+@_agent.system_prompt
+def _contract(ctx: RunContext[Deps]) -> str:
+    """The module contract — with the API keys this domain's sensors may use."""
+    return sensors.contract(ctx.deps.domain)
 
 
 @_agent.tool
@@ -106,11 +111,11 @@ async def http_get(ctx: RunContext[Deps], url: str) -> str:
 @_agent.tool
 async def test_sensor(ctx: RunContext[Deps], code: str) -> str:
     """Check the module against the rules and run it in the sandbox with its PARAMS examples."""
-    meta, problems = sensors.inspect_code(code)
+    meta, problems = sensors.inspect_code(code, ctx.deps.domain)
     if problems:
         ctx.deps.log.append(f"test: rejected ({'; '.join(problems)[:200]})")
         return "Rule problems: " + "; ".join(problems)
-    out = await sensors.run_code(code, sensors.examples(meta))
+    out = await sensors.run_code(code, sensors.examples(meta), ctx.deps.domain)
     ctx.deps.log.append(f"test: {'ok' if out['ok'] else out['error'][:200]}")
     if out["ok"]:
         ctx.deps.last_ok_code = code
@@ -120,7 +125,7 @@ async def test_sensor(ctx: RunContext[Deps], code: str) -> str:
 
 async def write_sensor(need: str, domain: str, description: str, log: list[str]) -> SensorCode:
     """The Coder's answer; its steps are appended to `log` as they happen. Never raises."""
-    deps = Deps(log=log)
+    deps = Deps(domain=domain, log=log)
     prompt = f"Domain: {domain} — {description}\nNEED: {need}"
     try:
         out = (await _agent.run(prompt, deps=deps, usage_limits=UsageLimits(request_limit=REQUEST_LIMIT))).output

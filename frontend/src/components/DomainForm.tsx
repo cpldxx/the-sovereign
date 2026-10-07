@@ -40,7 +40,7 @@ export function DomainForm({ onCreate, onBusy }: {
           placeholder="Quant Trading"
           className="mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-gold/60"
         />
-        {id && <span className="mt-1 block font-mono text-[10.5px] text-faint">id: {id}</span>}
+        {id && <span className="mt-1 block font-mono text-[10.5px] text-faint">id: {id} (+ a short suffix if another account has it)</span>}
       </label>
       <label className="block">
         <span className="text-[11px] text-dim">What is this domain about?</span>

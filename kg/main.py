@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.actions import router as actions_router
+from api.auth import router as auth_router
 from api.domains import router as domains_router
 from api.entities import router as entities_router
 from api import mcp as kg_mcp
@@ -19,7 +20,7 @@ from api.query import router as query_router
 from api.reports import router as reports_router
 from api.reviews import router as reviews_router
 from api.sensors import router as sensors_router
-from core import auth, playbooks, tracing
+from core import accounts, auth, playbooks, tracing
 from core.database import get_db
 
 
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     if tracing.setup():
         print("[KG] tracing to LangFuse", flush=True)
     app.state.db = kg_mcp.db = await get_db()
+    await accounts.setup(app.state.db)
     # Live playbook triggers: sensors checked around the clock (SENSOR_WATCH=off disables it).
     watch = asyncio.create_task(playbooks.watch_loop(app.state.db)) if playbooks.WATCH else None
     # The MCP apps' own lifespans never run (only their routes are served), so the host enters their
@@ -49,20 +51,23 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="The Sovereign",
-    description="Multi-tenant AI workspace with domain-specific agents",
+    description="Multi-tenant AI workspace with domain-specific agents. Sign in at /auth/login (cookie) or send "
+                "an API token as Authorization: Bearer.",
     version="0.1.0",
     lifespan=lifespan,
 )
 
 # Added before CORS, so CORS stays outermost and a 401 still carries CORS headers.
-app.add_middleware(auth.TokenAuth)
+app.add_middleware(auth.Auth)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=auth.ORIGINS,
+    allow_credentials=True,   # the session cookie
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(domains_router)
 app.include_router(pipeline_router)
 app.include_router(graph_router)
