@@ -23,21 +23,23 @@ URLS = {"kg": "http://localhost:8080", "hermes": "http://localhost:8090", "resea
 
 def _up(url: str) -> bool:
     try:
-        return httpx.get(f"{url}/health", timeout=3).status_code == 200
+        return httpx.get(f"{url}/health", timeout=30).status_code == 200
     except httpx.HTTPError:
         return False
 
 
 def _arcadedb() -> bool:
+    from core.database import DB_PASS, DB_URL, DB_USER
+
     try:
-        return httpx.get("http://localhost:2480/api/v1/ready", timeout=3).status_code == 204
+        return httpx.get(f"{DB_URL}/api/v1/ready", auth=(DB_USER, DB_PASS), timeout=30).status_code == 204
     except httpx.HTTPError:
         return False
 
 
 def _docker() -> bool:
     try:
-        return subprocess.run(["docker", "info"], capture_output=True, timeout=10).returncode == 0
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=90).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
