@@ -95,3 +95,21 @@ def test_samples_stay_valid_json():
     assert json.loads(json.dumps(sensors.shrink(big)))["items"][0]["title"] == "x" * 200
     cut = '{"source": "x", "items": [{"title": "a", "link": "b"}, {"title": "c'
     assert sensors.sample_of({"sample": cut}) == {"source": None, "items": None}
+
+
+def test_model_read_values_must_be_quoted_from_the_page():
+    page = "London weather now\nTemperature 18°C, feels like 16°C\nHumidity 72%\nUpdated 14:05"
+    schema = [{"name": "temperature", "type": "number", "required": True},
+              {"name": "humidity", "type": "number", "required": False},
+              {"name": "conditions", "type": "string", "required": False}]
+    values = {"temperature": 18, "humidity": 75, "conditions": "Sunny"}
+    evidence = {"temperature": "Temperature 18°C", "humidity": "Humidity 72%", "conditions": "sunny skies"}
+    # 18 is in its quote and the quote is on the page; 75 isn't in its quote; "sunny skies" isn't on the page.
+    assert sensors.verified(values, evidence, page, schema) == {"temperature": 18.0}
+    assert sensors.verified({"temperature": 18}, {}, page, schema) == {}                # no quote, no value
+
+
+def test_excerpt_keeps_the_passages_about_the_parameters():
+    text = "nav " * 3000 + "Seoul 21°C clear" + " footer" * 3000
+    part = sensors.excerpt(text, {"city": "Seoul"})
+    assert "Seoul 21°C clear" in part and len(part) <= sensors.EXCERPT

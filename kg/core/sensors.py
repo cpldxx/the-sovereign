@@ -362,7 +362,10 @@ def score(sensor: dict) -> float:
 
 
 def _order(members: list[dict]) -> list[dict]:
-    return sorted(members, key=lambda m: (-score(m), m.get("avg_seconds") or 99.0))
+    """Best first: a live search only when nothing else answers; then recent success rate, parsers before pages
+    read by the model, speed."""
+    return sorted(members, key=lambda m: (m.get("kind") == "search", -score(m), m.get("kind") == "extract",
+                                          m.get("avg_seconds") or 99.0))
 
 
 def _params_key(args: dict) -> str:
@@ -544,6 +547,122 @@ def tolerance(member: dict) -> float:
     return AGREE if spread is None else min(max(4 * spread, 0.002), 0.05)
 
 
+# ── Reading a page directly (tier 2) and searching live (tier 3) ────────────────────────────────────────────────
+# A parser is fast but brittle; when a source has none (the Scout couldn't write one) or every parser failed, the
+# model reads the rendered page itself. It must quote, for every value, the text it read it from — and code checks
+# that the quote is on the page and contains that number, so a value can't be made up.
+
+EXCERPT = 12_000
+
+
+def excerpt(text: str, args: dict) -> str:
+    """The part of a page worth reading: its head plus the passages around the parameter values (a city, a pair)."""
+    parts = [text[:6000]]
+    lowered = text.lower()
+    for value in args.values():
+        at = 0
+        for _ in range(3):
+            i = lowered.find(str(value).lower(), at)
+            if i < 0:
+                break
+            parts.append(text[max(0, i - 1200):i + 1800])
+            at = i + 1800
+    joined = "\n…\n".join(dict.fromkeys(parts))
+    return joined[:EXCERPT]
+
+
+def _numbers(text: str) -> list[float]:
+    found = []
+    for raw in re.findall(r"-?\d[\d,]*\.?\d*", text.replace("\u2212", "-")):
+        try:
+            found.append(float(raw.replace(",", "")))
+        except ValueError:
+            continue
+    return found
+
+
+def verified(values: dict, evidence: dict, text: str, schema: list[dict]) -> dict:
+    """The extracted values that hold up: each quote is on the page, and a number is in its quote."""
+    norm = lambda t: re.sub(r"\s+", " ", str(t)).strip().lower()  # noqa: E731
+    page = norm(text)
+    kinds = {f["name"]: f.get("type") for f in schema}
+    out = {}
+    for name, value in values.items():
+        quote = evidence.get(name)
+        if name not in kinds or value in (None, "") or not quote or norm(quote) not in page:
+            continue
+        if kinds[name] == "number":
+            number = _number(value)
+            if not isinstance(number, (int, float)) or not any(
+                    abs(n - number) <= 1e-6 * max(1.0, abs(number)) for n in _numbers(str(quote))):
+                continue
+            value = number
+        out[name] = value
+    return out
+
+
+def shape_text(description: str, schema: list[dict], params: dict) -> str:
+    lines = [f"description: {description}", "params: " + ", ".join(params), "fields:"]
+    lines += [f"  - {f['name']} ({f.get('type')}){' KEY' if f.get('required') else ''}" for f in schema]
+    return "\n".join(lines)
+
+
+async def extract_page(url: str, args: dict, schema: list[dict], description: str,
+                       domain: str | None = None) -> dict:
+    """One page read by the model, every value backed by its quote, the result in the group's shape."""
+    from agents import scout as agent  # noqa: PLC0415 — the agents import this module
+
+    page = await render(fill(url, args), domain)
+    if page.get("error"):
+        return {"ok": False, "error": f"RuntimeError: page 'main' could not be opened: {page['error']}"}
+    text = page["text"]
+    found = await agent.extract(shape_text(description, schema, args), args, excerpt(text, args))
+    if not found.found:
+        return {"ok": False, "error": "the page doesn't show the value for these parameters"}
+    values = verified(found.values, found.evidence, text, schema)
+    data, problem = conform({**values, "source": fill(url, args)}, schema)
+    if data is None:
+        return {"ok": False, "error": f"no verified value on the page ({problem})"}
+    return {"ok": True, "result": data}
+
+
+async def search_answer(need: str, args: dict, schema: list[dict], description: str, key: str | None,
+                        domain: str | None = None, pages: int = 6) -> dict:
+    """The last resort when no source answers: search the web now, read the top pages directly, and answer with
+    what several of them agree on (or the one that answered, marked as such)."""
+    query = f"{' '.join(str(v) for v in args.values())} {need}".strip()
+    try:
+        async with httpx.AsyncClient(timeout=90, headers=auth.headers(domain)) as client:
+            r = await client.get(f"{RESEARCH_URL}/search", params={"q": query, "limit": 10})
+        hits = r.json().get("results", [])
+    except (httpx.HTTPError, ValueError) as e:
+        return {"ok": False, "error": f"live search unavailable ({type(e).__name__})"}
+    urls, hosts = [], set()
+    for h in hits:
+        host = urlsplit(h.get("url", "")).netloc
+        if host and host not in hosts:
+            hosts.add(host)
+            urls.append(h["url"].replace("{", "%7B").replace("}", "%7D"))
+    sem = asyncio.Semaphore(3)
+
+    async def one(url):
+        async with sem:
+            return url, await extract_page(url, {}, schema, f"{description} — for {json.dumps(args)}", domain)
+
+    answers = [(u, o["result"]) for u, o in await asyncio.gather(*(one(u) for u in urls[:pages])) if o["ok"]]
+    if not answers:
+        return {"ok": False, "error": f"no page among the top {min(len(urls), pages)} search results showed it"}
+    values = [a[1].get(key) for a in answers] if key else []
+    if key and all(isinstance(v, (int, float)) for v in values) and len(values) >= 3:
+        odd = outliers(values, floor=AGREE)
+        answers = [a for a, o in zip(answers, odd) if not o]
+    url, result = answers[0]
+    agreeing = [a for a in answers if not key or agree(a[1].get(key), result.get(key))]
+    return {"ok": True, "result": result, "tier": "search", "source": urlsplit(url).netloc,
+            "confirmed_by": [urlsplit(a[0]).netloc for a in agreeing[1:]],
+            "confidence": "agreed by several pages" if len(agreeing) > 1 else "one page only"}
+
+
 # ── Stored sources ───────────────────────────────────────────────────────────────────────────────────────────────
 
 async def save(db: ArcadeDB, domain: str, code: str, need: str, author: str, sample: dict, *, name: str | None = None,
@@ -569,17 +688,42 @@ async def save(db: ArcadeDB, domain: str, code: str, need: str, author: str, sam
     return await kgdb.insert_doc(db, domain, "Sensor", doc, SENSOR_JSON)
 
 
+async def save_extract(db: ArcadeDB, domain: str, url: str, need: str, sample: dict, *, name: str, group: str,
+                       description: str, params: dict, key_fields: list[str], schema: list[dict],
+                       kind: str = "extract") -> dict:
+    """Store a source without a parser: a page the model reads directly (kind "extract", tier 2) — or, when nothing
+    could be found yet, a live search (kind "search", tier 3)."""
+    doc = {"name": name, "group": group, "description": description.strip(), "params": params, "code": None,
+           "need": need, "author": "scout", "status": "active", "sample": json.dumps(shrink(sample), default=str)[:3000],
+           "tested_at": now(), "last_run_at": None, "last_ok": True, "kind": kind,
+           "host": urlsplit(url).netloc.lower().removeprefix("www.") if url else "live search", "url": url,
+           "key_fields": key_fields,
+           "schema": schema, "history": "1", "avg_seconds": None, "last_error": None, "repairs": 0, "refusals": 0,
+           "cooldown_until": None}
+    if existing := await get_sensor(db, domain, name):
+        await kgdb.update_doc(db, domain, "Sensor", existing["uid"], doc, SENSOR_JSON)
+        return {**existing, **doc}
+    return await kgdb.insert_doc(db, domain, "Sensor", doc, SENSOR_JSON)
+
+
 async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict, schema: list[dict] | None = None,
                       doubted: str = "") -> dict:
     """One source, its answer checked against the group's fields, and its outcome recorded: success history,
     speed, last error, which parameters it failed for, and — when the site refused us — a rest that doubles with
     every refusal in a row (6 h … 48 h). `doubted`: the answer came back but the other sources outvoted it."""
     started = time.monotonic()
-    out = await run_code(member["code"], args, domain)
+    if member.get("kind") == "extract":   # no parser: the model reads the page (tier 2)
+        out = await extract_page(url_of(member), args, schema or schema_of(member), member["description"], domain)
+    elif member.get("kind") == "search":  # no source at all yet: a live search each time (tier 3)
+        keys = member.get("key_fields") or []
+        out = await search_answer(member.get("need") or member["description"], args, schema or schema_of(member),
+                                  member["description"], keys[0] if keys else None, domain)
+    else:
+        out = await run_code(member["code"], args, domain)
     seconds = round(time.monotonic() - started, 2)
     if out["ok"] and schema is not None:
         data, problem = conform(out["result"], schema)
-        out = {"ok": True, "result": data} if data is not None else {"ok": False, "error": problem}
+        out = {**out, "result": data} if data is not None else {"ok": False, "error": problem}
     if doubted:
         out = {"ok": False, "error": doubted}
     avg = member.get("avg_seconds")
@@ -645,10 +789,6 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
     tol = tolerance(sources[0])
     answers, failed = [], []
     queue = _route(sources, args)
-    if not queue:
-        return {"sensor": name, "params": args, "read_at": now(), "ok": False,
-                "error": "every source of this sensor is resting after refusing automated reads (robots.txt)"}
-
     def wanted() -> int:
         """How many answers are needed: 1; 2 to verify or after a surprising move; 3 when those two disagree."""
         if not answers or not field:
@@ -675,8 +815,15 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
         else:
             failed.append({"source": host_of(member) or member["name"], "error": str(out.get("error"))[:200]})
     if not answers:
+        # Tier 3: no source answered — search the web now and read the top pages (slower, marked as such).
+        need = sources[0].get("need") or sources[0]["description"]
+        live = await search_answer(need, args, schema, sources[0]["description"], keys[0] if keys else None, domain)
+        why = "; ".join(f"{f['source']}: {f['error']}" for f in failed)[:1200]
+        if live["ok"]:
+            return {"sensor": name, "params": args, "read_at": now(), **live,
+                    "failed_sources": failed, "note": "every stored source failed; answered from a live search"}
         return {"sensor": name, "params": args, "read_at": now(), "ok": False,
-                "error": "every source failed — " + "; ".join(f"{f['source']}: {f['error']}" for f in failed)[:1500]}
+                "error": f"every source failed — {why}; live search: {live['error']}"}
 
     chosen = answers[0]
     if field and len(answers) == 3:

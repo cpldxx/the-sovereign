@@ -8,7 +8,7 @@ cross-check between them.
     1 plan       the need → the group's shape (name, parameters, fields; key fields are what sources are compared on).
                  Expanding an existing sensor keeps its shape.
     2 collect    real URLs from web search hits that show the example values, made into templates (…/quote/{symbol}),
-                 plus the Scout's own list of 20-30 APIs and pages; while fewer than SCOUT_MAX_SOURCES answer, up to
+                 plus the Scout's own list of 20-30 APIs and pages; while too few are reachable, up to
                  ROUNDS rounds, each asking for sites not tried yet (guessed URLs are mostly 404s and landing pages)
                  Round one starts with the catalog (core/catalog.py): templates that worked for similar needs before,
                  in any domain; sites that refused us lately are skipped
@@ -16,14 +16,19 @@ cross-check between them.
                  least 1 %) is dropped before any parser is written
     3 reach      each candidate with the example parameters: pages opened in a browser (robots.txt, no bot-protection
                  workarounds), APIs checked against robots.txt and probed from the sandbox — blocked ones are recorded
-    4 parse      for the reachable ones (APIs first, up to SCOUT_MAX_SOURCES): a parser written from what the source
-                 actually returned, tested in the sandbox on the example AND a second value (a parser fitted to the
-                 NVDA page broke on AMD), fixed once
+    4 parse      every reachable one in turn (catalog, APIs first) until SCOUT_TARGET work or SCOUT_BUDGET_MINUTES
+                 pass: the model first reads it — the key value must be there, quoted from the page text (checked);
+                 then a parser anchored on that text, tested on the example AND a second value (a parser fitted to
+                 the NVDA page broke on AMD), fixed once; failing that, the page is kept as a source the model reads
+                 each time (tier 2), if it also reads the second value. A weather search failed outright with a fixed
+                 cap of 12 parsers, required extras (humidity) and unit-named fields (°F pages for a "celsius" field)
     5 agree      the main key's values across every working source (and the group's current ones) must sit within 4
                  robust spreads (median absolute deviation) of their median — a source that read another number (a
                  previous close) stands out; spread-out values (counts, headlines) aren't voted on. Thresholds come
                  from the data: fixed ones let a previous close pass (3 %) or rejected every good source (10 %)
-    6 keep       every source left joins the group; reading it falls back from one to the next
+    6 keep       every source left joins the group; reading it falls back from one to the next — and, when none
+                 answers, to a live search (tier 3). A need nothing was found for still gets a sensor: a live-search
+                 source, rescouted within hours
 
 The nightly health check reads every source once; a group with fewer than MIN_WORKING working sources is scouted again
 (at most every RESCOUT_DAYS).
@@ -46,8 +51,9 @@ from core import database as kgdb
 from core.database import ArcadeDB, now
 
 MAX_CANDIDATES = 30   # per round
-ROUNDS = 3            # rounds of candidates while fewer than SCOUT_MAX_SOURCES answer
-MAX_SOURCES = int(os.getenv("SCOUT_MAX_SOURCES", "12"))   # parsers written per run (each is one or two LLM calls)
+ROUNDS = 3            # rounds of candidates while too few are reachable
+TARGET = int(os.getenv("SCOUT_TARGET", "4"))                    # working sources a run looks for …
+BUDGET = float(os.getenv("SCOUT_BUDGET_MINUTES", "30")) * 60   # … within this long (then it keeps what it has)
 MIN_WORKING = 2
 RESCOUT_DAYS = 7
 DEAD_RESCOUT_HOURS = 6   # a sensor with no working source is searched again after this long
@@ -117,7 +123,8 @@ async def _search(need: str, args: dict, args2: dict | None, domain: str) -> tup
     """Web search hits for the Scout's prompt, and page candidates made from the hits' real URLs (a guessed URL
     template is the commonest failure: 404s and landing pages)."""
     values = " ".join(str(v) for v in args.values())
-    queries = [f"{values} {need}", f"{values} live", f"{values} today", f"{need} free API"]
+    queries = [f"{values} {need}", f"{values} live", f"{values} today", f"{values} current", f"{need} {values} now",
+               f"{need} free API"]
     if args2:
         queries.append(f"{' '.join(str(v) for v in args2.values())} {need}")
     hits: dict[str, str] = {}
@@ -191,14 +198,14 @@ async def _reach(c: dict, args: dict, domain: str, reference: float | None = Non
 
 
 async def _parse(c: dict, shape: str, fields: list[dict], args: dict, domain: str, log: list[str],
-                 args2: dict | None = None) -> None:
+                 args2: dict | None = None, hint: str = "") -> None:
     """Write and test a parser for a reachable candidate (one fix with the test's error). With `args2` (other example
     values) it must work for those too — a parser fitted to one page (one ticker) breaks on the next."""
     sample = c.pop("sample", "")
     problem = code = ""
     for _ in range(2):
         try:
-            answer = await agent.parser(shape, c["kind"], c["url"], sample, problem, code)
+            answer = await agent.parser(shape, c["kind"], c["url"], sample, problem, code, hint)
         except Exception as e:
             c["outcome"] = f"parser failed: {type(e).__name__}"
             return
@@ -230,6 +237,34 @@ async def _parse(c: dict, shape: str, fields: list[dict], args: dict, domain: st
     log.append(f"failed: {c['host']} ({problem[:80]})")
 
 
+async def _try(c: dict, shape: str, fields: list[dict], schema0: list[dict], description: str, keys: list[str],
+               args: dict, args2: dict | None, domain: str, log: list[str]) -> None:
+    """One reachable candidate, as far as it goes: (1) the model reads it — is the key value really there, and in
+    which text? (2) a parser anchored on that text, tested on both example values; (3) failing that, the page is kept
+    as a source the model reads each time, if it also reads the second example value. Never a guess: every value
+    read by the model is checked against the text it quoted."""
+    text = c.get("sample", "")
+    found = await agent.extract(sensors.shape_text(description, schema0, args), args, sensors.excerpt(text, args))
+    values = sensors.verified(found.values, found.evidence, text, schema0) if found.found else {}
+    if not any(values.get(k) not in (None, "") for k in keys):
+        c.pop("sample", None)
+        c["outcome"] = "no data: reading the page found no verified value"
+        return
+    hint = "; ".join(f"{k}: {found.evidence[k]!r}" for k in values if k in found.evidence)[:600]
+    await _parse(c, shape, fields, args, domain, log, args2, hint)
+    if c["outcome"] == "works":
+        return
+    parser_problem = c["outcome"]
+    second = await sensors.extract_page(c["url"], args2 or args, schema0, description, domain) if args2 else \
+        {"ok": True, "result": values}
+    if second["ok"]:
+        c.update(outcome="works", mode="extract", result={**values, "source": sensors.fill(c["url"], args)},
+                 value={k: _brief(values.get(k)) for k in keys})
+        log.append(f"works (read directly; {parser_problem[:60]}): {c['host']} → {c['value']}")
+    else:
+        c["outcome"] = f"{parser_problem[:80]}; reading it directly: {second['error'][:60]}"
+
+
 def _brief(v):
     """A key value as shown in the job: numbers as they are, lists by their length."""
     if isinstance(v, (int, float)):
@@ -246,7 +281,7 @@ def _agreement(works: list[dict], current: list[dict], keys: list[str], others: 
     -0.30 … -0.74 %). Earlier fixed tolerances let a previous close pass (3 %) or rejected every good source (10 %)."""
     number = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)  # noqa: E731
     for field, strict in [(k, True) for k in keys[:1]] + [(f, False) for f in others]:
-        voters = [c for c in works if c["outcome"] == "works" and number(c["result"].get(field))]
+        voters = [c for c in works if c["outcome"] == "works" and number((c.get("result") or {}).get(field))]
         values = [c["result"][field] for c in voters] + [r[field] for r in current if number(r.get(field))]
         if len(values) < 3:
             continue
@@ -355,24 +390,32 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
         await asyncio.gather(*(reach(c) for c in new[:MAX_CANDIDATES]))
         reachable = [c for c in cands if c["outcome"] == "reachable"]
         log.append(f"round {round_ + 1}: {len(new)} candidates, {len(reachable)} reachable so far")
-        if len(reachable) >= MAX_SOURCES:
+        if len(reachable) >= 3 * TARGET:
             break
     reachable = [c for c in cands if c["outcome"] == "reachable"]
 
     j["status"] = "coding"
     # Templates that worked before first, then APIs (fast), then by speed.
     reachable.sort(key=lambda c: (c.get("from") != "catalog", c["kind"] != "api", c["seconds"]))
-    for c in reachable[MAX_SOURCES:]:
-        c["outcome"] = "reachable (not tried: SCOUT_MAX_SOURCES)"
-    for c in reachable[:MAX_SOURCES]:
-        await _parse(c, shape, fields, args, domain, log, args2)
+    description = existing[0]["description"] if existing else plan.description
+    # The fields as a page is read against (types settle from the first answers, below).
+    schema0 = [{"name": f["name"], "type": "number" if f["numeric"] else "string",
+                "required": bool(f["key"] or f.get("required"))} for f in fields]
+    deadline, working = time.monotonic() + BUDGET, 0
+    for c in reachable:
+        if working >= TARGET or time.monotonic() > deadline:
+            c["outcome"] = "reachable (not tried: enough sources or out of time)"
+            continue
+        await _try(c, shape, fields, schema0, description, keys, args, args2, domain, log)
+        working += c["outcome"] == "works"
 
     j["status"] = "testing"
     _agreement(cands, current, [k for k in keys if any(f["name"] == k and f["numeric"] for f in fields)],
                others=[f["name"] for f in fields if f["numeric"] and not f["key"]])
 
     # The group's fields as every source must answer them (checked with pydantic on every reading).
-    sample = next((c["result"] for c in cands if c["outcome"] == "works"), {})
+    sample = next((c["result"] for c in cands if c["outcome"] == "works" and c.get("mode") != "extract"), None) or \
+        next((c["result"] for c in cands if c["outcome"] == "works"), {})
     schema = [{"name": f["name"], "required": bool(f["key"] or f.get("required")),
                "type": "number" if f["numeric"] else sensors._kind_of(sample.get(f["name"], ""))} for f in fields]
     kept = []
@@ -382,9 +425,12 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
             continue
         member = c.get("repair") or _slug(f"{name}_{c['host']}")
         try:
-            await sensors.save(db, domain, c["code"], need, "scout", c["result"], name=member, group=name,
-                               description=existing[0]["description"] if existing else plan.description,
-                               key_fields=keys, url=c["url"], schema=schema)
+            if c.get("mode") == "extract":
+                await sensors.save_extract(db, domain, c["url"], need, c["result"], name=member, group=name,
+                                           description=description, params=params, key_fields=keys, schema=schema)
+            else:
+                await sensors.save(db, domain, c["code"], need, "scout", c["result"], name=member, group=name,
+                                   description=description, key_fields=keys, url=c["url"], schema=schema)
             kept.append(member)
         except sensors.SensorError as e:
             c["outcome"] = f"not saved: {e}"[:120]
@@ -398,7 +444,14 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
     j["note"] = (f"{len(kept)} new source(s) of {len(cands)} candidates for {name}"
                  + (f" (it had {len(existing)})" if existing else ""))
     if not kept and not existing:
-        raise sensors.SensorError(f"no candidate source worked ({len(reachable)} of {len(cands)} reachable)")
+        # Nothing stable found: the sensor still answers — from a live search each time (tier 3) — and the nightly
+        # check scouts it again within hours.
+        await sensors.save_extract(db, domain, "", need, {}, name=_slug(f"{name}_live_search"), group=name,
+                                   description=description, params=params, key_fields=keys, schema=schema,
+                                   kind="search")
+        j.update(sensor=name, sources=0)
+        j["note"] = (f"no stable source among {len(cands)} candidates ({len(reachable)} reachable): {name} answers "
+                     f"from a live search until a rescout finds one")
 
 
 async def health_check(db: ArcadeDB, domain: str) -> dict:
@@ -418,7 +471,7 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
                 resting += 1
                 continue
             out = await sensors._run_member(db, domain, m, args, schema)
-            working += out["ok"]
+            working += out["ok"] and m.get("kind") != "search"   # a live search is a stopgap, not a source
             await catalog.record_source(m.get("url") or "", list(group["params"]), out["ok"])
             if out["ok"] and key and isinstance(v := (out["result"] or {}).get(key), (int, float)):
                 values.append(v)

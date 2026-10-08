@@ -8,6 +8,9 @@
 #   ./sovereign status                     what is up
 #   ./sovereign logs <kg|hermes|research|frontend>
 #   ./sovereign autostart on|off           start at login (macOS LaunchAgent; Docker Desktop must start at login too)
+#   ./sovereign test [all]                 the test suite (all: also the slow ones — the local model, the internet)
+#   ./sovereign selfcheck                  the security self-check on the running system
+#   ./sovereign hooks                      install the git hooks (no secrets / data / co-author lines in commits)
 #
 # Logs: .logs/<service>.log · PIDs: .run/<service>.pid
 set -euo pipefail
@@ -75,6 +78,14 @@ case "${1:-}" in
   restart) for s in "${SERVICES[@]}"; do stop_service "$s"; done; sleep 2; start "${2:-}" ;;
   status) status ;;
   logs) tail -n 100 -f "$LOGS/${2:?which service: kg | hermes | research | frontend}.log" ;;
+  test)
+    if [[ "${2:-}" == "all" ]]; then (cd "$ROOT/kg" && uv run pytest -q); else (cd "$ROOT/kg" && uv run pytest -q -m "not slow"); fi ;;
+  selfcheck)
+    token=$(grep -h '^SOVEREIGN_TOKEN=' "$ROOT/kg/.env" | cut -d= -f2-)
+    curl -s -X POST -H "Authorization: Bearer $token" "http://localhost:8080/system/selfcheck?alert=false" \
+      | python3 -c "import json,sys; r=json.load(sys.stdin); print('OK' if r['ok'] else 'FAILED'); [print(f'  {k:9} {v[\"status\"]:12} {v[\"detail\"]}') for k,v in r['checks'].items()]" ;;
+  hooks)
+    git -C "$ROOT" config core.hooksPath scripts/git-hooks && echo "git hooks installed (scripts/git-hooks)" ;;
   autostart)
     case "${2:-}" in
       on)
@@ -102,5 +113,5 @@ EOF
         echo "autostart removed" ;;
       *) echo "usage: ./sovereign autostart on|off"; exit 1 ;;
     esac ;;
-  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

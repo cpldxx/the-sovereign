@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Sovereign pre-commit guard: no secrets, local config or data files in a commit, no build leftovers — and the fast
+# tests pass when KG code changed. Installed by `./sovereign hooks`.
+set -uo pipefail
+root="$(git rev-parse --show-toplevel)"
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+fail() { echo "✗ pre-commit: $1" >&2; exit 1; }
+
+if bad="$(grep -E '(^|/)\.env$|\.env\.local$|\.pem$|(^|/)id_[a-z0-9]+$|\.scout-catalog\.json$|research/\.deer-flow/|\.tsbuildinfo$|(^|/)\.hermes-home/' <<<"$staged")"; then
+  fail "local config, secrets or data files staged:
+$bad"
+fi
+if bad="$(grep -E '^frontend/src/.*\.js$' <<<"$staged")"; then
+  fail "compiled .js next to the .tsx sources (from 'tsc -b'; Vite would serve them) — delete them:
+$bad"
+fi
+
+diff="$(git diff --cached -U0)"
+token="$(grep -h '^SOVEREIGN_TOKEN=' "$root/kg/.env" 2>/dev/null | cut -d= -f2- || true)"
+if [ -n "$token" ] && grep -qF -- "$token" <<<"$diff"; then
+  fail "the SOVEREIGN_TOKEN value is in the staged changes"
+fi
+if bad="$(grep -nE '^\+.*(sk-ant-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY|tvly-[A-Za-z0-9]{20,}|xox[bp]-[A-Za-z0-9-]{20,})' <<<"$diff")"; then
+  fail "something that looks like a secret key is in the staged changes:
+$bad"
+fi
+
+if grep -qE '^kg/' <<<"$staged"; then
+  log="$(mktemp)"
+  if ! (cd "$root/kg" && uv run pytest -q -p no:cacheprovider -m "not live and not slow and not sandbox and not db" >"$log" 2>&1); then
+    tail -25 "$log" >&2
+    fail "KG tests failed"
+  fi
+  rm -f "$log"
+fi
+exit 0

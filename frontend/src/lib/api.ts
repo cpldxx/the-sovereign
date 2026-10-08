@@ -381,7 +381,7 @@ export interface Sensor {
 export interface SensorSource {
   name: string;
   host: string;
-  kind: 'api' | 'page';
+  kind: 'api' | 'page' | 'extract' | 'search';  // extract: read by the model; search: live search (no source yet)
   last_ok: boolean | null;
   score: number;
   avg_seconds: number | null;

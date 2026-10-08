@@ -7,6 +7,7 @@ Three focused calls (core/scout.py runs the probing, testing and cross-checking 
 """
 
 import asyncio
+import json
 import re
 from typing import Literal
 
@@ -83,8 +84,11 @@ PLAN = """You design a live-data SENSOR for a need: its name, parameters and out
 (APIs and web pages) will each implement exactly this shape, so keep it to what most sources show.
 - params: what varies between readings (e.g. symbol), each with a realistic example value and a different
   other_example (a parser that only works for one value is useless).
-- fields: the top-level output keys. Mark numbers numeric=true. Mark key=true on the value the need is about FIRST
-  (a price; for headlines, the list of items — never a count), then on any other value every source must show.
+- fields: the top-level output keys. Mark numbers numeric=true. Mark key=true on the ONE value the need is about
+  (a price, a rate, a temperature; for headlines, the list of items — never a count). Every other field is optional:
+  sources differ in what else they show, and a source must not be refused for lacking an extra.
+- Units: don't put a unit in a field's name (not temperature_celsius) — sources show different units; add a separate
+  text field for the unit (e.g. temperature + temperature_unit) and let each source report what it shows.
   comparable=true only where every honest source shows the same value at the same time (a price, an exchange rate);
   false for counts, lists and text, which differ by source. Don't invent fields only one source would have.
 If an EXISTING SHAPE is given, keep its name, parameters and field names exactly; only mark the key fields and give
@@ -175,8 +179,11 @@ async def candidates(need: str, shape: str, hits: str, tried: list[str] = ()) ->
     return [Candidate(kind=kind.lower(), url=url.rstrip(".,;)`")) for kind, url in _LINE.findall(text)]
 
 
-async def parser(shape: str, kind: str, url: str, sample: str, problem: str = "", code: str = "") -> Parser:
+async def parser(shape: str, kind: str, url: str, sample: str, problem: str = "", code: str = "",
+                 hint: str = "") -> Parser:
     prompt = f"SENSOR:\n{shape}\n\nSOURCE: kind={kind} url={url}\n\nSAMPLE (for the example parameters):\n{sample}"
+    if hint:
+        prompt += f"\n\nTHE VALUES ARE IN THIS TEXT ON THE PAGE (anchor on it): {hint}"
     if problem:
         prompt += f"\n\nYOUR MODULE:\n```python\n{code}\n```\n\nIT FAILED THE TEST: {problem}\nFix it (or answer NO DATA)."
     text = (await _again(_parser, prompt)).strip()
@@ -185,3 +192,42 @@ async def parser(shape: str, kind: str, url: str, sample: str, problem: str = ""
     if "def run" in text and "NAME" in text:
         return Parser(code=text)
     return Parser(note=text.removeprefix("NO DATA:").strip()[:300] or "no module")
+
+
+# ── Extraction: reading a page directly, every value backed by the text it came from ────────────────────────────────
+
+EXTRACT = r"""You read the current values of a SENSOR's FIELDS for the given PARAMETERS from one web PAGE (its text).
+- Copy every value exactly as the page shows it — no computing, no unit conversion, no rounding.
+- For every value give EVIDENCE: the exact span of page text (at most 120 characters) that contains it, copied
+  character for character.
+- Only values for exactly these PARAMETERS (not another ticker, city or currency pair) and only current ones (not
+  yesterday's close, a forecast or a chart axis).
+- If the page doesn't show the KEY value for these parameters, answer found = false.
+Answer with one ```json block and nothing else:
+{"found": true, "values": {"<field>": <value>, ...}, "evidence": {"<field>": "<exact text>", ...}}"""
+
+_extract = Agent(MODEL, name="scout_extract", model_settings=model_settings(decisive=True), system_prompt=EXTRACT,
+                 output_type=str, retries=2)
+_JSON = re.compile(r"```(?:json)?\s*\n(.*?)```", re.S)
+
+
+class Extracted(BaseModel):
+    found: bool = False
+    values: dict = Field(default_factory=dict)
+    evidence: dict = Field(default_factory=dict)
+
+    @field_validator("values", "evidence", mode="before")
+    @classmethod
+    def _null_dict(cls, v):
+        return {} if v is None else v
+
+
+async def extract(shape: str, params: dict, text: str) -> Extracted:
+    """The model reads the page; never raises (not found on failure)."""
+    prompt = f"SENSOR:\n{shape}\n\nPARAMETERS: {json.dumps(params)}\n\nPAGE:\n{text}"
+    try:
+        answer = await _again(_extract, prompt)
+        m = _JSON.search(answer)
+        return Extracted.model_validate_json(m.group(1) if m else answer.strip())
+    except Exception:
+        return Extracted()

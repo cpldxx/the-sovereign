@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useState } from 'react';
-import { ChevronDown, ChevronRight, Code2, Globe, Loader2, Play, Plus, Radio, Search, Server, Trash2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Code2, Eye, Globe, Loader2, Play, Plus, Radio, Search, Server, Trash2 } from 'lucide-react';
 import { kg, type ScoutCandidate, type SensorGroup, type SensorReading, type SensorRequest, type SensorSource } from '../lib/api';
 
 const ACTIVE = new Set(['queued', 'planning', 'collecting', 'probing', 'coding', 'testing']);
 
 function SourceRow({ domain, source, onChanged }: { domain: string; source: SensorSource; onChanged: () => Promise<void> }) {
   const [code, setCode] = useState<string | null>(null);
-  const Icon = source.kind === 'page' ? Globe : Server;
+  const Icon = source.kind === 'page' ? Globe : source.kind === 'extract' ? Eye : source.kind === 'search' ? Search : Server;
+  const how = { api: 'API, parsed by code', page: 'web page, parsed by code', extract: 'web page, read by the model (no parser yet)',
+    search: 'live web search each time — no stable source yet' }[source.kind];
   return (
     <li className="text-[11px]">
       <div className="flex items-center gap-2">
         <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${source.cooldown_until ? 'bg-gold' : source.last_ok === false ? 'bg-bad' : source.last_ok ? 'bg-good' : 'bg-faint'}`} />
-        <Icon size={11} className="shrink-0 text-faint" />
+        <span title={how}><Icon size={11} className="shrink-0 text-faint" /></span>
         <span className="min-w-0 flex-1 truncate font-mono text-dim" title={source.last_error ?? source.name}>{source.host || source.name}</span>
         {source.cooldown_until && (
           <span className="shrink-0 text-[10px] text-gold" title={`The site refused us; not asked again before ${source.cooldown_until}`}>

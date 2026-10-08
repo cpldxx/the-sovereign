@@ -48,7 +48,11 @@ async def nightly() -> None:
             continue
         ran_on = today
         try:
-            async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=30) as kg:
+            async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=300) as kg:
+                # The safeguards first: a failure becomes a critical alert in every domain.
+                check = (await kg.post("/system/selfcheck")).json()
+                print(f"[Research] nightly: security self-check {'ok' if check.get('ok') else 'FAILED'}: "
+                      f"{ {k: v['status'] for k, v in check.get('checks', {}).items()} }", flush=True)
                 domains = [d["id"] for d in (await kg.get("/domains")).json()["domains"]]
         except httpx.HTTPError as e:
             print(f"[Research] nightly: KG unreachable ({type(e).__name__})", flush=True)

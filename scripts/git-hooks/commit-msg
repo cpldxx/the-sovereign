@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Commits carry their author only: no co-author or "generated with" lines, and no assistant as the author.
+if grep -qiE '^co-authored-by:|generated with \[?claude' "$1"; then
+  echo "✗ commit-msg: remove the Co-Authored-By / 'Generated with' lines — commits carry their author only" >&2
+  exit 1
+fi
+if git var GIT_AUTHOR_IDENT | grep -qiE 'claude|anthropic'; then
+  echo "✗ commit-msg: the author must be you, not an assistant" >&2
+  exit 1
+fi
+exit 0
