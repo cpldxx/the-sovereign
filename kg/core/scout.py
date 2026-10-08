@@ -101,6 +101,11 @@ def _check(result, fields: list[dict]) -> str:
     return f"fields must be numbers, not strings: {wrong}" if wrong else ""
 
 
+# Hosts that turn up in search hits but don't publish data of their own (videos, code, posts, social media).
+_NOT_DATA = re.compile(r"(^|\.)(youtube|youtu|github|gitlab|medium|reddit|facebook|instagram|tiktok|twitter|x|linkedin|"
+                       r"pinterest|quora|stackoverflow|wikipedia|wikimedia|substack|tumblr)\.[a-z.]+$")
+
+
 def _template(url: str, args: dict) -> str | None:
     """A real URL that shows the example values → a URL template ("…/quote/NVDA" → "…/quote/{symbol}"); None when a
     value isn't in it. Lower- or upper-case occurrences become {name|lower} / {name|upper}."""
@@ -145,7 +150,7 @@ async def _search(need: str, args: dict, args2: dict | None, domain: str) -> tup
         if template and host not in hosts:
             hosts.add(host)
             pages.append({"host": host, "kind": "page", "url": template, "outcome": "queued", "from": "search"})
-        elif host and host not in sites:
+        elif host and host not in sites and not _NOT_DATA.search(host):
             sites.append(host)   # its addresses carry its own ids: found by a site search each time instead
     text = "\n".join(f"- {title} — {url}" for url, title in list(hits.items())[:25] if url)
     return text, pages, [h for h in sites if h not in hosts]
@@ -180,7 +185,7 @@ async def _reach(c: dict, args: dict, domain: str, reference: float | None = Non
         elif not _shows(page["text"], reference, tolerance):
             c["outcome"] = f"doesn't show the value (~{reference}): wrong page?"
         else:
-            c.update(outcome="reachable", sample=page["text"][:SAMPLE_CHARS])
+            c.update(outcome="reachable", sample=page["text"][:SAMPLE_CHARS], full=page["text"])
     elif why := sensors.unusable(url):
         c["outcome"] = f"unusable: {why}"
     elif not await sensors.robots_allows(url, domain):
@@ -200,7 +205,8 @@ async def _reach(c: dict, args: dict, domain: str, reference: float | None = Non
         elif not _shows(res["body"], reference, tolerance):
             c["outcome"] = f"doesn't show the value (~{reference})"
         else:
-            c.update(outcome="reachable", sample=f"content-type: {res.get('content_type')}\n{res['body'][:SAMPLE_CHARS]}")
+            c.update(outcome="reachable", sample=f"content-type: {res.get('content_type')}\n{res['body'][:SAMPLE_CHARS]}",
+                     full=res["body"])
     c["seconds"] = round(time.monotonic() - started, 1)
 
 
@@ -250,7 +256,9 @@ async def _try(c: dict, shape: str, fields: list[dict], schema0: list[dict], des
     which text? (2) a parser anchored on that text, tested on both example values; (3) failing that, the page is kept
     as a source the model reads each time, if it also reads the second example value. Never a guess: every value
     read by the model is checked against the text it quoted."""
-    text = c.get("sample", "")
+    # The whole page, not the parser's sample: on navigation-heavy pages the value sits past the first 9000 characters
+    # (twelve weather pages were judged empty that way).
+    text = c.pop("full", None) or c.get("sample", "")
     found = await agent.extract(sensors.shape_text(description, schema0, args), args, sensors.excerpt(text, args))
     values = sensors.verified(found.values, found.evidence, text, schema0) if found.found else {}
     if not any(values.get(k) not in (None, "") for k in keys):
@@ -313,8 +321,11 @@ def _agreement(works: list[dict], current: list[dict], keys: list[str], others: 
         values = [c["result"][field] for c in voters] + [r[field] for r in current if number(r.get(field))]
         if len(values) < 3:
             continue
+        # The main value is always voted on: the robust spread adapts by itself (wide for counts, so nothing stands
+        # out; narrow for prices). Gating it on a small relative spread skipped temperatures — near zero, so a large
+        # relative spread — and let a Fahrenheit page (58 among 9-14 °C) through. Other values only when tight.
         spread = sensors.relative_spread(values)
-        tight = spread is not None and spread <= 0.05
+        tight = strict or (spread is not None and spread <= 0.05)
         odd = sensors.outliers(values, k=4.0 if strict else 6.0, floor=0.002 if strict else 0.01) if tight else \
             [False] * len(values)
         median = statistics.median(values)
@@ -476,6 +487,7 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
     kept = []
     for c in cands:
         c.pop("sample", None)
+        c.pop("full", None)
         if c["outcome"] != "works":
             continue
         member = c.get("repair") or _slug(f"{name}_{c['host']}")
@@ -521,7 +533,7 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
         schema = next((m["schema"] for m in sources if m.get("schema")), None) or sensors.schema_of(sources[0])
         key = next((m["key_fields"][0] for m in sources if m.get("key_fields")), None)
         working = resting = 0
-        values = []
+        values, read_values = [], []
         for m in sources:
             if sensors.cooling(m):   # it refused us: don't knock again before its rest is over
                 resting += 1
@@ -531,7 +543,23 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
             await catalog.record_source(m.get("url") or "", list(group["params"]), out["ok"])
             if out["ok"] and key and isinstance(v := (out["result"] or {}).get(key), (int, float)):
                 values.append(v)
+                read_values.append((m, v))
         report[group["name"]] = {"working": working, "sources": len(sources), "resting": resting}
+        # The night's vote: a source whose main value stands out from the others' (3+) read something else — a
+        # unit, a previous close. Outvoted three nights in a row, it is retired.
+        if len(read_values) >= 3:
+            odd = sensors.outliers([v for _, v in read_values], floor=sensors.tolerance(sources[0]))
+            for (m, v), o in zip(read_values, odd):
+                outvoted = (m.get("outvoted") or 0) + 1 if o else 0
+                changes = {"outvoted": outvoted}
+                if o:
+                    changes |= {"last_ok": False, "history": ((m.get("history") or "") + "0")[-sensors.HISTORY:],
+                                "last_error": f"disagreed with the other sources ({key} {v})"}
+                    if outvoted >= 3:
+                        changes["status"] = "retired"
+                    await catalog.record_source(m.get("url") or "", list(group["params"]), False)
+                    report[group["name"]].setdefault("outvoted", []).append(sensors.host_of(m))
+                await kgdb.update_doc(db, domain, "Sensor", m["uid"], changes)
         # How far this group's sources usually differ: the tolerance its readings are compared with.
         if (spread := sensors.relative_spread(values)) is not None:
             report[group["name"]]["spread"] = round(spread, 5)

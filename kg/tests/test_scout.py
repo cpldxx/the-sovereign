@@ -80,3 +80,9 @@ async def test_catalog_learns_reuses_and_forgets(fresh_catalog):
     for _ in range(3):
         await c.record("latest stock price for a ticker", ["symbol"], [{**good, "outcome": "parser failed: x"}])
     assert await c.suggest("latest stock price for a ticker", ["symbol"], set()) == []
+
+
+def test_vote_drops_a_unit_mixup_even_when_values_spread():
+    works = [_works(14.0), _works(9.0), _works(12.0), _works(58.0)]     # °C pages and one °F page
+    scout._agreement(works, [], ["price"])
+    assert [w["outcome"] == "works" for w in works] == [True, True, True, False]
