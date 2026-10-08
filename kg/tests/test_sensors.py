@@ -113,3 +113,20 @@ def test_excerpt_keeps_the_passages_about_the_parameters():
     text = "nav " * 3000 + "Seoul 21°C clear" + " footer" * 3000
     part = sensors.excerpt(text, {"city": "Seoul"})
     assert "Seoul 21°C clear" in part and len(part) <= sensors.EXCERPT
+
+
+@pytest.mark.parametrize("url,bad", [
+    ("http://api.openweathermap.org/data/2.5/weather?id=1850147&appid=2370a9749f38195f07d3bbefd145b74c", True),
+    ("https://samples.openweathermap.org/data/2.5/weather?q=London", True),
+    ("https://example.com/q?apikey=abcdef123456", True),
+    ("https://api.example.com/v1/price?symbol=NVDA&token=deadbeef99", True),
+    ("https://www.cnbc.com/quotes/NVDA", False),
+    ("https://finance.yahoo.com/quote/NVDA/?p=NVDA", False),
+])
+def test_addresses_with_someone_elses_key_or_demo_data_are_never_read(url, bad):
+    assert bool(sensors.unusable(url)) is bad
+
+
+def test_a_module_with_a_key_written_in_is_refused():
+    code = MODULE % 'URL = "http://api.openweathermap.org/data/2.5/weather?q=x&appid=2370a9749f38195f07d3bbefd145b74c"'
+    assert any("credential" in p for p in sensors.inspect_code(code)[1])

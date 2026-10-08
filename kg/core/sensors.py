@@ -126,6 +126,8 @@ def inspect_code(code: str, domain: str | None = None) -> tuple[dict, list[str]]
             problems.append(f"{node.id} is not allowed")
         elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
             problems.append(f"dunder attribute .{node.attr} is not allowed")
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str) and (why := unusable(node.value)):
+            problems.append(f"{why}: {node.value[:60]!r} — use SECRETS for keys we hold")
     meta: dict = {}
     run_args: list[str] | None = None
     for node in tree.body:
@@ -216,11 +218,27 @@ def fill(template: str, params: dict) -> str:
 
 
 _pages: dict[str, tuple[float, dict]] = {}
+# Addresses Sovereign never reads: ones carrying a credential (someone's API key turns up in search results — it isn't
+# ours to use) and demo / sample endpoints (fixed example data, not live: samples.openweathermap.org).
+_CREDENTIAL = re.compile(r"[?&](app_?id|api_?key|apikey|access_?key|access_?token|token|key|client_?secret|secret|"
+                         r"auth|password|sig|signature)=[^&]{6,}", re.I)
+_NOT_LIVE = re.compile(r"^(samples?|demo|sandbox|mock|test|staging)[.-]", re.I)
+
+
+def unusable(url: str) -> str:
+    """Why an address must not be read, or ""."""
+    if _CREDENTIAL.search(url):
+        return "the address carries a credential (an API key that isn't ours)"
+    if _NOT_LIVE.match(urlsplit(url).netloc.lower().removeprefix("www.")):
+        return "a demo / sample endpoint, not live data"
+    return ""
 
 
 async def render(url: str, domain: str | None = None) -> dict:
     """A web page opened in a browser by the research service (robots.txt, per-site pacing, public addresses only)
     → {"text"} or {"error"}. Reused for PAGE_TTL seconds."""
+    if why := unusable(url):
+        return {"error": why}
     if (hit := _pages.get(url)) and time.monotonic() - hit[0] < PAGE_TTL:
         return hit[1]
     page = await _render(url, domain)
@@ -364,7 +382,7 @@ def score(sensor: dict) -> float:
 def _order(members: list[dict]) -> list[dict]:
     """Best first: a live search only when nothing else answers; then recent success rate, parsers before pages
     read by the model, speed."""
-    return sorted(members, key=lambda m: (m.get("kind") == "search", -score(m), m.get("kind") == "extract",
+    return sorted(members, key=lambda m: (m.get("kind") == "search", -score(m), m.get("kind") in ("extract", "site"),
                                           m.get("avg_seconds") or 99.0))
 
 
@@ -626,23 +644,50 @@ async def extract_page(url: str, args: dict, schema: list[dict], description: st
     return {"ok": True, "result": data}
 
 
+async def _search_urls(query: str, domain: str | None, host: str | None = None, limit: int = 10) -> list[str]:
+    async with httpx.AsyncClient(timeout=90, headers=auth.headers(domain)) as client:
+        r = await client.get(f"{RESEARCH_URL}/search", params={"q": query, "limit": limit})
+    urls = []
+    for h in r.json().get("results", []):
+        netloc = urlsplit(h.get("url", "")).netloc.lower().removeprefix("www.")
+        if netloc and not unusable(h["url"]) and (not host or netloc == host or netloc.endswith("." + host)):
+            urls.append(h["url"].replace("{", "%7B").replace("}", "%7D"))
+    return urls
+
+
+async def site_answer(host: str, need: str, args: dict, schema: list[dict], description: str,
+                      domain: str | None = None, tries: int = 3) -> dict:
+    """A site whose addresses can't be written as a template (they carry its own ids: …/london/ec4a-2/328328): the
+    page for these parameters is found with a search limited to the site, then read by the model (tier 2b)."""
+    query = f"site:{host} {' '.join(str(v) for v in args.values())} {need}"
+    try:
+        urls = await _search_urls(query, domain, host)
+    except (httpx.HTTPError, ValueError) as e:
+        return {"ok": False, "error": f"site search unavailable ({type(e).__name__})"}
+    if not urls:
+        return {"ok": False, "error": f"no page of {host} found for these parameters"}
+    last = {"ok": False, "error": "no page read"}
+    for url in urls[:tries]:
+        last = await extract_page(url, args, schema, description, domain)
+        if last["ok"]:
+            return last
+    return {"ok": False, "error": f"{host}: {last['error']}"}
+
+
 async def search_answer(need: str, args: dict, schema: list[dict], description: str, key: str | None,
                         domain: str | None = None, pages: int = 6) -> dict:
     """The last resort when no source answers: search the web now, read the top pages directly, and answer with
     what several of them agree on (or the one that answered, marked as such)."""
     query = f"{' '.join(str(v) for v in args.values())} {need}".strip()
     try:
-        async with httpx.AsyncClient(timeout=90, headers=auth.headers(domain)) as client:
-            r = await client.get(f"{RESEARCH_URL}/search", params={"q": query, "limit": 10})
-        hits = r.json().get("results", [])
+        found = await _search_urls(query, domain)
     except (httpx.HTTPError, ValueError) as e:
         return {"ok": False, "error": f"live search unavailable ({type(e).__name__})"}
     urls, hosts = [], set()
-    for h in hits:
-        host = urlsplit(h.get("url", "")).netloc
-        if host and host not in hosts:
+    for url in found:
+        if (host := urlsplit(url).netloc) not in hosts:
             hosts.add(host)
-            urls.append(h["url"].replace("{", "%7B").replace("}", "%7D"))
+            urls.append(url)
     sem = asyncio.Semaphore(3)
 
     async def one(url):
@@ -714,6 +759,9 @@ async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict, schem
     started = time.monotonic()
     if member.get("kind") == "extract":   # no parser: the model reads the page (tier 2)
         out = await extract_page(url_of(member), args, schema or schema_of(member), member["description"], domain)
+    elif member.get("kind") == "site":    # a site found by a search limited to it, read by the model (tier 2b)
+        out = await site_answer(member["host"], member.get("need") or member["description"], args,
+                                schema or schema_of(member), member["description"], domain)
     elif member.get("kind") == "search":  # no source at all yet: a live search each time (tier 3)
         keys = member.get("key_fields") or []
         out = await search_answer(member.get("need") or member["description"], args, schema or schema_of(member),

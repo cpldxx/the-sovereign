@@ -82,8 +82,9 @@ class Parser(_Unwrap):
 
 PLAN = """You design a live-data SENSOR for a need: its name, parameters and output fields. Many different sources
 (APIs and web pages) will each implement exactly this shape, so keep it to what most sources show.
-- params: what varies between readings (e.g. symbol), each with a realistic example value and a different
-  other_example (a parser that only works for one value is useless).
+- params: what IDENTIFIES the thing measured (a ticker, a city, a currency pair, a country) — never how to show it
+  (not a unit, a format or a language: sites don't put those in their addresses). Each with a realistic example value
+  and a different other_example (a parser that only works for one value is useless).
 - fields: the top-level output keys. Mark numbers numeric=true. Mark key=true on the ONE value the need is about
   (a price, a rate, a temperature; for headlines, the list of items — never a count). Every other field is optional:
   sources differ in what else they show, and a source must not be refused for lacking an extra.

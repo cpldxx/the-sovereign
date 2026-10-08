@@ -119,7 +119,7 @@ def _template(url: str, args: dict) -> str | None:
     return url
 
 
-async def _search(need: str, args: dict, args2: dict | None, domain: str) -> tuple[str, list[dict]]:
+async def _search(need: str, args: dict, args2: dict | None, domain: str) -> tuple[str, list[dict], list[str]]:
     """Web search hits for the Scout's prompt, and page candidates made from the hits' real URLs (a guessed URL
     template is the commonest failure: 404s and landing pages)."""
     values = " ".join(str(v) for v in args.values())
@@ -136,14 +136,19 @@ async def _search(need: str, args: dict, args2: dict | None, domain: str) -> tup
                     hits.setdefault(h.get("url", ""), h.get("title", ""))
             except (httpx.HTTPError, ValueError):
                 continue
-    pages, hosts = [], set()
+    pages, hosts, sites = [], set(), []
     for url in hits:
         template = _template(url, args) or (_template(url, args2) if args2 else None)
-        if template and (host := _host(url)) not in hosts:
+        host = _host(url)
+        if sensors.unusable(url):
+            continue
+        if template and host not in hosts:
             hosts.add(host)
             pages.append({"host": host, "kind": "page", "url": template, "outcome": "queued", "from": "search"})
+        elif host and host not in sites:
+            sites.append(host)   # its addresses carry its own ids: found by a site search each time instead
     text = "\n".join(f"- {title} — {url}" for url, title in list(hits.items())[:25] if url)
-    return text, pages
+    return text, pages, [h for h in sites if h not in hosts]
 
 
 def _shows(text: str, reference: float | None, tolerance: float = 0.01) -> bool:
@@ -176,6 +181,8 @@ async def _reach(c: dict, args: dict, domain: str, reference: float | None = Non
             c["outcome"] = f"doesn't show the value (~{reference}): wrong page?"
         else:
             c.update(outcome="reachable", sample=page["text"][:SAMPLE_CHARS])
+    elif why := sensors.unusable(url):
+        c["outcome"] = f"unusable: {why}"
     elif not await sensors.robots_allows(url, domain):
         c["outcome"] = "robots.txt"
     else:
@@ -265,6 +272,27 @@ async def _try(c: dict, shape: str, fields: list[dict], schema0: list[dict], des
         c["outcome"] = f"{parser_problem[:80]}; reading it directly: {second['error'][:60]}"
 
 
+async def _try_site(c: dict, schema0: list[dict], description: str, keys: list[str], args: dict,
+                    args2: dict | None, need: str, domain: str, log: list[str]) -> None:
+    """A site found by a search limited to it: its page for the example values must show the key value (quoted and
+    checked), and so must its page for the second values — with a different value."""
+    first = await sensors.site_answer(c["host"], need, args, schema0, description, domain)
+    if not first["ok"] or not any(first["result"].get(k) not in (None, "") for k in keys):
+        c["outcome"] = f"no data: {first.get('error', 'no key value')[:100]}"
+        return
+    if args2:
+        second = await sensors.site_answer(c["host"], need, args2, schema0, description, domain)
+        if not second["ok"]:
+            c["outcome"] = f"only for the example values: {second['error'][:80]}"
+            return
+        if keys and second["result"].get(keys[0]) == first["result"].get(keys[0]):
+            c["outcome"] = "returns the same value for both example values"
+            return
+    c.update(outcome="works", mode="site", result=first["result"],
+             value={k: _brief(first["result"].get(k)) for k in keys})
+    log.append(f"works (site search): {c['host']} → {c['value']}")
+
+
 def _brief(v):
     """A key value as shown in the job: numbers as they are, lists by their length."""
     if isinstance(v, (int, float)):
@@ -325,6 +353,13 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
     optional = [f for f in fields if not f["key"] and not f["required"] and f["numeric"]][:3]
     fields = [f for f in fields if f["key"] or f["required"] or f in optional]
     keys = [f["name"] for f in fields if f["key"]]
+    if existing and not keys:   # expanding: the sensor's own key fields, whatever the planner marked
+        keys = existing[0].get("key_fields") or [k for k, v in (sensors.sample_of(existing[0]) or {}).items()
+                                                  if isinstance(v, (int, float)) and not isinstance(v, bool)][:1]
+        for f in fields:
+            f["key"] = f["name"] in keys
+        fields += [{"name": k, "description": "", "numeric": True, "key": True, "comparable": True, "required": True}
+                   for k in keys if k not in {f["name"] for f in fields}]
     j["group"] = name
     shape = _shape_text(name, existing[0]["description"] if existing else plan.description, params, fields)
     args = {k: v.get("example") for k, v in params.items()}
@@ -342,7 +377,8 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
     reference = statistics.median(refs) if refs else None
 
     j["status"] = "collecting"
-    hits, from_search = await _search(need, args, args2, domain)
+    hits, from_search, search_sites = await _search(need, args, args2, domain)
+    site_cands: list[dict] = []
     tried = {sensors.host_of(m) for m in existing} - {""}
     from_catalog = [] if j.get("repair") else await catalog.suggest(need, list(params), tried)
     log.append(f"catalog: {len(from_catalog)} templates from similar needs ({catalog.stats()['templates']} known)")
@@ -378,8 +414,13 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
         # A listed URL with the example value written in (…/quotes/NVDA) would read NVDA for every symbol.
         listed = [{"host": _host(x.url), "kind": x.kind, "outcome": "queued",
                    "url": x.url if sensors._PLACEHOLDER.search(x.url) else (_template(x.url, args) or x.url)}
-                  for x in found]
+                  for x in found if not sensors.unusable(x.url)]
         for c in ((from_catalog + from_search) if round_ == 0 else []) + listed:
+            if c["kind"] == "site":   # from the catalog: a site found by a site search
+                if c["host"] not in tried:
+                    tried.add(c["host"])
+                    site_cands.append(c)
+                continue
             if c["host"] and c["host"] not in tried and urlsplit(c["url"]).scheme in ("http", "https"):
                 tried.add(c["host"])
                 new.append(c)
@@ -408,6 +449,20 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
             continue
         await _try(c, shape, fields, schema0, description, keys, args, args2, domain, log)
         working += c["outcome"] == "works"
+    # Sites whose addresses can't be templated (ids in them): found by a site search, read by the model.
+    if not broken:
+        site_cands += [{"host": h, "kind": "site", "url": f"site:{h}", "outcome": "queued", "from": "search"}
+                       for h in search_sites if h not in tried]
+        cands += site_cands
+        for c in site_cands:
+            if working >= TARGET or time.monotonic() > deadline:
+                c["outcome"] = "not tried: enough sources or out of time"
+                continue
+            if why := catalog.refused(c):
+                c["outcome"] = f"skipped: refused within {catalog.REFUSAL_DAYS} days ({why})"
+                continue
+            await _try_site(c, schema0, description, keys, args, args2, need, domain, log)
+            working += c["outcome"] == "works"
 
     j["status"] = "testing"
     _agreement(cands, current, [k for k in keys if any(f["name"] == k and f["numeric"] for f in fields)],
@@ -425,9 +480,10 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
             continue
         member = c.get("repair") or _slug(f"{name}_{c['host']}")
         try:
-            if c.get("mode") == "extract":
-                await sensors.save_extract(db, domain, c["url"], need, c["result"], name=member, group=name,
-                                           description=description, params=params, key_fields=keys, schema=schema)
+            if c.get("mode") in ("extract", "site"):
+                await sensors.save_extract(db, domain, f"https://{c['host']}/" if c["mode"] == "site" else c["url"],
+                                           need, c["result"], name=member, group=name, description=description,
+                                           params=params, key_fields=keys, schema=schema, kind=c["mode"])
             else:
                 await sensors.save(db, domain, c["code"], need, "scout", c["result"], name=member, group=name,
                                    description=description, key_fields=keys, url=c["url"], schema=schema)
@@ -498,7 +554,7 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
         for m in sources:
             m = {**m, **fresh.get(m["uid"], {})}
             history, error = m.get("history") or "", m.get("last_error") or ""
-            if not (history.endswith("00") and "1" in history and not sensors.cooling(m)
+            if not (m.get("code") and history.endswith("00") and "1" in history and not sensors.cooling(m)
                     and not sensors._BLOCKED.search(error) and "disagreed" not in error and sensors.url_of(m)):
                 continue
             if (m.get("repairs") or 0) >= 2:

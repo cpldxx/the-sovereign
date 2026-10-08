@@ -133,6 +133,9 @@ Then everything runs from one command — detached, so it keeps running after th
 ./sovereign logs kg                 # follow a service's log (.logs/)
 ./sovereign stop                    # stop the app services (docker keeps running)
 ./sovereign autostart on            # start at login (macOS LaunchAgent; Docker Desktop must start at login too)
+./sovereign test                    # the test suite (77 checks; `test all` adds the slow ones: the model, the internet)
+./sovereign selfcheck               # the security self-check on the running system (also nightly)
+./sovereign hooks                   # git hooks: no secrets, data files, build leftovers or co-author lines in commits
 ```
 
 UI http://localhost:5173 · KG API http://localhost:8080 (`/docs`, MCP at `/mcp`) · Hermes :8090 · Research :8070 ·
@@ -176,23 +179,54 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
   URL receives the parameters as JSON. If the endpoint understands `dry_run: true`, its answer becomes the preview.
 - **Playbooks can watch live data**: a playbook may carry a sensor condition (e.g. AMD `change_percent <= -8`, every
   60 min). The KG checks due conditions around the clock and fires the playbook's action the moment one holds.
-- **Sensors have many sources.** The Scout tries 20-30 public sources for a need — APIs, and web pages opened in a
-  real browser for sites without one — and keeps every one that works and agrees with the others (a source more
-  than 3 % off the median read the wrong number). Reading a sensor uses its best source and falls back to the next;
-  a live trigger fires only when a second source confirms it. Every night each source is read once, and a sensor
-  left with fewer than two working sources is scouted again. robots.txt, bot protection, logins and paywalls are
-  never worked around — such sources are recorded as unavailable. (Measured for a stock price: 11 of 25 sites
-  readable.) With no sensor for something, the Head opens a page that shows it (`read_webpage`, a real browser).
-  robots.txt is enforced inside the sandbox for every request a sensor makes, whoever wrote it. A source that refuses
-  us rests (6 h, doubling to 48 h) instead of being asked again; one that failed for these parameters (an
-  exchange-specific page and another exchange's ticker) is tried after the others. A live trigger must measure the
-  situation's own quantity — a "$1 trillion market cap" situation can't be wired to a share price.
+- **Sensors have many sources, and a reading always ends in an answer or an honest "not found".** Each read climbs
+  a ladder until something answers:
+  1. *parsers* — sources the Scout wrote code for (an API, or a web page opened in a real browser): fast and cheap;
+  2. *pages read by the model* — when a source has no working parser (layout changed, none could be written), the model
+     reads the rendered page; every value must come with the exact text it was read from, and code checks that this
+     text is on the page and contains that number, so a value can't be made up;
+  3. *a live search* — when no stored source answers, the web is searched now, the top pages are read the same way,
+     and the answer says how many pages agreed;
+  4. *"not found", with the reasons* — never a guess; the sensor is scouted again within hours.
+  Whichever source answers, the reading is checked against the sensor's fields (pydantic: numbers parsed from "$1,234"
+  or "−0.9 %", required fields present, no page markup in text), and a value that moved surprisingly since the last
+  reading is confirmed by a second source from another site (a third settles a disagreement).
+- **The Scout finds the sources.** For a need it collects real URLs from search hits, the catalog (below) and its own
+  list, opens each under Sovereign's rules, has the model confirm the value is really there, writes a parser anchored
+  on that text and tests it on two example values (a parser fitted to one ticker breaks on the next) — keeping the page
+  as a model-read source when no parser works — until four sources work. Values are voted on with robust statistics
+  (median absolute deviation, not a fixed tolerance): a source that read a previous close stands out, spread-out values
+  like headline counts aren't voted on. A need nothing could be found for still gets a sensor, answered by live search.
+  Measured: stock price 1 → 9 sources; exchange rate 3 (4 on a reworded need, reusing what was learned), crypto 2,
+  gold 2.
+- **It maintains itself.** Every night each source is read once: a source whose site changed (two failures that aren't
+  refusals) gets a new parser written from its current page; one that refuses us (bot protection, 403/429) rests 6 h,
+  doubling to 48 h; robots.txt saying no twice retires it; a sensor with fewer than two working sources is scouted again
+  (within hours when none works). The **catalog** (`kg/.scout-catalog.json`) learns which URL templates work for which
+  needs — credited and debited by every scout and health check, forgotten after three failures, reused for similar
+  needs worded differently (embedding similarity) — and which sites refused us lately, so they aren't knocked on again.
+- **robots.txt is enforced inside the sandbox** for every request a sensor makes (each redirect too), whoever wrote it;
+  pages are opened by the research service, which checks it as well. Bot protection, logins and paywalls are never
+  worked around. A live trigger must measure the situation's own quantity and entity — a "$1 trillion market cap"
+  situation can't be wired to a share price, nor an NVIDIA situation to AMD's.
 - **Sensors run in a locked sandbox** (`docker/sandbox`): a fresh container per run — read-only, non-root, no
   capabilities, memory/CPU/process limits — and an egress guard so code can only reach public internet addresses, never
   this machine's services. Sensor code is statically checked (whitelisted imports, no eval/exec/file access) and never
   runs inside the KG API.
 - **Roles are endpoints.** `/mcp` serves the Head everything; `/mcp/readonly` serves reading tools only (e.g. to point
   another assistant at your graph safely).
+
+### Safeguards that check themselves
+
+- **Tests** (`kg/tests`, `./sovereign test`): roles and the auth middleware, sensor code rules, the group shape, routing,
+  robust voting, the catalog, the anti-hallucination check — and security invariants against the real pieces:
+  webhooks never reach private addresses, sign-up / throttling / revocation in a throwaway accounts database, sensor
+  code can't reach this machine or leak a secret, nothing answers without credentials, a domain-scoped connection
+  can't leave its domain. Slow ones (`test all`): the model's trigger judgments on known cases, robots.txt enforcement
+- **Self-check** every night before research (`POST /system/selfcheck`): sandbox egress, robots.txt, webhooks, auth,
+  domain scope, static code check on the live system — a failure becomes a critical alert in every domain
+- **Git hooks** (`./sovereign hooks`): a commit with a secret key, `.env`, a data file, compiled `.js` next to the
+  sources or a co-author line is refused; KG changes must pass the tests
 
 ### Accounts and isolation (multi-tenant)
 
@@ -287,7 +321,7 @@ Search uses the local SearXNG by default. Its free engines throttle heavy use (s
 | Schema enforcement | Pydantic AI 2.x | MIT |
 | API + MCP | FastAPI + MCP Python SDK | MIT |
 | LLMs + embeddings | Ollama (qwen3.6:35b, nomic-embed) by default; Claude via env | — |
-| Sensors | Scout (many sources, pydantic-ai), built-in coder or OpenHands (`SENSOR_BACKEND`); pages via crawl4ai | MIT |
+| Sensors | Scout (many sources, pydantic-ai), built-in coder or OpenHands (`SENSOR_BACKEND`); pages via crawl4ai; pydantic-checked readings | MIT |
 | Frontend | React 19 + Vite + Tailwind + Cytoscape.js | — |
 | Research / collection | DeerFlow 2.1 + SearXNG + crawl4ai | MIT / AGPL-3.0 (run unmodified as a separate service) / Apache 2.0 + attribution |
 | Observability | LangFuse (self-hosted, optional) | MIT (core) |
