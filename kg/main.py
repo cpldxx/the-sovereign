@@ -11,6 +11,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from api.actions import router as actions_router
 from api.auth import router as auth_router
+from api.crew import router as crew_router
 from api.domains import router as domains_router
 from api.entities import router as entities_router
 from api import mcp as kg_mcp
@@ -23,7 +24,7 @@ from api.reports import router as reports_router
 from api.reviews import router as reviews_router
 from api.sensors import router as sensors_router
 from api.system import router as system_router
-from core import accounts, auth, playbooks, tracing
+from core import accounts, auth, crew, playbooks, tracing
 from core.database import get_db
 
 
@@ -48,6 +49,8 @@ async def lifespan(app: FastAPI):
     await accounts.setup(app.state.db)
     # Live playbook triggers: sensors checked around the clock (SENSOR_WATCH=off disables it).
     watch = asyncio.create_task(playbooks.watch_loop(app.state.db)) if playbooks.WATCH else None
+    # The Head's team: tasks and questions queued for the agents, reports back on threads.
+    team = asyncio.create_task(crew.work_loop(app.state.db))
     # The MCP apps' own lifespans never run (only their routes are served), so the host enters their
     # session managers.
     async with AsyncExitStack() as stack:
@@ -56,6 +59,7 @@ async def lifespan(app: FastAPI):
         yield
     if watch:
         watch.cancel()
+    team.cancel()
     await app.state.db.close()
     tracing.shutdown()
 
@@ -90,6 +94,7 @@ app.include_router(reports_router)
 app.include_router(actions_router)
 app.include_router(playbooks_router)
 app.include_router(sensors_router)
+app.include_router(crew_router)
 app.include_router(system_router)
 
 

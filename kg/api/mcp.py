@@ -28,7 +28,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import actions, auth, coding, digest, kg, playbooks, sensors
+from core import actions, auth, crew, digest, kg, playbooks, sensors
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -328,26 +328,6 @@ async def read_sensor(domain: str, name: str, params: dict | None = None, verify
     return out
 
 
-@tool()
-def request_sensor(domain: str, need: str) -> dict:
-    """Ask for a new sensor for a recurring live-data need (e.g. "latest stock price and day change for a ticker").
-    The Scout tries 20-30 public sources (APIs and web pages), keeps every one that works and agrees with the others,
-    and the sensor reads them in turn; takes 10-20 minutes. Returns a request id; list_sensors shows it once it
-    works."""
-    _require(domain)
-    j = coding.submit(db, domain, need)
-    return {"request": j["id"], "status": j["status"], "need": j["need"]}
-
-
-@tool()
-async def start_research(domain: str, question: str) -> dict:
-    """Send the research agent (DeerFlow) on a mission: it searches the web, reads the most relevant pages
-    in full and every page it reads is ingested into the domain's graph as a source episode.
-    Runs in the background (several minutes). Returns a job id for research_status."""
-    _require(domain)
-    return await _research("POST", f"/domains/{domain}/research", json={"mode": "mission", "question": question})
-
-
 @tool("readonly")
 async def research_status(job_id: str) -> dict:
     """Status of a research job: queued / researching / ingesting / done / failed, the pages it read
@@ -368,6 +348,64 @@ async def list_research(domain: str) -> list[dict]:
     jobs = await _research("GET", "/jobs", params={"domain": domain, "limit": 20})
     return [{k: j.get(k) for k in ("id", "mode", "question", "status", "created_at", "finished_at", "summary")}
             for j in jobs.get("jobs", [])]
+
+
+# ── The team (core/crew.py) ───────────────────────────────────────────────
+# The Head's agents. Work goes out on a queue; each agent reports back on the thread, and the Head is woken to
+# read the report. Questions are answered from what the agent knows right now.
+
+ASK_WAIT = 120
+
+
+@tool("readonly")
+def list_agents() -> list[dict]:
+    """Your team: every agent, what it does, and the tasks you can assign it with their inputs."""
+    return crew.roster()
+
+
+@tool()
+async def assign_task(domain: str, agent: str, task: str, inputs: dict | str | None = None,
+                      thread: str | None = None) -> dict:
+    """Give a teammate work. `task` is the task's name only (e.g. "check"); its fields go in `inputs` as an object
+    (e.g. {"claims": ["…"], "source_text": "…"}) — list_agents shows every task's inputs. It is queued; the agent
+    reports on the thread when done and you are woken to read the report. Long tasks (a research mission, finding
+    sensor sources) take minutes: tell the user it started — don't wait. `thread`: continue an earlier one."""
+    _require(domain)
+    try:
+        return await crew.assign(db, domain, agent, task, inputs, thread)
+    except crew.CrewError as e:
+        raise ToolError(str(e)) from e
+
+
+@tool()
+async def ask_agent(domain: str, agent: str, question: str, thread: str | None = None) -> dict:
+    """Ask a teammate a question — e.g. the Scout why a sensor fails, the Validator what it rejected lately, the
+    Strategist which playbooks exist. It answers from what it knows right now; waits up to 2 minutes, otherwise
+    the answer arrives in your inbox. `thread`: a follow-up in an earlier conversation."""
+    _require(domain)
+    try:
+        return await crew.ask(db, domain, agent, question, thread, wait=ASK_WAIT)
+    except crew.CrewError as e:
+        raise ToolError(str(e)) from e
+
+
+@tool()
+async def inbox(domain: str) -> list[dict]:
+    """Unread reports, answers and notices from your team, oldest first (marks them read)."""
+    _require(domain)
+    return [{k: m.get(k) for k in ("thread", "sender", "kind", "task", "text", "created_at")}
+            for m in await crew.inbox(db, domain)]
+
+
+@tool("readonly")
+async def read_thread(domain: str, thread: str) -> dict:
+    """One conversation with your team: who asked whom what, and every answer and report, oldest first."""
+    _require(domain)
+    if not (t := await crew.thread(db, domain, thread)):
+        raise ToolError(f"No thread '{thread}' in {domain}")
+    return {"thread": t["uid"], "title": t["title"], "agent": t["agent"], "status": t["status"],
+            "messages": [{k: m.get(k) for k in ("sender", "recipient", "kind", "task", "text", "status", "created_at")}
+                         for m in t["messages"]]}
 
 
 def _server(role: str) -> MCPServer:

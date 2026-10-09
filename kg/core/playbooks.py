@@ -418,6 +418,9 @@ async def watch_loop(db: ArcadeDB, interval: float = 60) -> None:
             try:
                 for f in await check_triggers(db, domain):
                     print(f"[KG] playbook fired in {domain}: {f}", flush=True)
+                    from core import crew  # noqa: PLC0415 — the crew imports this module
+                    await crew.notify(db, domain, "watcher", f"Live trigger fired: {f['playbook']} → proposal "
+                                      f"{f['proposal']} ({f['status']})", f)
             except Exception as e:
                 print(f"[KG] trigger check for {domain} failed: {type(e).__name__}: {e}", flush=True)
 

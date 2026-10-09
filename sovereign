@@ -159,7 +159,7 @@ up() {
   for a in "$@"; do
     case "$a" in
       --ollama) ollama=container ;;
-      --observability) observability=(--profile observability) ;;
+      --observability) observability=(--profile observability); export SOVEREIGN_TRACING=true ;;
     esac
   done
   command -v docker >/dev/null || { echo "Docker is needed: https://docs.docker.com/get-docker/"; exit 1; }

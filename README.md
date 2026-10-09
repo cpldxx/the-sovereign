@@ -58,6 +58,34 @@ The gap widens as the knowledge graph grows deeper.
 └───────────────────────────────────────────────────────────┘
 ```
 
+### The Head and its team
+
+```
+                 ┌──────────┐
+       ┌────────▶│   Head   │◀──────────┐   reports come back on the thread;
+       │         └────┬─────┘           │   the Head is woken to read them
+       │   tasks,     │ FACTS only      │
+       │   questions  ▼ (validated)     │
+       │   (queue) ┌──────────────────┐ │
+       │           │ Knowledge graph  │ │
+       │           └──────────────────┘ │
+       │              ▲   ▲   ▲   ▲     │
+       ▼              │   │   │   │     │
+  research · scout · coder · extractor · validator · resolver · linker
+  ontologist · strategist · watcher · summarizer · reporter
+```
+
+The Head Agent leads twelve agents (`kg/core/crew.py`). It gives them work with `assign_task` (the inputs are
+checked by the task's Pydantic model) and asks them questions with `ask_agent` — each answers from what it knows
+right now: the Scout from its sensors and sources, the Validator from what it rejected, the Strategist from its
+playbooks. Work goes out on one queue (one message at a time: the agents share the local model; long jobs such as a
+scout or a research mission run beside it). When an agent finishes, it reports on the thread and the Head is woken
+to read the report and decide — store the findings, follow up on the same thread, propose an action. Agents with
+news of their own (a playbook fired, the morning report is ready) leave a notice in the Head's inbox. The graph only
+ever receives facts that the pipeline checked against their source; the conversations stay in the threads, which the
+**Team** tab shows. Guard: a thread wakes the Head at most 4 times and a domain 12 times an hour (`HEAD_MAX_WAKES`,
+`HEAD_WAKES_PER_HOUR`; `HEAD_WAKE=off` leaves every report in the inbox).
+
 - **Agents never touch the database.** Every KG read and write goes through the KG API, which is where ontology checks and validation are enforced — in code, not in prompts.
 - **REST is the core; MCP is a thin adapter.** The same functions back both. Hermes discovers the KG tools over MCP with no glue code.
 - **Each part has its own dependencies.** Hermes pins its dependencies exactly, so it lives in its own venv and never shares one with the KG.
@@ -183,6 +211,7 @@ One screen per domain: the knowledge graph on the left, tools on the right.
 
 - **Graph** — entities colored by type and sized by mentions; edges thicken as facts gain evidence; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
 - **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph.
+- **Team** — the Head and its twelve agents at a glance: who is working or queued, and every conversation between them (tasks, questions, answers, reports, the Head's decisions), live.
 - **Voice** — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.
 - **Ingest** — paste text + source; shows new/known entities and created/strengthened/superseded/rejected facts with reasons.
 - **Search** — Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources.
@@ -308,9 +337,11 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
 | `GET` / `POST` / `PATCH` | `/domains/{domain}/playbooks`, `/playbooks/cycle`, `/playbooks/{uid}` | Playbooks / evaluate + rewrite `{hours, refresh, wait}` / retire one |
 | `GET` / `POST` / `DELETE` | `/domains/{domain}/sensors`, `/sensors/{name}`, `/sensors/{name}/read` | Sensors (groups of sources) / ask for one `{need, backend?, group?}` — the Scout by default; `group`: more sources for that sensor / read one now `{params}` |
 | `POST` | `/domains/{domain}/sensors/check` | Read every source once; scout again where fewer than two work (nightly) |
+| `GET` | `/domains/{domain}/team` | The Head's agents: role, tasks (inputs), state (working / queued / idle), the Head's unread count |
+| `GET` | `/domains/{domain}/threads`, `/threads/{uid}` | Conversations between the Head and its agents (`?agent=`) / one with every message |
 | `GET` | `/sensor-requests/{id}` | A sensor request: status, every candidate source and its outcome, live log |
 | `GET` | `/health` | KG API + ArcadeDB status, tracing on/off |
-| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `list_playbooks`, `list_actions`, `propose_action`, `list_proposals`, `web_search`, `read_webpage`, `list_sensors`, `read_sensor`, `request_sensor`, `start_research`, `research_status`, `list_research` |
+| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `list_playbooks`, `list_actions`, `propose_action`, `list_proposals`, `web_search`, `read_webpage`, `list_sensors`, `read_sensor`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
 | MCP | `/mcp/readonly` | The reading tools only (no ingest, ontology, review, proposal, sensor or research requests) |
 
 Every endpoint but `/health` and the sign-in ones needs a session cookie or `Authorization: Bearer <API token>`;

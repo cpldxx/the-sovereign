@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core import playbooks
+from core import crew, playbooks
 from domains.registry import load_domain
 
 router = APIRouter(prefix="/domains", tags=["playbooks"])
@@ -50,7 +50,11 @@ async def run_cycle(domain_name: str, req: Request, background_tasks: Background
 
     async def run() -> None:
         try:
-            await playbooks.cycle(req.app.state.db, domain_name, request.hours, request.refresh)
+            done = await playbooks.cycle(req.app.state.db, domain_name, request.hours, request.refresh)
+            if proposals := (done.get("evaluate") or {}).get("proposals"):
+                await crew.notify(req.app.state.db, domain_name, "watcher",
+                                  f"{len(proposals)} playbook(s) fired on the last {request.hours} h of knowledge — "
+                                  "proposals wait in Actions", {"proposals": proposals[:20]})
         except Exception as e:
             print(f"[KG] playbook cycle for {domain_name} failed: {type(e).__name__}: {e}", flush=True)
 

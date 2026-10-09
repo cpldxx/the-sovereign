@@ -55,6 +55,48 @@ export interface Invite {
   code?: string;  // only right after creation
 }
 
+// ── The Head's team (crew) ──────────────────────────────────────────────────
+
+export interface AgentTask {
+  name: string;
+  description: string;
+  background: boolean;
+  inputs: Record<string, string>;
+}
+
+export interface TeamAgent {
+  name: string;
+  title: string;
+  role: string;
+  tasks: AgentTask[];
+  state: 'working' | 'queued' | 'idle';
+  queued: number;
+}
+
+export interface CrewThread {
+  uid: string;
+  title: string;
+  agent: string;
+  opened_by: string;
+  status: 'open' | 'working' | 'done' | 'failed';
+  wakes: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CrewMessage {
+  uid: string;
+  thread: string;
+  sender: string;
+  recipient: string;
+  kind: 'task' | 'question' | 'answer' | 'report' | 'notice' | 'note';
+  task: string;
+  text: string;
+  data: Record<string, unknown>;
+  status: string;
+  created_at: string;
+}
+
 export interface Ontology {
   entity_types: string[];
   relation_types: string[];
@@ -623,6 +665,15 @@ export const kg = {
   checkSensors: (id: string) =>
     request<{ sensors: Record<string, { working: number; sources: number; rescout?: string }> }>(
       KG_API, `${d(id)}/sensors/check`, { method: 'POST' }),
+
+  team: (id: string) => request<{ agents: TeamAgent[]; unread: number }>(KG_API, `${d(id)}/team`),
+
+  threads: (id: string, agent?: string) =>
+    request<{ threads: CrewThread[] }>(KG_API, `${d(id)}/threads${agent ? `?agent=${encodeURIComponent(agent)}` : ''}`)
+      .then(r => r.threads),
+
+  thread: (id: string, uid: string) =>
+    request<CrewThread & { messages: CrewMessage[] }>(KG_API, `${d(id)}/threads/${encodeURIComponent(uid)}`),
 
   retirePlaybook: (id: string, uid: string) =>
     request<unknown>(KG_API, `${d(id)}/playbooks/${encodeURIComponent(uid)}`, {

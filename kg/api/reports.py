@@ -4,7 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from core import database as kgdb
-from core import digest
+from core import crew, digest
 from domains.registry import load_domain
 
 router = APIRouter(prefix="/domains", tags=["reports"])
@@ -54,7 +54,9 @@ async def create_report(domain_name: str, req: Request, background_tasks: Backgr
 
     async def run() -> None:
         try:
-            await digest.build_report(req.app.state.db, domain_name, request.hours, request.refresh)
+            report = await digest.build_report(req.app.state.db, domain_name, request.hours, request.refresh)
+            await crew.notify(req.app.state.db, domain_name, "reporter",
+                              f"The report is ready: {report.get('headline') or 'no headline'}", {"report": report.get("uid")})
         except Exception as e:
             print(f"[KG] report for {domain_name} failed: {type(e).__name__}: {e}", flush=True)
 

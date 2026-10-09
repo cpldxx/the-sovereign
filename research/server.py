@@ -3,7 +3,8 @@
     uv run python server.py   → http://localhost:8070
 
 Needs the KG API (8080), Ollama, and the search/crawler containers (`docker compose up -d`).
-Agents reach it through the KG's MCP tools (start_research / research_status / list_research).
+Agents reach it through the KG: the Head assigns the researcher a task (assign_task research.investigate),
+research_status / list_research show the jobs.
 """
 
 import asyncio

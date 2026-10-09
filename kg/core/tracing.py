@@ -16,7 +16,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ENABLED = bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
+# Keys set and not switched off (LANGFUSE_TRACING=false: Docker without the observability profile, where no
+# LangFuse runs to receive the traces).
+ENABLED = bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")) and \
+    os.getenv("LANGFUSE_TRACING", "true").strip().lower() not in ("false", "off", "0", "no")
 _client = None
 
 

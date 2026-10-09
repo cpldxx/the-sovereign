@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Send, Shapes } from 'lucide-react';
+import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Send, Shapes, Users } from 'lucide-react';
 import { ApiError, auth, kg, onSignedOut, research, type DomainDetail, type DomainSummary, type Fact, type Graph, type Ontology, type User } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
@@ -15,11 +15,13 @@ import { ReviewPanel } from './panels/ReviewPanel';
 import { ResearchPanel } from './panels/ResearchPanel';
 import { ReportPanel } from './panels/ReportPanel';
 import { ActionsPanel } from './panels/ActionsPanel';
+import { TeamPanel } from './panels/TeamPanel';
 
-type Tab = 'ask' | 'report' | 'actions' | 'research' | 'ingest' | 'search' | 'review' | 'ontology';
+type Tab = 'ask' | 'team' | 'report' | 'actions' | 'research' | 'ingest' | 'search' | 'review' | 'ontology';
 
 const TABS: { id: Tab; label: string; icon: typeof Bot }[] = [
   { id: 'ask', label: 'Head', icon: Bot },
+  { id: 'team', label: 'Team', icon: Users },
   { id: 'report', label: 'Report', icon: Newspaper },
   { id: 'actions', label: 'Actions', icon: Send },
   { id: 'research', label: 'Research', icon: Globe },
@@ -260,7 +262,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                         tab === id ? 'flex-[2.2] border-gold text-ink' : 'flex-1 border-transparent text-faint hover:text-dim'
                       }`}
                     >
-                      {/* Seven tabs: only the active one shows its name. */}
+                      {/* Nine tabs: only the active one shows its name. */}
                       <Icon size={13} className="shrink-0" /> {tab === id && <span className="truncate">{label}</span>}
                       {id === 'actions' && pendingActions > 0 && (
                         <span className="rounded-full bg-gold px-1.5 font-mono text-[9.5px] text-black">{pendingActions}</span>
@@ -275,6 +277,9 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                   {/* Panels stay mounted so a running chat or ingest survives tab switches. */}
                   <div className={tab === 'ask' ? 'h-full' : 'hidden'}>
                     <AskPanel key={active} domain={active} onKnowledgeChanged={refresh} onHighlight={setHighlight} />
+                  </div>
+                  <div className={tab === 'team' ? 'h-full' : 'hidden'}>
+                    <TeamPanel key={active} domain={active} />
                   </div>
                   <div className={tab === 'report' ? 'h-full' : 'hidden'}>
                     <ReportPanel key={active} domain={active} version={version} onHighlight={setHighlight} onSelect={setSelected} />

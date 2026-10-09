@@ -25,7 +25,8 @@ os.environ.setdefault("HERMES_HOME", str(HERE / ".hermes-home"))
 # LangFuse tracing (optional), through Hermes' bundled langfuse plugin. The Sovereign services share
 # LANGFUSE_* keys; the plugin reads HERMES_LANGFUSE_* and is opt-in, so it is enabled here. Plugins are
 # discovered when Hermes is imported, so this too must run first.
-TRACING = bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY"))
+TRACING = bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")) and \
+    os.getenv("LANGFUSE_TRACING", "true").strip().lower() not in ("false", "off", "0", "no")
 
 
 def _enable_hermes_plugin(name: str) -> None:
@@ -60,8 +61,9 @@ HEAD_THINKING = os.getenv("HEAD_THINKING", "false").strip().lower() in ("1", "tr
 # A reply that is nothing but a written-out call like `query_knowledge_graph(domain="x", ...)`.
 _TEXT_TOOL_CALL = re.compile(
     r"^\s*`*(query_knowledge_graph|get_entity|ingest_data|get_ontology|update_ontology|list_reviews|"
-    r"resolve_review|list_domains|start_research|research_status|list_research|daily_report|list_actions|"
-    r"propose_action|list_proposals|list_playbooks|list_sensors|read_sensor|request_sensor|web_search|read_webpage)"
+    r"resolve_review|list_domains|research_status|list_research|daily_report|list_actions|"
+    r"propose_action|list_proposals|list_playbooks|list_sensors|read_sensor|web_search|read_webpage|"
+    r"list_agents|assign_task|ask_agent|inbox|read_thread)"
     r"\s*\(.*\)\s*`*\s*$",
     re.S,
 )
@@ -93,8 +95,8 @@ def connect_kg(domain: str, tools: str = "head") -> str:
     return f"mcp-{name}"
 
 
-def _domain_context(domain: str) -> tuple[str, dict, list[dict]]:
-    """Domain description, ontology and action catalog from the KG REST API."""
+def _domain_context(domain: str) -> tuple[str, dict, list[dict], dict]:
+    """Domain description, ontology, action catalog and team from the KG REST API."""
     with httpx.Client(base_url=KG_URL, timeout=10.0, headers=auth.headers(domain)) as client:
         r = client.get(f"/domains/{domain}")
         if r.status_code == 404:
@@ -103,10 +105,25 @@ def _domain_context(domain: str) -> tuple[str, dict, list[dict]]:
         description = r.json()["config"].get("description") or domain
         ontology = client.get(f"/domains/{domain}/ontology").json()["ontology"]
         actions = client.get(f"/domains/{domain}/actions").json()["actions"]
-    return description, ontology, actions
+        team = client.get(f"/domains/{domain}/team").json()
+    return description, ontology, actions, team
 
 
-def _system_prompt(domain: str, description: str, ontology: dict, actions: list[dict]) -> str:
+def _team(team: dict) -> str:
+    """The roster for the prompt, like the action catalog: a local model uses what it is shown."""
+    lines = []
+    for a in team.get("agents", []):
+        # Shown as task name + inputs object, not as a call: written like `check(claims, …)` the model put the
+        # whole call into `task` (measured).
+        tasks = "; ".join(f'"{t["name"]}" with inputs {json.dumps(t.get("example", {}), ensure_ascii=False)}'
+                          + (f" (optional: {', '.join(t['optional'])})" if t.get("optional") else "")
+                          for t in a["tasks"]) or "questions only"
+        state = "" if a.get("state") == "idle" else f" [{a['state']}]"
+        lines.append(f"  - {a['name']} — {a['role']}{state}. Tasks: {tasks}")
+    return "\n".join(lines)
+
+
+def _system_prompt(domain: str, description: str, ontology: dict, actions: list[dict], team: dict) -> str:
     entity_types = ", ".join(ontology.get("entity_types", []))
     relation_types = ", ".join(ontology.get("relation_types", []))
     # The catalog is in the prompt, not behind a tool call: a local model asked to "let the team know" otherwise
@@ -120,6 +137,19 @@ Domain: {description}
 
 You are the CEO of a knowledge operation. You can ACT through these actions (propose_action):
 {catalog}
+
+You lead a TEAM of agents — give them work and talk to them:
+{_team(team)}
+- assign_task queues work, e.g. assign_task(domain="{domain}", agent="validator", task="check",
+  inputs={{"claims": ["…"], "source_text": "…"}}) — `task` is the name only, its fields go in `inputs`. The agent
+  reports on a thread when it is done and you are woken to read the report and decide what follows. Long tasks
+  take minutes: say you started it, don't wait. If a tool returns an error, read it and fix the call — never
+  claim a connection problem the tool didn't report.
+- ask_agent(domain, agent, question) asks one of them what it knows right now (why a sensor fails, what was
+  rejected, which playbooks exist…). Use thread="…" to follow up in the same conversation.
+- inbox(domain) holds their reports, answers and notices you haven't read{f" — {team['unread']} unread now" if team.get("unread") else ""}.
+- The graph holds FACTS only. Store what is worth keeping with ingest_data (checked against its source by the
+  Validator) — never the conversation itself, never your own guesses.
 
 Your memory is a knowledge graph:
 - ENTITIES (types: {entity_types}) are the things this domain is about.
@@ -140,9 +170,9 @@ How you work:
    note: approve a weak fact only if it is worth keeping as a signal; approve a merge only if both names
    are the same real-world thing; approve a link only if the new fact truly restates or replaces the old.
    Use get_entity / query_knowledge_graph to check before deciding.
-5. When the graph lacks what a question needs, send the research agent: start_research(domain, question) reads
-   the web and every page it reads is ingested into the graph (several minutes, in the background). Tell the
-   user you started it; check with research_status / list_research when asked. Don't wait in a loop.
+5. When the graph lacks what a question needs, send the researcher: assign_task(domain, "research",
+   "investigate", {{"question": …}}) reads the web and every page it reads is learned into the graph (minutes, in
+   the background; it reports back when done). Tell the user you started it. Don't wait in a loop.
 6. For "what happened / what's new / brief me", start from daily_report (written every night after research),
    then drill into the graph if asked. Read it out in your own words; don't just paste it.
 7. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
@@ -159,8 +189,8 @@ How you work:
    acting on a number). No sensor for it? Open a page that shows it with read_webpage: it is a real browser, so
    most quote, news and official pages work — if one site refuses, try another; web_search(recent=true) finds
    such pages. Always check right before proposing an action that depends on it. Nothing these return is stored;
-   ingest_data what is worth keeping. When the same live need keeps coming up and no sensor covers it,
-   request_sensor.
+   ingest_data what is worth keeping. When the same live need keeps coming up and no sensor covers it, give the
+   Scout the need: assign_task(domain, "scout", "find_sources", {{"need": …}}).
 10. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
 
 
@@ -257,9 +287,10 @@ otherwise."""
 
 READ_ONLY = """
 
-READ-ONLY: the user is a viewer of this domain. You can read the graph, reports, playbooks, proposals, sensors and
-the web, but you cannot change anything — no ingesting, reviews, ontology changes, research missions or proposed
-actions (those tools aren't yours here). When asked for one, say that an editor of the domain has to do it."""
+READ-ONLY: the user is a viewer of this domain. You can read the graph, reports, playbooks, proposals, sensors,
+your team's threads and the web, but you cannot change anything — no ingesting, reviews, ontology changes, tasks or
+questions for the team, or proposed actions (those tools aren't yours here). When asked for one, say that an editor
+of the domain has to do it."""
 
 
 def warm_up(domain: str | None = None) -> None:
@@ -283,12 +314,12 @@ def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSi
                       voice: bool = False, tools: str = "head") -> AIAgent:
     """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools for that domain
     (`tools`: "head" — everything, for editors; "readonly" — for viewers)."""
-    description, ontology, actions = _domain_context(domain)
+    description, ontology, actions, team = _domain_context(domain)
     toolset = connect_kg(domain, tools)
     return AIAgent(
         **_model_kwargs(),
         enabled_toolsets=[toolset],
-        ephemeral_system_prompt=(_system_prompt(domain, description, ontology, actions)
+        ephemeral_system_prompt=(_system_prompt(domain, description, ontology, actions, team)
                                  + (READ_ONLY if tools == "readonly" else "") + (VOICE_MODE if voice else "")),
         max_iterations=max_iterations,
         tool_delay=0.0,

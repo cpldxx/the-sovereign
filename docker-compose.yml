@@ -190,9 +190,11 @@ services:
     profiles: [app]
     env_file: .env
     environment:
+      LANGFUSE_TRACING: ${SOVEREIGN_TRACING:-false}   # ./sovereign up --observability turns it on
       ARCADEDB_URL: http://arcadedb:2480
       SOVEREIGN_KG_URL: http://kg:8080
       SOVEREIGN_RESEARCH_URL: http://research:8070
+      SOVEREIGN_HERMES_URL: http://hermes:8090     # the crew wakes the Head when a teammate reports
       SOVEREIGN_DOMAINS_DIR: /data/domains
       SCOUT_CATALOG: /data/scout-catalog.json
       LANGFUSE_BASE_URL: http://langfuse-web:3000
@@ -210,6 +212,7 @@ services:
     profiles: [app]
     env_file: .env
     environment:
+      LANGFUSE_TRACING: ${SOVEREIGN_TRACING:-false}   # ./sovereign up --observability turns it on
       SOVEREIGN_KG_URL: http://kg:8080
       SEARXNG_URL: http://searxng:8080
       CRAWL4AI_URL: http://crawl4ai:11235
@@ -229,6 +232,7 @@ services:
     profiles: [app]
     env_file: .env
     environment:
+      LANGFUSE_TRACING: ${SOVEREIGN_TRACING:-false}   # ./sovereign up --observability turns it on
       SOVEREIGN_KG_URL: http://kg:8080
       HERMES_HOME: /data/hermes-home
       HF_HOME: /data/hf                 # the speech model, downloaded on first use
