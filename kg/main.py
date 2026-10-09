@@ -3,9 +3,11 @@
 import asyncio
 import os
 from contextlib import AsyncExitStack, asynccontextmanager
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from mcp.server.transport_security import TransportSecuritySettings
 
 from api.actions import router as actions_router
 from api.auth import router as auth_router
@@ -25,9 +27,17 @@ from core import accounts, auth, playbooks, tracing
 from core.database import get_db
 
 
+# The MCP SDK's DNS-rebinding guard answers only the Host headers it knows: this machine, the KG's name on the
+# compose network (Hermes calls http://kg:8080/mcp), and the hosts the UI is served from (SOVEREIGN_ORIGINS).
+_mcp_hosts = {"localhost", "127.0.0.1", "[::1]", "kg"} | {urlsplit(o).netloc.rsplit(":", 1)[0] for o in auth.ORIGINS}
+MCP_SECURITY = TransportSecuritySettings(
+    allowed_hosts=[h for host in sorted(_mcp_hosts - {""}) for h in (host, f"{host}:*")],
+    allowed_origins=[*auth.ORIGINS, "http://localhost:*", "http://127.0.0.1:*"])
+
 # Built at import time: a server's MCP session manager only exists after this call.
 mcp_routes = [route for role, server in kg_mcp.servers.items()
-              for route in server.streamable_http_app(streamable_http_path=kg_mcp.PATHS[role]).routes]
+              for route in server.streamable_http_app(streamable_http_path=kg_mcp.PATHS[role],
+                                                      transport_security=MCP_SECURITY).routes]
 
 
 @asynccontextmanager

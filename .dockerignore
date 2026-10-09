@@ -1,0 +1,23 @@
+# Never in an image: secrets, local state, build leftovers
+**/.env
+**/.env.local
+**/.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+frontend/dist
+**/*.tsbuildinfo
+.git
+.logs
+.run
+data
+kg/.scout-catalog.json
+# a checkout's own domains are data (./data/kg/domains), not code — the module and the template stay
+kg/domains/*
+!kg/domains/*.py
+!kg/domains/_template
+hermes/.hermes-home
+research/.data
+research/.deerflow-home
+research/.deer-flow
+CLAUDE.md

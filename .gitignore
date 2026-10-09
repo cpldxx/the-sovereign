@@ -26,3 +26,10 @@ research/.deer-flow/
 .logs/
 .run/
 kg/.scout-catalog.json
+
+# Docker mode data (./sovereign up): domains, catalog, research runs, Hermes home
+data/
+
+# A checkout's own domains are data, not code (the template is)
+kg/domains/*/
+!kg/domains/_template/

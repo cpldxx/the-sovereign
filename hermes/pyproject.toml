@@ -13,5 +13,6 @@ dependencies = [
     "uvicorn>=0.41.0",
     "langfuse>=4",
     "av>=12,<16",
-    "mlx-whisper>=0.4",
+    # Speech on the Apple GPU; elsewhere (Linux, Docker) voice.py falls back to faster-whisper on the CPU.
+    "mlx-whisper>=0.4; sys_platform == 'darwin'",
 ]

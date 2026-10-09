@@ -181,7 +181,92 @@ services:
     networks:
       - sovereign-net
 
+  # ── The app (`./sovereign up`): KG, Hermes, Research and the web UI in containers ────────────────────────────────
+  # Settings come from the root .env (`./sovereign init` writes it); data lives in ./data (bind mounts, so it
+  # survives rebuilds and stays visible). Only the web UI publishes a port.
+  kg:
+    build: {context: ., dockerfile: kg/Dockerfile}
+    image: sovereign-kg
+    profiles: [app]
+    env_file: .env
+    environment:
+      ARCADEDB_URL: http://arcadedb:2480
+      SOVEREIGN_KG_URL: http://kg:8080
+      SOVEREIGN_RESEARCH_URL: http://research:8070
+      SOVEREIGN_DOMAINS_DIR: /data/domains
+      SCOUT_CATALOG: /data/scout-catalog.json
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+    volumes:
+      - ./data/kg:/data
+      - /var/run/docker.sock:/var/run/docker.sock   # sensor sandboxes run as sibling containers
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [arcadedb]
+    restart: unless-stopped
+    networks: [sovereign-net]
+
+  research:
+    build: {context: ., dockerfile: research/Dockerfile}
+    image: sovereign-research
+    profiles: [app]
+    env_file: .env
+    environment:
+      SOVEREIGN_KG_URL: http://kg:8080
+      SEARXNG_URL: http://searxng:8080
+      CRAWL4AI_URL: http://crawl4ai:11235
+      RESEARCH_DATA: /data/jobs
+      DEER_FLOW_HOME: /data/deerflow-home
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+    volumes:
+      - ./data/research:/data
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [kg, searxng, crawl4ai]
+    restart: unless-stopped
+    networks: [sovereign-net]
+
+  hermes:
+    build: {context: ., dockerfile: hermes/Dockerfile}
+    image: sovereign-hermes
+    profiles: [app]
+    env_file: .env
+    environment:
+      SOVEREIGN_KG_URL: http://kg:8080
+      HERMES_HOME: /data/hermes-home
+      HF_HOME: /data/hf                 # the speech model, downloaded on first use
+      VOICE_TTS: hermes
+      LANGFUSE_BASE_URL: http://langfuse-web:3000
+    volumes:
+      - ./data/hermes:/data
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [kg]
+    restart: unless-stopped
+    networks: [sovereign-net]
+
+  web:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_LANGFUSE_URL: ${LANGFUSE_PUBLIC_URL:-}
+    image: sovereign-web
+    profiles: [app]
+    ports:
+      - "${SOVEREIGN_BIND:-127.0.0.1}:${SOVEREIGN_PORT:-8000}:80"
+    depends_on: [kg, hermes, research]
+    restart: unless-stopped
+    networks: [sovereign-net]
+
+  # ── Ollama in a container (`./sovereign up --ollama`): for Linux machines (add a GPU reservation for NVIDIA).
+  # On a Mac, Ollama runs on the host — Docker can't use the Apple GPU.
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [ollama]
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: unless-stopped
+    networks: [sovereign-net]
+
 volumes:
+  ollama_models:
   arcadedb_data:
   langfuse_postgres_data:
   langfuse_clickhouse_data:

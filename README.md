@@ -105,6 +105,37 @@ The ontology is the grammar of a domain's KG — which node categories and relat
 
 ## Quick Start
 
+### In Docker (one command)
+
+Requirements: [Docker](https://docs.docker.com/get-docker/) and [Ollama](https://ollama.com) running on the machine.
+
+```bash
+git clone https://github.com/cpldxx/the-sovereign.git && cd the-sovereign
+./sovereign up
+```
+
+`up` writes `.env` with generated secrets, pulls the models Ollama is missing (`qwen3.6:35b`, ~24 GB, and an
+embedding model — once), builds the sandbox and app images, and starts everything: ArcadeDB, SearXNG, crawl4ai, the
+KG API, Hermes, Research and the web UI. Open **http://localhost:8000** and create the first account — it is the admin.
+
+- `./sovereign up --ollama` — Ollama in a container too (a Linux machine; on a Mac Docker can't use the Apple GPU, so
+  keep Ollama on the host)
+- `./sovereign up --observability` — with LangFuse traces (UI on port 3000; put its keys in `.env`)
+- `./sovereign down` — stop it; data stays in `./data` and the database volume
+- Settings: `.env` (see `.env.example`) — models (or Claude via `ANTHROPIC_API_KEY`), sign-up mode, search keys,
+  `SOVEREIGN_BIND=0.0.0.0` to reach it from other devices (put HTTPS in front, set `COOKIE_SECURE=true`, and add the
+  address to `SOVEREIGN_ORIGINS` — the sign-in check and the MCP endpoint accept only the hosts listed there)
+- `./sovereign test` and `./sovereign selfcheck` run against whichever mode is up (in Docker: through nginx)
+- If Docker's credential helper hangs (a locked keychain), `up` notices within 10 s and pulls the public images
+  without it; your Docker config is left as it is
+
+Only the web UI's port is published: nginx serves the UI and forwards `/api/kg`, `/api/hermes` and `/api/research` to
+the services (MCP clients: `http://localhost:8000/api/kg/mcp/readonly` with an API token). Voice in Docker uses
+faster-whisper on the CPU and Hermes' TTS providers, with the browser's own voice as the fallback; the Apple-GPU voice
+is the development mode's.
+
+### For development (processes on this machine)
+
 Requirements: Docker, [Ollama](https://ollama.com), [uv](https://docs.astral.sh/uv/), Node.js. Python 3.12 is installed by uv.
 
 First time — models, config, dependencies:

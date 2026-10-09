@@ -18,7 +18,10 @@ os.chdir(KG)   # the services' modules read .env relative to kg/
 from core import auth  # noqa: E402
 
 SERVICE = auth.TOKEN
-URLS = {"kg": "http://localhost:8080", "hermes": "http://localhost:8090", "research": "http://localhost:8070"}
+# Against the Docker stack (./sovereign up) everything sits behind nginx: SOVEREIGN_TEST_BASE=http://localhost:8000/api
+BASE = os.getenv("SOVEREIGN_TEST_BASE", "").rstrip("/")
+URLS = ({s: f"{BASE}/{s}" for s in ("kg", "hermes", "research")} if BASE else
+        {"kg": "http://localhost:8080", "hermes": "http://localhost:8090", "research": "http://localhost:8070"})
 
 
 def _up(url: str) -> bool:

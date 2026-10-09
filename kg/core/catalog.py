@@ -19,6 +19,7 @@ It evolves by itself, with no list kept by hand:
 import asyncio
 import json
 import math
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -26,7 +27,7 @@ from pathlib import Path
 from core import embeddings
 from core.database import now
 
-PATH = Path(__file__).resolve().parents[1] / ".scout-catalog.json"
+PATH = Path(os.getenv("SCOUT_CATALOG") or Path(__file__).resolve().parents[1] / ".scout-catalog.json")
 SIMILAR = 0.72          # need texts this similar share templates
 REFUSAL_DAYS = 7
 _REFUSED = re.compile(r"^(robots\.txt|bot protection)")

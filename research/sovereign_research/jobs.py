@@ -18,7 +18,7 @@ import httpx
 from sovereign_research import auth, missions, runner
 
 KG_URL = os.getenv("SOVEREIGN_KG_URL", "http://localhost:8080").rstrip("/")
-DATA = Path(__file__).resolve().parent.parent / ".data"
+DATA = Path(os.getenv("RESEARCH_DATA") or Path(__file__).resolve().parent.parent / ".data")
 JOBS_FILE = DATA / "jobs.json"
 MODES = ("bootstrap", "update", "mission")
 

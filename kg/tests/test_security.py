@@ -19,6 +19,17 @@ from core.auth import Principal
 from conftest import SERVICE, URLS
 
 
+# ── MCP host guard ───────────────────────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("host,ok", [("kg:8080", True), ("localhost", True), ("localhost:8000", True),
+                                     ("127.0.0.1:8080", True), ("evil.example", False), ("kg.evil.example:80", False)])
+def test_mcp_answers_only_known_hosts(host, ok):
+    """Hermes reaches the MCP as kg:8080 inside compose, the UI through nginx as localhost; nothing else (DNS rebinding)."""
+    from mcp.server.transport_security import TransportSecurityMiddleware
+    import main
+    assert TransportSecurityMiddleware(main.MCP_SECURITY)._validate_host(host) is ok
+
+
 # ── Webhooks ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("url", ["http://localhost:11434/api/tags", "http://127.0.0.1:2480/", "http://[::1]:8080/",

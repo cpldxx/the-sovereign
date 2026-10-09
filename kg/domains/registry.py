@@ -1,15 +1,17 @@
 """Domain registry - creates and loads domain workspaces."""
 
-import importlib
+import ast
 import json
+import os
 import re
 import secrets
 import shutil
-import sys
 from pathlib import Path
 
-DOMAINS_DIR = Path(__file__).parent
-TEMPLATE_DIR = DOMAINS_DIR / "_template"
+# Where the domains' folders live: next to this file (a checkout), or SOVEREIGN_DOMAINS_DIR (a data volume in Docker).
+DOMAINS_DIR = Path(os.getenv("SOVEREIGN_DOMAINS_DIR") or Path(__file__).parent)
+TEMPLATE_DIR = Path(__file__).parent / "_template"
+DOMAINS_DIR.mkdir(parents=True, exist_ok=True)
 
 DEFAULT_ONTOLOGY = {
     "entity_types": ["concept", "method", "tool", "finding", "event", "metric", "entity"],
@@ -82,7 +84,6 @@ def create_domain(name: str, description: str, data_sources: list[str] = None, k
     (domain_dir / "config.py").write_text(
         f'"""Domain configuration for {domain}"""\n\nDOMAIN_CONFIG = {{\n{body}}}\n'
     )
-    importlib.invalidate_caches()  # let the import system see the new package
 
     return domain
 
@@ -95,15 +96,21 @@ def load_domain(name: str) -> dict:
     """Load a domain's config and ontology. (Its live-data tools are sensors in its database.)"""
     domain_dir = _domain_dir(name)
 
-    config_module = importlib.import_module(f"domains.{name}.config")
-
     ontology_file = domain_dir / "ontology.json"
     ontology = json.loads(ontology_file.read_text()) if ontology_file.exists() else DEFAULT_ONTOLOGY
 
     return {
-        "config": config_module.DOMAIN_CONFIG,
+        "config": _config(domain_dir),
         "ontology": ontology,
     }
+
+
+def _config(domain_dir: Path) -> dict:
+    """The DOMAIN_CONFIG literal of a domain's config.py — read, never executed (it lives in the data directory)."""
+    for node in ast.parse((domain_dir / "config.py").read_text()).body:
+        if isinstance(node, ast.Assign) and any(getattr(t, "id", "") == "DOMAIN_CONFIG" for t in node.targets):
+            return ast.literal_eval(node.value)
+    raise ValueError(f"{domain_dir.name}/config.py has no DOMAIN_CONFIG")
 
 
 def list_domains() -> list[str]:
@@ -118,7 +125,3 @@ def delete_domain(name: str) -> None:
     """Delete a domain workspace."""
     domain_dir = _domain_dir(name)
     shutil.rmtree(domain_dir)
-    # Forget the imported modules, or a re-created domain of the same name
-    # would silently load the deleted one's config.
-    for module in [m for m in sys.modules if m == f"domains.{name}" or m.startswith(f"domains.{name}.")]:
-        del sys.modules[module]
