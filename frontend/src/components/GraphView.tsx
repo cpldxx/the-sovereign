@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import cytoscape, { type Core } from 'cytoscape';
 import fcose from 'cytoscape-fcose';
 import { History, Maximize2 } from 'lucide-react';
-import type { Graph } from '../lib/api';
+import type { Entity, Graph } from '../lib/api';
 import { categoryColor } from '../lib/colors';
 
 cytoscape.use(fcose);
@@ -24,8 +24,12 @@ const STYLE: cytoscape.StylesheetJson = [
       'text-outline-width': 2,
       'border-width': 2,
       'border-color': '#0a0c0f',
+      // Zoomed out, 800 labels are noise: they appear once they'd be readable.
+      'min-zoomed-font-size': 9,
     },
   },
+  // Entities no fact connects yet: the outer halo, quieter than the connected graph.
+  { selector: 'node.lone', style: { opacity: 0.7, 'border-width': 1 } },
   {
     // Synapse: thickness and brightness follow the weight (confirmed by more sources → stronger).
     selector: 'edge',
@@ -43,10 +47,14 @@ const STYLE: cytoscape.StylesheetJson = [
       'text-background-color': '#0a0c0f',
       'text-background-opacity': 1,
       'text-background-padding': '1px',
+      'min-zoomed-font-size': 8,
     },
   },
   // has_state facts are self-loops: keep them small so they don't clutter the graph.
-  { selector: 'edge.state', style: { 'loop-direction': '-45deg', 'loop-sweep': '40deg', label: '' } },
+  { selector: 'edge.state', style: {
+    'loop-direction': '-45deg', 'loop-sweep': '30deg', 'control-point-step-size': 6, label: '',
+    width: 0.6, opacity: 0.3, 'target-arrow-shape': 'none',
+  } },
   { selector: 'edge.superseded', style: { 'line-style': 'dashed', opacity: 0.35, label: '' } },
   { selector: '.dim', style: { opacity: 0.12 } },
   { selector: 'node.hl', style: { 'border-color': '#e2b356', 'border-width': 3 } },
@@ -58,6 +66,103 @@ const STYLE: cytoscape.StylesheetJson = [
 function weightColor(w: number): string {
   const v = Math.round(70 + w * 120);
   return `rgb(${v}, ${v + 8}, ${v + 20})`;
+}
+
+/** Golden angle: successive points of a sunflower never line up, so the halo stays round and even. */
+const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+const CORE_MIN = 8;          // components at least this big are laid out by force; smaller ones sit on a ring
+
+/** Connected components over the drawn (non-loop) edges, biggest first. */
+function components(ids: string[], links: [string, string][]): string[][] {
+  const adj = new Map(ids.map(id => [id, [] as string[]]));
+  for (const [a, b] of links) { adj.get(a)!.push(b); adj.get(b)!.push(a); }
+  const seen = new Set<string>();
+  const out: string[][] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    const comp: string[] = [];
+    const stack = [id];
+    seen.add(id);
+    while (stack.length) {
+      const x = stack.pop()!;
+      comp.push(x);
+      for (const y of adj.get(x)!) if (!seen.has(y)) { seen.add(y); stack.push(y); }
+    }
+    out.push(comp);
+  }
+  return out.sort((a, b) => b.length - a.length);
+}
+
+/**
+ * A round composition instead of fcose's tiling (which packs hundreds of unconnected entities into a square):
+ * the big connected components in the middle (force layout), the small clusters on a ring around them, and the
+ * entities no fact connects yet as a sunflower halo outside — sorted by type, so the halo reads in color bands.
+ */
+function layoutRound(c: Core, comps: string[][], byId: Map<string, Entity>, randomize: boolean) {
+  const core = comps.filter(x => x.length >= CORE_MIN);
+  const small = comps.filter(x => x.length > 1 && x.length < CORE_MIN);
+  const lone = comps.filter(x => x.length === 1).map(x => x[0]);
+  const coreIds = new Set(core.flat());
+  const coreNodes = c.nodes().filter(n => coreIds.has(n.id()));
+
+  const place = () => {
+    // The core's center and radius (from the nodes themselves, not a box: the blob is round-ish).
+    let cx = 0, cy = 0, radius = 0;
+    if (coreNodes.length) {
+      coreNodes.forEach(n => { cx += n.position('x'); cy += n.position('y'); });
+      cx /= coreNodes.length; cy /= coreNodes.length;
+      // Most of the core, not its farthest branch tip: a few long arms would push the ring far out.
+      const dist: number[] = [];
+      coreNodes.forEach(n => { dist.push(Math.hypot(n.position('x') - cx, n.position('y') - cy)); });
+      dist.sort((a, b) => a - b);
+      radius = dist[Math.floor(dist.length * 0.85)] + 20;
+    }
+    const positions = new Map<string, { x: number; y: number }>();
+
+    // Small clusters on a ring, each drawn as its own little circle, grouped by their main type.
+    const typeOf = (ids: string[]) => byId.get(ids[0])?.type ?? '';
+    const clusters = [...small].sort((a, b) => typeOf(a).localeCompare(typeOf(b)));
+    const span = (k: number) => 2 * (12 + 8 * k) + 20;          // a cluster's footprint on the ring
+    const total = clusters.reduce((s, k) => s + span(k.length), 0);
+    const ring = Math.max(radius + 50, total / (2 * Math.PI));
+    let angle = 0;
+    for (const comp of clusters) {
+      const share = (span(comp.length) / Math.max(total, 1)) * 2 * Math.PI;
+      const a = angle + share / 2;
+      angle += share;
+      const ccx = cx + ring * Math.cos(a), ccy = cy + ring * Math.sin(a);
+      const r = comp.length === 2 ? 18 : 12 + 8 * comp.length;
+      comp.forEach((id, i) => {
+        const b = a + (2 * Math.PI * i) / comp.length;
+        positions.set(id, { x: ccx + r * Math.cos(b), y: ccy + r * Math.sin(b) });
+      });
+    }
+
+    // The halo: a sunflower annulus outside everything else.
+    const inner = (clusters.length ? ring + 45 : radius + 45);
+    const area = 28 * 28;
+    const order = [...lone].sort((a, b) => {
+      const ea = byId.get(a)!, eb = byId.get(b)!;
+      return ea.type.localeCompare(eb.type) || (eb.mentions ?? 0) - (ea.mentions ?? 0);
+    });
+    order.forEach((id, i) => {
+      const r = Math.sqrt(inner * inner + ((i + 0.5) * area) / Math.PI);
+      const th = i * GOLDEN;
+      positions.set(id, { x: cx + r * Math.cos(th), y: cy + r * Math.sin(th) });
+    });
+
+    c.nodes().filter(n => positions.has(n.id())).positions(n => positions.get(n.id())!);
+    c.fit(undefined, 40);
+  };
+
+  if (!coreNodes.length) { place(); return; }
+  const run = coreNodes.union(coreNodes.edgesWith(coreNodes)).layout({
+    name: 'fcose', animate: false, randomize, quality: 'default',
+    nodeRepulsion: 4500, idealEdgeLength: 70, edgeElasticity: 0.45, gravity: 0.5, gravityRange: 3.0,
+    packComponents: true, nodeSeparation: 40, padding: 40,
+  } as cytoscape.LayoutOptions);
+  run.one('layoutstop', place);
+  run.run();
 }
 
 export function GraphView({ graph, entityTypes, highlight, selected, onSelect }: {
@@ -74,7 +179,7 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
   const [showSuperseded, setShowSuperseded] = useState(false);
 
   useEffect(() => {
-    const instance = cytoscape({ container: container.current, style: STYLE, minZoom: 0.2, maxZoom: 3 });
+    const instance = cytoscape({ container: container.current, style: STYLE, minZoom: 0.05, maxZoom: 3 });
     instance.on('tap', 'node', e => onSelectRef.current(e.target.id()));
     instance.on('tap', e => { if (e.target === instance) onSelectRef.current(null); });
     cy.current = instance;
@@ -93,6 +198,10 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
     if (!c) return;
     const ids = new Set(graph.entities.map(e => e.uid));
     const old = new Map(c.nodes().map(n => [n.id(), n.position()]));
+    const drawn = graph.facts.filter(f => ids.has(f.source_uid) && ids.has(f.target_uid) && (f.valid || showSuperseded));
+    const comps = components(graph.entities.map(e => e.uid),
+      drawn.filter(f => f.source_uid !== f.target_uid).map(f => [f.source_uid, f.target_uid] as [string, string]));
+    const lone = new Set(comps.filter(x => x.length === 1).map(x => x[0]));
     c.elements().remove();
     c.add([
       ...graph.entities.map(e => ({
@@ -101,12 +210,12 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
           id: e.uid,
           name: e.name.length > 28 ? e.name.slice(0, 27) + '…' : e.name,
           color: categoryColor(e.type, entityTypes),
-          size: 16 + Math.min(20, Math.log2(1 + (e.mentions ?? 1)) * 7),
+          size: (16 + Math.min(20, Math.log2(1 + (e.mentions ?? 1)) * 7)) * (lone.has(e.uid) ? 0.7 : 1),
         },
+        classes: lone.has(e.uid) ? 'lone' : '',
         position: old.get(e.uid),
       })),
-      ...graph.facts
-        .filter(f => ids.has(f.source_uid) && ids.has(f.target_uid) && (f.valid || showSuperseded))
+      ...drawn
         .map(f => ({
           group: 'edges' as const,
           data: {
@@ -122,10 +231,7 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
     ]);
     const fresh = graph.entities.some(e => !old.has(e.uid));
     if (fresh && graph.entities.length) {
-      c.layout({
-        name: 'fcose', animate: old.size > 0, randomize: old.size === 0,
-        nodeRepulsion: 9000, idealEdgeLength: 120, padding: 40,
-      } as cytoscape.LayoutOptions).run();
+      layoutRound(c, comps, new Map(graph.entities.map(e => [e.uid, e])), old.size === 0);
     }
   }, [graph, entityTypes, showSuperseded]);
 
