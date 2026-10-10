@@ -304,6 +304,13 @@ class Nothing(BaseModel):
     pass
 
 
+async def _relink(db: ArcadeDB, domain: str, x: Nothing) -> Outcome:
+    r = await kg.relink_states(db, domain)
+    return Outcome(f"Read {r['statements']} facts filed as one entity's state that name another entity: added "
+                   f"{r['added']} relations ({r['proposed']} proposed; skipped: {r['skipped'] or 'none'}).",
+                   {**{k: r[k] for k in ("statements", "proposed", "added", "skipped")}, "facts": r["facts"][:40]})
+
+
 async def _refresh_playbooks(db: ArcadeDB, domain: str, x: Nothing) -> Outcome:
     counts = await playbooks.refresh(db, domain)
     active = await playbooks.list_playbooks(db, domain)
@@ -469,7 +476,10 @@ ROSTER: dict[str, Member] = {m.name: m for m in [
             Task("check", "Check statements against a text (nothing is stored)", Check, _check)),
     _member("resolver", "Resolver", "decides whether a new entity is the same real thing as a known one",
             _desk_resolver),
-    _member("linker", "Linker", "finds the existing facts a new fact restates or contradicts", _desk_linker),
+    _member("linker", "Linker", "finds the existing facts a new fact restates or contradicts, and the relations "
+            "hidden in facts filed about one entity", _desk_linker,
+            Task("relink", "Turn stored facts about one entity that name another into the relations they state, "
+                 "each checked by the Validator (minutes)", Nothing, _relink, background=True)),
     _member("ontologist", "Ontologist", "designs the domain's grammar: its entity types and relations",
             _desk_ontologist, Task("propose", "Propose an ontology from recent sources (not applied)", Propose,
                                    _propose)),

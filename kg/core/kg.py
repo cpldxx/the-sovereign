@@ -433,10 +433,13 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
 
 # ── Head review decisions ──────────────────────────────────────────────────
 
-async def relink_states(db: ArcadeDB, domain: str, dry_run: bool = False, batch: int = 10) -> dict:
+async def relink_states(db: ArcadeDB, domain: str, dry_run: bool = False, batch: int = 10,
+                        unconnected_only: bool = True) -> dict:
     """Stored has_state facts that name another entity of the graph → the relations they state, added as facts:
     each checked by the Validator against its statement, carrying the statement's sources. The states stay; each one
-    read is marked `relinked`, so it is asked once. (New sources get this at ingest: _restate.)"""
+    read is marked `relinked`, so it is asked once. (New sources get this at ingest: _restate.)
+    unconnected_only: just the states of entities linked to no other entity — the ones this matters most for (all
+    464 states of ai_chips took over 50 minutes on the local model; its ~70 unconnected ones, minutes)."""
     relations = Ontology.model_validate(load_domain(domain)["ontology"]).relation_types
     await kgdb.ensure_domain_db(db, domain)
     ents = await db.cypher(domain, "MATCH (e:Entity) RETURN e.uid AS uid, e.name AS name, e.aliases AS aliases")
@@ -446,9 +449,10 @@ async def relink_states(db: ArcadeDB, domain: str, dry_run: bool = False, batch:
             if k := name_key(n):
                 by_key.setdefault(k, e["uid"])
     names = {e["uid"]: e["name"] for e in ents}
+    alone = " AND NOT exists { MATCH (e)-[:Fact]-(o:Entity) WHERE o <> e }" if unconnected_only else ""
     states = await db.cypher(
-        domain, "MATCH (e:Entity)-[r:has_state]->(e) WHERE r.invalid_at IS NULL AND r.relinked IS NULL "
-                "RETURN r.uid AS uid, r.fact AS fact, e.uid AS subject, r.sources AS sources, r.disbelief AS disbelief")
+        domain, "MATCH (e:Entity)-[r:has_state]->(e) WHERE r.invalid_at IS NULL AND r.relinked IS NULL" + alone +
+                " RETURN r.uid AS uid, r.fact AS fact, e.uid AS subject, r.sources AS sources, r.disbelief AS disbelief")
     asks = []
     for st in states:
         others = [e["uid"] for e in ents if e["uid"] != st["subject"]

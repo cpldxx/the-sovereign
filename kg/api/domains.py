@@ -140,11 +140,11 @@ async def api_prune(domain_name: str, req: Request, dry_run: bool = True):
 
 
 @router.post("/{domain_name}/relink")
-async def api_relink(domain_name: str, req: Request, dry_run: bool = True):
+async def api_relink(domain_name: str, req: Request, dry_run: bool = True, unconnected_only: bool = True):
     """Stored has_state facts that name another entity → the relations they state, added as checked facts (the
     states stay). dry_run (the default) only lists them. One model call per ten statements. Owner only."""
     auth.require(domain_name, "owner")
     try:
-        return await kg.relink_states(req.app.state.db, domain_name, dry_run)
+        return await kg.relink_states(req.app.state.db, domain_name, dry_run, unconnected_only=unconnected_only)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
