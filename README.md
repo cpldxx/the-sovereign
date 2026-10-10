@@ -209,7 +209,7 @@ then use official data APIs instead of unofficial endpoints) · `ANTHROPIC_API_K
 
 One screen per domain: the knowledge graph on the left, tools on the right.
 
-- **Graph** — entities colored by type and sized by mentions; edges thicken as facts gain evidence; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
+- **Graph** — an Obsidian-style live graph: entities colored by type and sized by their links, faint links that brighten as facts gain evidence, names fading in as you zoom, hover to light an entity and its neighbours, drag to shake it; entities no fact connects yet float as a cloud around it; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
 - **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph.
 - **Team** — the Head and its twelve agents at a glance: who is working or queued, and every conversation between them (tasks, questions, answers, reports, the Head's decisions), live.
 - **Voice** — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.
@@ -384,7 +384,7 @@ Search uses the local SearXNG by default. Its free engines throttle heavy use (s
 | API + MCP | FastAPI + MCP Python SDK | MIT |
 | LLMs + embeddings | Ollama (qwen3.6:35b, nomic-embed) by default; Claude via env | — |
 | Sensors | Scout (many sources, pydantic-ai), built-in coder or OpenHands (`SENSOR_BACKEND`); pages via crawl4ai; pydantic-checked readings | MIT |
-| Frontend | React 19 + Vite + Tailwind + Cytoscape.js | — |
+| Frontend | React 19 + Vite + Tailwind + force-graph (d3-force, canvas — an Obsidian-style graph) | — |
 | Research / collection | DeerFlow 2.1 + SearXNG + crawl4ai | MIT / AGPL-3.0 (run unmodified as a separate service) / Apache 2.0 + attribution |
 | Observability | LangFuse (self-hosted, optional) | MIT (core) |
 | Voice | mlx-whisper / faster-whisper (local STT), macOS voices or Hermes TTS providers | MIT |
