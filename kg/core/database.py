@@ -435,6 +435,27 @@ async def repair_name_keys(db: ArcadeDB, domain: str) -> int:
     return len(leaked)
 
 
+async def prune_factless_entities(db: ArcadeDB, domain: str, keep: set[str] = frozenset(),
+                                  dry_run: bool = False) -> list[dict]:
+    """Delete the entities no fact touches any more (a weak fact rejected in review, a merge, older ingests that
+    stored every name) — except those in `keep` (pending reviews, playbooks). Returns what was (or would be)
+    deleted, enough to restore it: the entity's fields and the episodes that mentioned it."""
+    if not await db.exists(domain):
+        return []
+    rows = await db.cypher(
+        domain,
+        "MATCH (e:Entity) WHERE NOT (e)-[:Fact]-() OPTIONAL MATCH (ep:Episode)-[:MENTIONS]->(e) "
+        "RETURN e.uid AS uid, e.name AS name, e.type AS type, e.summary AS summary, e.aliases AS aliases, "
+        "e.keys AS keys, e.mentions AS mentions, e.created_at AS created_at, collect(ep.uid) AS episodes",
+    )
+    doomed = [r for r in rows if r["uid"] not in keep]
+    if not dry_run:
+        for i in range(0, len(doomed), 200):
+            await db.cypher(domain, "MATCH (e:Entity) WHERE e.uid IN $uids DETACH DELETE e",
+                            uids=[r["uid"] for r in doomed[i:i + 200]])
+    return doomed
+
+
 async def merge_entities(db: ArcadeDB, domain: str, duplicate_uid: str, into_uid: str) -> None:
     """Fold a duplicate entity into another: names, mentions and every fact move over."""
     dup = await entity_detail(db, domain, duplicate_uid)

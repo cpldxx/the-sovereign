@@ -132,6 +132,17 @@ def _plain_briefing(stats: dict) -> tuple[str, str, str]:
     return headline, briefing, headline
 
 
+async def prune_entities(db: ArcadeDB, domain: str, dry_run: bool = False) -> list[dict]:
+    """Entities no fact touches any more — except those a pending review or a playbook still refers to."""
+    keep: set[str] = set()
+    for r in await kgdb.list_reviews(db, domain, limit=100000):
+        p = r.get("payload") or {}
+        keep |= {p[k] for k in ("entity_uid", "candidate_uid", "source_uid", "target_uid") if p.get(k)}
+    for pb in await kgdb.find_docs(db, domain, "Playbook", ("watch", "evidence", "trigger"), limit=10000):
+        keep |= {w["uid"] for w in pb.get("watch") or [] if isinstance(w, dict) and w.get("uid")}
+    return await kgdb.prune_factless_entities(db, domain, keep, dry_run)
+
+
 async def build_report(db: ArcadeDB, domain: str, hours: int = 24, refresh: bool = True) -> dict:
     """Refresh stale summaries, then write and store the report for the last `hours`. Raises ValueError for
     unknown domains and RuntimeError when a report for the domain is already being generated."""
@@ -146,6 +157,7 @@ async def build_report(db: ArcadeDB, domain: str, hours: int = 24, refresh: bool
             end_dt = datetime.now(timezone.utc)
             start, end = _iso(end_dt - timedelta(hours=hours)), _iso(end_dt)
             repaired = await kgdb.repair_name_keys(db, domain)  # names that leaked onto other entities
+            pruned = await prune_entities(db, domain)           # entities left without any fact
             summaries = await refresh_summaries(db, domain, start) if refresh else {"candidates": 0, "refreshed": 0}
             changes = await kgdb.changes_since(db, domain, start)
             runs = await _research_runs(domain, start)
@@ -174,6 +186,7 @@ async def build_report(db: ArcadeDB, domain: str, hours: int = 24, refresh: bool
                 },
                 "summaries": summaries,
                 "names_repaired": repaired,
+                "entities_pruned": len(pruned),
                 "ontology_gaps": gaps,
                 # LLM calls / tokens per activity across ALL domains (one local model serves them all), or None
                 "llm": await llm_usage(start, end),

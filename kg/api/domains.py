@@ -6,7 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from agents.ontologist import bootstrap_domain_ontology
-from core import accounts, auth
+from core import accounts, auth, digest, kg
 from core.accounts import AccountError
 from core.database import domain_stats, drop_domain_db, ensure_domain_db
 from domains.registry import create_domain, delete_domain, list_domains, load_domain, ontology_path
@@ -128,3 +128,23 @@ async def api_unshare(domain_name: str, uid: str):
     except AccountError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
     return {"members": await accounts.members(domain_name)}
+
+
+@router.post("/{domain_name}/prune")
+async def api_prune(domain_name: str, req: Request, dry_run: bool = True):
+    """Entities no fact touches any more (those a pending review or a playbook refers to stay). dry_run (the
+    default) only lists them; the nightly report prunes them by itself. Owner only."""
+    auth.require(domain_name, "owner")
+    gone = await digest.prune_entities(req.app.state.db, domain_name, dry_run)
+    return {"dry_run": dry_run, "count": len(gone), "entities": gone}
+
+
+@router.post("/{domain_name}/relink")
+async def api_relink(domain_name: str, req: Request, dry_run: bool = True):
+    """Stored has_state facts that name another entity → the relations they state, added as checked facts (the
+    states stay). dry_run (the default) only lists them. One model call per ten statements. Owner only."""
+    auth.require(domain_name, "owner")
+    try:
+        return await kg.relink_states(req.app.state.db, domain_name, dry_run)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

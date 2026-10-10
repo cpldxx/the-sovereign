@@ -16,7 +16,7 @@ import re
 import time
 from collections import Counter
 
-from agents.extractor import STATE, extract
+from agents.extractor import STATE, extract, relate
 from agents.linker import link
 from agents.resolver import resolve
 from agents.validator import validate
@@ -162,6 +162,39 @@ async def ingest(
     return result
 
 
+async def _restate(facts: list[dict], kept: dict, by_name: dict, relations: list[str]) -> list[dict]:
+    """has_state facts that name another extracted entity → the relations they state, in their place (each then
+    checked by the Validator like any fact). A statement no relation type fits stays a state."""
+    asks = []
+    for f in facts:
+        if f["relation"] != STATE:
+            continue
+        others = [k for k, e in kept.items() if k != f["source"] and _in_text([e["name"], *e["aliases"]], f["fact"])]
+        if others:
+            asks.append((f, [f["source"], *others]))
+    if not asks:
+        return facts
+    found = await relate([{"fact": f["fact"], "entities": [kept[k]["name"] for k in keys]} for f, keys in asks],
+                         relations)
+    restated, out, seen = set(), [], set()
+    for r in found:
+        if not 0 <= r.index < len(asks):
+            continue
+        f, keys = asks[r.index]
+        rel, source, target = normalize_type(r.relation), r.source, r.target
+        if rel not in relations and (conformed := _conform(rel, set(relations))):
+            rel, swapped = conformed
+            if swapped:
+                source, target = target, source
+        s, t = by_name.get(name_key(source)), by_name.get(name_key(target))
+        if rel in relations and s in keys and t in keys and s != t and (s, rel, t, id(f)) not in seen:
+            seen.add((s, rel, t, id(f)))
+            out.append({"fact": f["fact"], "relation": rel, "source": s, "target": t,
+                        "check": f"{kept[s]['name']} {rel.replace('_', ' ')} {kept[t]['name']}."})
+            restated.add(id(f))
+    return [f for f in facts if id(f) not in restated] + out
+
+
 async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source, episode_uid, cap, report: Report):
     stage = report.timings.stage
     with stage("extract"):
@@ -233,9 +266,14 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
     if not kept:
         return
 
+    with stage("relate"):
+        facts = await _restate(facts, kept, by_name, grammar.relation_types)
+
     # ── Validate facts against the text ────────────────────────────────────
     with stage("validate"):
-        verdicts = await validate(text, source, [f["fact"] for f in facts])
+        # A relation found in a statement is checked as that relation ("Samsung manufactures HBM3E"), not as the
+        # statement it came from.
+        verdicts = await validate(text, source, [f.get("check") or f["fact"] for f in facts])
     commit, weak = [], []
     for f, v in zip(facts, verdicts):
         f["reliability"] = round(min(v.reliability, cap), 3)
@@ -246,6 +284,17 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
             weak.append(f)
         else:
             commit.append(f)
+
+    # ── Only entities something is known about ────────────────────────────
+    # The extractor names everything a page mentions — menus, link text, report titles, list items. The graph holds
+    # facts: an entity is written only as the endpoint of a fact that survived (stored, or waiting in review).
+    # Measured before this gate (2026-10-10): 51% of ai_chips' entities had no fact at all.
+    used = {f[end] for f in commit + weak for end in ("source", "target")}
+    for key in [k for k in kept if k not in used]:
+        e = kept.pop(key)
+        report.entity(name=e["name"], type=e["type"], status="dropped", reason="no fact about it in the source")
+    if not kept:
+        return
 
     # ── Embeddings (one call for entities and facts) ───────────────────────
     entity_keys = list(kept)
@@ -383,6 +432,79 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
 
 
 # ── Head review decisions ──────────────────────────────────────────────────
+
+async def relink_states(db: ArcadeDB, domain: str, dry_run: bool = False, batch: int = 10) -> dict:
+    """Stored has_state facts that name another entity of the graph → the relations they state, added as facts:
+    each checked by the Validator against its statement, carrying the statement's sources. The states stay; each one
+    read is marked `relinked`, so it is asked once. (New sources get this at ingest: _restate.)"""
+    relations = Ontology.model_validate(load_domain(domain)["ontology"]).relation_types
+    await kgdb.ensure_domain_db(db, domain)
+    ents = await db.cypher(domain, "MATCH (e:Entity) RETURN e.uid AS uid, e.name AS name, e.aliases AS aliases")
+    by_key: dict[str, str] = {}
+    for e in ents:
+        for n in [e["name"], *(e.get("aliases") or [])]:
+            if k := name_key(n):
+                by_key.setdefault(k, e["uid"])
+    names = {e["uid"]: e["name"] for e in ents}
+    states = await db.cypher(
+        domain, "MATCH (e:Entity)-[r:has_state]->(e) WHERE r.invalid_at IS NULL AND r.relinked IS NULL "
+                "RETURN r.uid AS uid, r.fact AS fact, e.uid AS subject, r.sources AS sources, r.disbelief AS disbelief")
+    asks = []
+    for st in states:
+        others = [e["uid"] for e in ents if e["uid"] != st["subject"]
+                  and _in_text([e["name"], *(e.get("aliases") or [])], st["fact"])]
+        if others:
+            asks.append((st, [st["subject"], *others]))
+    added, proposed, skipped = [], 0, Counter()
+    for i in range(0, len(asks), batch):
+        part = asks[i:i + batch]
+        found = await relate([{"fact": st["fact"], "entities": [names[u] for u in uids]} for st, uids in part],
+                             relations)
+        per: dict[int, list[tuple[str, str, str]]] = {}
+        for r in found:
+            if not 0 <= r.index < len(part):
+                continue
+            st, uids = part[r.index]
+            rel, source, target = normalize_type(r.relation), r.source, r.target
+            if rel not in relations and (conformed := _conform(rel, set(relations))):
+                rel, swapped = conformed
+                if swapped:
+                    source, target = target, source
+            s, tg = by_key.get(name_key(source)), by_key.get(name_key(target))
+            if rel in relations and s in uids and tg in uids and s != tg and (s, rel, tg) not in per.get(r.index, []):
+                per.setdefault(r.index, []).append((s, rel, tg))
+        for j, triples in per.items():
+            st, _ = part[j]
+            proposed += len(triples)
+            verdicts = await validate(st["fact"], "a stored statement",
+                                      [f"{names[s]} {rel.replace('_', ' ')} {names[tg]}." for s, rel, tg in triples])
+            for (s, rel, tg), v in zip(triples, verdicts):
+                trust = round(min(v.reliability, 1.0 - (st.get("disbelief") or 0.0)), 3)
+                if not v.supported or trust < COMMIT_RELIABILITY:
+                    skipped["not supported" if not v.supported else "too weak"] += 1
+                    continue
+                if any(c["source_uid"] == s and c["target_uid"] == tg and c["relation"] == kgdb.edge_type(rel)
+                       for c in await kgdb.fact_candidates(db, domain, s, rel, tg)):
+                    skipped["already in the graph"] += 1
+                    continue
+                added.append({"source": names[s], "relation": rel, "target": names[tg], "fact": st["fact"],
+                              "reliability": trust})
+                if dry_run:
+                    continue
+                sources = st.get("sources") or []
+                vec = (await embed([st["fact"]]) or [None])[0]
+                uid = await kgdb.create_fact(db, domain, s, rel, tg, st["fact"], vec,
+                                             sources[0] if sources else "", trust)
+                await db.cypher(domain, "MATCH ()-[r:Fact {uid: $u}]->() SET r.sources = $src, r.evidence = $n",
+                                u=uid, src=sources, n=max(len(sources), 1))
+                for ep in sources:
+                    await kgdb.link_mentions(db, domain, ep, [s, tg])
+        if not dry_run:
+            await db.cypher(domain, "MATCH ()-[r:has_state]->() WHERE r.uid IN $u SET r.relinked = true",
+                            u=[st["uid"] for st, _ in part])
+    return {"dry_run": dry_run, "statements": len(asks), "proposed": proposed, "added": len(added),
+            "skipped": dict(skipped), "facts": added}
+
 
 async def resolve_review(db: ArcadeDB, domain: str, review_uid: str, approve: bool, note: str = "") -> dict:
     """Apply (approve) or dismiss (reject) a pending review item. Raises ValueError if it can't."""

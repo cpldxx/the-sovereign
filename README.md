@@ -106,11 +106,20 @@ ever receives facts that the pipeline checked against their source; the conversa
 Source text → Episode
   → Extractor   entities + facts (one call)
   → code gates  ontology types, entity really in the text, valid endpoints
+  → Relate      a "fact about one entity" that names another → the relation it states (one call, only then)
   → Validator   each fact supported by the text? reliability? (one call)
+  → only entities a surviving fact is about are stored (not every name a page mentions)
   → Resolver    same entity as an existing one? name keys first, LLM only when ambiguous
   → Linker      restates an existing fact → strengthen it; newer value → supersede the old one
   → ambiguous (weak facts, unsure merges/links) → Head review queue
 ```
+
+The graph holds facts, so an entity exists only as the end of a fact. The nightly report also prunes the entities a
+rejected review or a merge left without any fact (`POST /domains/{domain}/prune`, owner; a dry run by default). Facts
+stored as one entity's state that name another are relinked into the relations they state
+(`POST /domains/{domain}/relink`, owner; the states stay). Measured on ai_chips before these (2026-10-10): 68% of the
+entities were unconnected — 51% had no fact at all (menus, link text, passing mentions), and many relations had been
+filed as states ("Samsung is testing its HBM3E with Nvidia" as a state of HBM3E).
 
 ### Query (Graph RAG)
 

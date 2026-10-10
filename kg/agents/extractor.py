@@ -97,3 +97,55 @@ async def extract(text: str, domain: str, description: str, ontology: Ontology, 
     except Exception as e:
         print(f"[Extractor] failed: {type(e).__name__}: {e}", flush=True)
         return Extraction()
+
+
+# ── Relations hidden in facts about one entity ─────────────────────────────
+# A local model files some relations as has_state: "Samsung is finalizing quality testing for its HBM3E chips with
+# Nvidia" stored as a state of HBM3E links nothing. Measured 2026-10-10: 73 of the 157 state facts of ai_chips'
+# unconnected entities named another entity of the graph. One more call per batch asks what those statements relate.
+
+class Relation(BaseModel):
+    index: int = Field(description="Number of the statement")
+    source: str = Field(description="Name from that statement's ENTITIES")
+    relation: str = Field(description="One of the RELATION TYPES")
+    target: str = Field(description="Name from that statement's ENTITIES")
+
+
+class Relations(BaseModel):
+    relations: list[Relation] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def unwrap(cls, v):
+        if isinstance(v, list):
+            return {"relations": v}
+        if isinstance(v, dict) and "arguments" in v:
+            return v["arguments"]
+        return v
+
+
+RELATE = """You read statements from a knowledge graph's sources. Each was stored as a fact about one entity, but it
+also names other entities. For each statement, list the relations it STATES between its ENTITIES, using only the
+RELATION TYPES (when only the reverse relation is listed, swap source and target).
+
+- Only what the sentence itself says, nothing inferred: "Samsung is testing its HBM3E chips with Nvidia" states that
+  Samsung makes HBM3E; that Samsung supplies Nvidia only if a supply relation is stated.
+- source and target are names from that statement's ENTITIES list, spelled as listed, and different.
+- No relation type fits → nothing for that statement. Most statements give zero, one or two relations."""
+
+_relate = Agent(MODEL, name="relate", model_settings=model_settings(decisive=True), system_prompt=RELATE,
+                output_type=Relations, retries=2)
+
+
+async def relate(items: list[dict], relation_types: list[str]) -> list[Relation]:
+    """items: [{"fact", "entities": [names]}] → the relations each statement states between its entities.
+    Never raises (none on failure)."""
+    if not items:
+        return []
+    blocks = [f"[{i}] {it['fact']}\n    ENTITIES: {', '.join(it['entities'])}" for i, it in enumerate(items)]
+    try:
+        out = await _relate.run(f"RELATION TYPES: {', '.join(relation_types)}\n\nSTATEMENTS:\n" + "\n".join(blocks))
+        return out.output.relations
+    except Exception as e:
+        print(f"[Relate] failed: {type(e).__name__}: {e}", flush=True)
+        return []
