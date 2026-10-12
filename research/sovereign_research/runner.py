@@ -46,7 +46,23 @@ def _resolved_config() -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(yaml.safe_dump(config, sort_keys=False))
     out.chmod(0o600)  # may hold an API key
+    # Parts of DeerFlow load the config on their own (get_app_config) and look for config.yaml in the working
+    # directory — research/ in development, /data in Docker, where nothing is found and every run failed
+    # (2026-10-11). The variable points them at this same file.
+    os.environ["DEER_FLOW_CONFIG_PATH"] = str(out)
     return str(out)
+
+
+def config_ok() -> bool:
+    """DeerFlow can load its configuration the way its own modules do (get_app_config, not just our client)."""
+    try:
+        if "DEER_FLOW_CONFIG_PATH" not in os.environ:
+            _resolved_config()
+        from deerflow.config.app_config import get_app_config  # noqa: PLC0415
+        get_app_config()
+        return True
+    except Exception:
+        return False
 
 
 def _get_client() -> DeerFlowClient:

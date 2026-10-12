@@ -202,8 +202,14 @@ async def health():
                 return (await c.get(url, **kw)).status_code < 500
         except httpx.HTTPError:
             return False
+    finished = [j for j in jobs.list(None, 50) if j["status"] in ("done", "failed")]
+    last = finished[0] if finished else None
     return {
         "research": True,
+        # Broken setup or a failing last run: the sidebar turns red instead of three nights of silent failures
+        # (2026-10-10 → 12: every run failed on DeerFlow's config lookup while everything looked green).
+        "config": runner.config_ok(),
+        "last_failed": (last["error"] or "failed")[:300] if last and last["status"] == "failed" else None,
         "model": runner.model_name(),
         "search": runner.search_provider(),
         # An API search provider doesn't need the local SearXNG.

@@ -9,6 +9,7 @@ interface Health {
   arcadedb: boolean | null;
   hermes: boolean | null;
   research: boolean | null;
+  researchIssue: string | null;
   search: boolean | null;
   crawler: boolean | null;
   tracing: boolean | null;
@@ -16,7 +17,7 @@ interface Health {
 }
 
 function useHealth(): Health {
-  const [health, setHealth] = useState<Health>({ kg: null, arcadedb: null, hermes: null, research: null, search: null, crawler: null, tracing: null, voice: null });
+  const [health, setHealth] = useState<Health>({ kg: null, arcadedb: null, hermes: null, research: null, researchIssue: null, search: null, crawler: null, tracing: null, voice: null });
   useEffect(() => {
     let alive = true;
     const check = async () => {
@@ -26,7 +27,10 @@ function useHealth(): Health {
         kg: k.status === 'fulfilled',
         arcadedb: k.status === 'fulfilled' ? k.value.arcadedb : null,
         hermes: h.status === 'fulfilled',
-        research: r.status === 'fulfilled',
+        research: r.status === 'fulfilled' && r.value.config !== false && !r.value.last_failed,
+        researchIssue: r.status !== 'fulfilled' ? null
+          : r.value.config === false ? 'DeerFlow cannot load its config.yaml'
+          : r.value.last_failed ? `last run failed: ${r.value.last_failed}` : null,
         search: r.status === 'fulfilled' ? r.value.searxng : null,
         crawler: r.status === 'fulfilled' ? r.value.crawler : null,
         tracing: k.status === 'fulfilled' ? k.value.tracing : null,
@@ -107,7 +111,7 @@ export function Sidebar({ domains, active, onSelect, onCreate, me, onSignOut }: 
         <Status label="ArcadeDB" ok={health.arcadedb} hint="docker compose up -d — http://localhost:2480" />
         <Status label="Hermes" ok={health.hermes} hint="hermes/ — http://localhost:8090" />
         <Status label="Voice (local)" ok={health.hermes === null ? null : !!health.voice} hint={health.voice ?? 'speech runs in Hermes'} />
-        <Status label="Research" ok={health.research} hint="research/ — http://localhost:8070" />
+        <Status label="Research" ok={health.research} hint={health.researchIssue ?? "research/ — http://localhost:8070"} />
         <Status label="Search · Crawler" ok={health.search === null ? null : !!(health.search && health.crawler)} hint="docker compose up -d (searxng, crawl4ai)" />
         {health.tracing && me.admin && (
           <a href={LANGFUSE_URL} target="_blank" rel="noreferrer" className="block text-[11px] text-faint hover:text-ink" title="Agent traces — docker compose --profile observability up -d">

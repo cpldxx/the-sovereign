@@ -684,7 +684,7 @@ export const kg = {
 // ── Research (DeerFlow) ─────────────────────────────────────────────────────
 
 export const research = {
-  health: () => request<{ research: boolean; model: string; searxng: boolean; crawler: boolean; nightly: string; tracing: boolean }>(
+  health: () => request<{ research: boolean; config?: boolean; last_failed?: string | null; model: string; searxng: boolean; crawler: boolean; nightly: string; tracing: boolean }>(
     RESEARCH_API, '/health'),
 
   start: (id: string, mode: ResearchMode, question = '') =>
