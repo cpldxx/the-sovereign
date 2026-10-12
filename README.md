@@ -228,7 +228,9 @@ One screen per domain: the knowledge graph on the left, tools on the right.
 - **Voice** — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.
 - **Ingest** — paste text + source; shows new/known entities and created/strengthened/superseded/rejected facts with reasons.
 - **Search** — Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources.
-- **Review** — the Head review queue: approve/dismiss yourself, or let the Head Agent decide everything.
+- **Review** — the ambiguous writes (weak facts, possible merges and links). The Head decides them every night
+  before the report (in rounds, at most `NIGHTLY_REVIEW_MINUTES`, default 45 per domain; its notes are on a Team
+  thread); "Head review" makes it decide now, and you can still approve or dismiss one yourself.
 - **Ontology** — the domain's grammar with per-type counts; edit it or have the Ontologist regenerate it.
 - **Report** — the daily briefing: what the graph learned, what changed (superseded and confirmed facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now.
 - **Actions** — the fast path. *Inbox*: proposals waiting for your confirmation (rationale, the facts behind it, a dry run of exactly what will happen) plus the activity feed (alerts, drafts, executed and rejected actions). *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*: live-data tools, each backed by many sources (APIs and web pages) — read one now, see which source answered and each source's success rate and code, or have the Scout find more sources. *Catalog*: built-in actions and your own external actions (webhooks).

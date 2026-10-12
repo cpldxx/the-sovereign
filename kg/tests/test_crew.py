@@ -221,3 +221,36 @@ def test_an_agent_is_found_by_name_or_title():
 def test_the_roster_shows_inputs_as_an_example():
     card = crew.ROSTER["validator"].card()["tasks"][0]
     assert card["example"] == {"claims": ["…"], "source_text": "…"} and card["optional"] == ["source"]
+
+
+@pytest.mark.db
+async def test_the_head_works_the_review_queue_until_it_is_empty(team, monkeypatch):
+    db, domain, _ = team
+    for i in range(5):
+        await kgdb.add_review(db, domain, "fact", f"weak fact {i}", {"fact": f"fact {i}"})
+
+    async def head(domain_, message, max_iterations=12):
+        assert "review queue" in message
+        pending = await kgdb.list_reviews(db, domain_)
+        for r in pending[:2]:                                    # decides two per turn
+            await kgdb.close_review(db, domain_, r["uid"], "rejected", "test")
+        return "Rejected 2."
+    monkeypatch.setattr(crew, "_ask_head", head)
+    out = await crew.review_sweep(db, domain, minutes=5)
+    assert out == {"pending": 0, "decided": 5, "rounds": 3, "thread": out["thread"]}
+    notes = (await crew.thread(db, domain, out["thread"]))["messages"]
+    assert [m["data"]["left"] for m in notes] == [3, 1, 0]
+
+
+@pytest.mark.db
+async def test_a_review_round_that_decides_nothing_ends_the_sweep(team, monkeypatch):
+    db, domain, _ = team
+    await kgdb.add_review(db, domain, "merge", "same thing?", {"entity_uid": "e1"})
+    calls = []
+
+    async def head(domain_, message, max_iterations=12):
+        calls.append(1)
+        return "I could not decide."
+    monkeypatch.setattr(crew, "_ask_head", head)
+    out = await crew.review_sweep(db, domain, minutes=5)
+    assert len(calls) == 1 and out["decided"] == 0 and out["pending"] == 1

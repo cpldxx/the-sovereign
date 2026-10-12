@@ -29,3 +29,11 @@ async def api_thread(domain_name: str, uid: str, req: Request):
     if not (t := await crew.thread(req.app.state.db, domain_name, uid)):
         raise HTTPException(status_code=404, detail=f"No thread '{uid}'")
     return t
+
+
+@router.post("/domains/{domain_name}/head-review")
+async def api_review_sweep(domain_name: str, req: Request, minutes: float = 45):
+    """The Head decides the pending review queue now, in rounds, for at most `minutes` (the nightly run does this
+    before the report)."""
+    auth.require(domain_name, "editor")
+    return await crew.review_sweep(req.app.state.db, domain_name, min(minutes, 240))

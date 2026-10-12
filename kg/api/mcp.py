@@ -213,12 +213,14 @@ def update_ontology(domain: str, entity_types: list[str], relation_types: list[s
 
 
 @tool("readonly")
-async def list_reviews(domain: str) -> list[dict]:
-    """Pending review items — ambiguous writes waiting for the Head Agent:
+async def list_reviews(domain: str, limit: int = 15) -> dict:
+    """Pending review items — ambiguous writes waiting for the Head Agent, oldest first, `limit` at a time:
     kind "fact" (a supported but low-reliability fact), "merge" (maybe the same entity as an existing one),
-    "link" (a new fact may restate or replace existing facts). Each has a summary and its payload."""
+    "link" (a new fact may restate or replace existing facts). Each has a summary and its payload; `pending` is how
+    many wait in all."""
     _require(domain)
-    return await kgdb.list_reviews(db, domain, "pending")
+    items = await kgdb.list_reviews(db, domain, "pending", limit=10_000)
+    return {"pending": len(items), "items": list(reversed(items))[:max(1, min(limit, 50))]}
 
 
 @tool()

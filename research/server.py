@@ -32,6 +32,7 @@ from sovereign_research.jobs import KG_URL, Jobs  # noqa: E402
 
 NIGHTLY = os.getenv("RESEARCH_NIGHTLY", "on").lower() in ("1", "on", "true", "yes")
 NIGHTLY_HOUR = int(os.getenv("RESEARCH_NIGHTLY_HOUR", "3"))  # local time
+REVIEW_MINUTES = int(os.getenv("NIGHTLY_REVIEW_MINUTES", "45"))   # the Head's review budget per domain
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8088").rstrip("/")
 REPORT_WAIT = 18 * 3600  # seconds the nightly report waits for a domain's research runs
 
@@ -84,6 +85,11 @@ async def daily_reports(domains: list[str]) -> None:
                     r = await kg.post(f"/domains/{d}/sensors/check")
                     print(f"[Research] nightly: sensors for {d}: "
                           f"{r.json().get('sensors') if r.is_success else f'failed ({r.status_code})'}", flush=True)
+                    # The Head decides the day's ambiguous writes (weak facts, merges, links) before the report,
+                    # so the report shows what it kept — nobody has to work the review queue by hand.
+                    r = await kg.post(f"/domains/{d}/head-review", params={"minutes": REVIEW_MINUTES})
+                    print(f"[Research] nightly: Head reviews for {d}: "
+                          f"{r.json() if r.is_success else f'failed ({r.status_code})'}", flush=True)
                     r = await kg.post(f"/domains/{d}/reports", json={"hours": 24, "wait": True})
                     print(f"[Research] nightly: report for {d}: "
                           f"{r.json().get('headline', '') if r.is_success else f'failed ({r.status_code})'}", flush=True)

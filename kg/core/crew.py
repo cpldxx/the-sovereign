@@ -163,9 +163,9 @@ async def _research(domain: str, method: str, path: str, **kw) -> dict:
     return r.json()
 
 
-async def _ask_head(domain: str, message: str) -> str:
+async def _ask_head(domain: str, message: str, max_iterations: int = 12) -> str:
     async with httpx.AsyncClient(base_url=HERMES_URL, timeout=WAKE_SECONDS, headers=auth.headers(domain)) as client:
-        r = await client.post(f"/domains/{domain}/ask", json={"message": message, "max_iterations": 12})
+        r = await client.post(f"/domains/{domain}/ask", json={"message": message, "max_iterations": max_iterations})
     r.raise_for_status()
     return r.json().get("answer") or ""
 
@@ -786,6 +786,45 @@ async def _waiting_report(db: ArcadeDB, domain: str) -> str | None:
         if t and t.get("opened_by") == HEAD and (t.get("wakes") or 0) < MAX_WAKES:
             return t["uid"]
     return None
+
+
+REVIEW = """Work through your review queue now — you decide these, nobody else does. Call list_reviews, then decide
+each item with resolve_review (approve or reject, with a short note). Look at get_entity / query_knowledge_graph only
+when an item is unclear. A weak fact: approve only if its source states it and it is worth keeping as a signal. A
+merge: approve only if both names are the same real-world thing. A link: approve only if the new fact truly restates
+or replaces the old one. Decide as many as you can in this turn, then end with one line: how many you approved and
+rejected."""
+
+
+async def _pending_reviews(db: ArcadeDB, domain: str) -> int:
+    rows = await db.sql(domain, "SELECT count(*) AS n FROM ReviewItem WHERE status = 'pending'")
+    return rows[0]["n"] if rows else 0
+
+
+async def review_sweep(db: ArcadeDB, domain: str, minutes: float = 45) -> dict:
+    """The Head decides the review queue (weak facts, possible merges and links) — in rounds, until it is empty, the
+    time is up, or a round decides nothing. Each round is one Head turn; its note goes on a thread (Team tab)."""
+    registry.load_domain(domain)
+    start, deadline = await _pending_reviews(db, domain), time.monotonic() + minutes * 60
+    if not start:
+        return {"pending": 0, "decided": 0, "rounds": 0}
+    thread = await _open(db, domain, HEAD, f"Head: review queue ({start} pending)", HEAD, None)
+    pending, rounds = start, 0
+    while pending and time.monotonic() < deadline:
+        rounds += 1
+        try:
+            note = await _ask_head(domain, REVIEW, max_iterations=40)
+        except httpx.HTTPError as e:
+            await _post(db, domain, thread, HEAD, "user", "note", f"Hermes unreachable ({type(e).__name__})", status=READ)
+            break
+        after = await _pending_reviews(db, domain)
+        await _post(db, domain, thread, HEAD, "user", "note", f"Round {rounds}: {pending - after} decided, {after} left. "
+                    f"{note.strip()[:1500]}", {"decided": pending - after, "left": after}, status=READ)
+        if after >= pending:   # nothing decided: stop instead of asking again
+            break
+        pending = after
+    await kgdb.update_doc(db, domain, "Thread", thread, {"status": DONE})
+    return {"pending": pending, "decided": start - pending, "rounds": rounds, "thread": thread}
 
 
 async def _recover(db: ArcadeDB) -> None:
