@@ -216,12 +216,22 @@ async def ingest(
     return result
 
 
+def _with_link(f: dict, kept: dict) -> str:
+    """The fact as the Validator reads it: its sentence, and for a relation the edge it becomes."""
+    if f["relation"] == STATE:
+        return f["fact"]
+    return f"{f['fact']} ⟨{kept[f['source']]['name']} —{f['relation']}→ {kept[f['target']]['name']}⟩"
+
+
 async def _restate(facts: list[dict], kept: dict, by_name: dict, relations: list[str]) -> list[dict]:
     """has_state facts that name another extracted entity → the relations they state, in their place (each then
     checked by the Validator like any fact). A statement no relation type fits stays a state."""
+    # Only for entities this chunk links to nothing else: the ones that would float alone. Asking about every state
+    # that names another entity cost more model time than extraction itself (2026-10-12, 77 facts on 3 pages).
+    linked = {f[end] for f in facts if f["relation"] != STATE for end in ("source", "target")}
     asks = []
     for f in facts:
-        if f["relation"] != STATE:
+        if f["relation"] != STATE or f["source"] in linked:
             continue
         others = [k for k, e in kept.items() if k != f["source"] and _in_text([e["name"], *e["aliases"]], f["fact"])]
         if others:
@@ -335,9 +345,10 @@ async def _read_chunk(domain, description, grammar: Ontology, text, source, cap,
 
     # ── Validate facts against the text ────────────────────────────────────
     with stage("validate"):
-        # A relation found in a statement is checked as that relation ("Samsung manufactures HBM3E"), not as the
-        # statement it came from.
-        verdicts = await validate(text, source, [f.get("check") or f["fact"] for f in facts])
+        # A fact is checked as the edge it becomes, not only as its sentence: "HBM is made by Samsung, SK hynix and
+        # Micron" is true, yet ⟨Samsung —supplies→ Micron⟩ is not (seen 2026-10-12). A relation found in a statement
+        # is checked as that relation ("Samsung manufactures HBM3E").
+        verdicts = await validate(text, source, [f.get("check") or _with_link(f, kept) for f in facts])
     commit, weak = [], []
     for f, v in zip(facts, verdicts):
         f["reliability"] = round(min(v.reliability, cap), 3)

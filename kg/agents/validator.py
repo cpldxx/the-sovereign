@@ -16,7 +16,8 @@ class FactVerdict(BaseModel):
     index: int
     supported: bool = Field(description="The source text states this fact")
     reliability: float = Field(ge=0.0, le=1.0, description="How far to trust it")
-    reason: str = ""
+    # Only for a fact that fails: a reason for every verdict was most of the Validator's output (generation time).
+    reason: str = Field(default="", description="Only when supported is false: what is wrong, in a few words")
 
 
 class Verdicts(BaseModel):
@@ -40,8 +41,11 @@ For each fact:
 - reliability (0 to 1) — how far to trust it, from the source's authority and the claim's specificity:
   0.9 official or primary source · 0.75 reputable reporting with specifics · 0.55 analysis, forecast or
   single unnamed source · 0.35 rumor, speculation or marketing claim.
+- A fact may carry a LINK ⟨A —relation→ B⟩: the graph edge it becomes. Then it is supported only if the text also
+  states THAT relation between A and B, in that direction. A sentence that only names them together ("HBM is made
+  by Samsung, SK hynix and Micron" for ⟨Samsung —supplies→ Micron⟩) does not support the link: supported = false.
 - Do NOT judge facts against your own knowledge: the source may report events newer than your training data.
-Return one verdict per fact, with its index."""
+Return one verdict per fact, with its index; give a reason (a few words) only for a fact that is not supported."""
 
 _agent = Agent(MODEL, name="validator", model_settings=model_settings(decisive=True),
                system_prompt=SYSTEM, output_type=Verdicts, retries=3)

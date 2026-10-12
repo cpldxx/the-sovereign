@@ -114,6 +114,10 @@ Source text → Episode
   → ambiguous (weak facts, unsure merges/links) → Head review queue
 ```
 
+Extraction runs at a low temperature without presence penalty (the model's defaults made two runs agree on under a
+third of their facts), and the Validator checks each fact as the edge it becomes. Chunks are read in parallel and
+written one at a time per domain; `kg/scripts/bench_ingest.py` measures speed and agreement on fixed pages.
+
 The graph holds facts, so an entity exists only as the end of a fact. The nightly report also prunes the entities a
 rejected review or a merge left without any fact (`POST /domains/{domain}/prune`, owner; a dry run by default). Facts
 stored as one entity's state that name another are relinked into the relations they state

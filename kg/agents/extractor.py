@@ -78,7 +78,9 @@ def _agent(domain: str, description: str) -> Agent:
     return Agent(
         MODEL,
         name="extractor",
-        model_settings=model_settings(),
+        # Low temperature: the model's default (1.0) made two runs over the same pages agree on under a third of
+        # their facts (2026-10-12) — extraction copies what a text says, it doesn't write.
+        model_settings=model_settings(decisive=True),
         system_prompt=SYSTEM.format(domain=domain, description=description, state=STATE),
         output_type=Extraction,
         retries=3,
