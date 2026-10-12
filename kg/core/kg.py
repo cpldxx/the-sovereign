@@ -11,10 +11,13 @@ ingest   text → Episode → per chunk:
 query    question → entity + fact vector search → expand through the graph → facts with sources
 """
 
+import asyncio
 import hashlib
+import os
 import re
 import time
-from collections import Counter
+from collections import Counter, defaultdict
+from dataclasses import dataclass
 
 from agents.extractor import STATE, extract, relate
 from agents.linker import link
@@ -32,15 +35,58 @@ COMMIT_RELIABILITY = 0.6   # supported facts below this go to Head review instea
 CANDIDATE_SIMILARITY = 0.6  # entity embedding similarity that makes an existing entity a merge candidate
 PARTIAL_CAP = 0.5           # reliability cap for facts from partially collected sources
 CHUNK_CHARS = 8000          # long sources are processed in chunks of about this size
+# Reading (model calls only) runs this many chunks at once, across every ingest in this process; writing is one chunk
+# at a time per domain. Matches the model server's parallel slots (OLLAMA_NUM_PARALLEL).
+INGEST_CONCURRENCY = int(os.getenv("INGEST_CONCURRENCY", "4"))
+_reading = asyncio.Semaphore(INGEST_CONCURRENCY)
+_writing: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 FACT_SIMILARITY = 0.75      # existing facts this similar to a new one are compared with it by the Linker
 
 
+# Pages come as markdown with every link's URL, image tags, menus, "related" lists and share buttons — tokens the
+# model reads and junk it extracts. Measured on three research pages (2026-10-12): 38k → 27k characters, the
+# newsletter page −65%, article text untouched. The episode keeps the original; only what the model reads is cleaned.
+_LINK = re.compile(r"!?\[([^\]]*)\]\((?:[^()\s]+(?:\([^()\s]*\))?)*(?:\s+\"[^\"]*\")?\)")
+_SHARE = re.compile(r"^(?:share (?:on|via|to) \w+[\s|·•,]*)+$", re.I)
+
+
+def readable(text: str) -> str:
+    """Markdown → the text worth reading: links become their text, images go, and so do lines that are only links
+    (menus, related lists, footers) or share buttons."""
+    out = []
+    for line in text.splitlines():
+        plain = _LINK.sub(lambda m: "" if m.group(0).startswith("!") else m.group(1), line)
+        letters = len(re.sub(r"[\W_]+", "", plain))
+        linked = sum(len(re.sub(r"[\W_]+", "", m.group(1))) for m in _LINK.finditer(line) if not m.group(0).startswith("!"))
+        # A short line that is (almost) only links: a menu or footer item. A linked headline ("Samsung Q3 profit
+        # jumps nine-fold…") is longer and states a fact — it stays (newsletters are made of them).
+        if linked and linked >= 0.7 * letters and letters < 40:
+            continue
+        if _SHARE.match(plain.strip()):
+            continue
+        out.append(plain)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+
+
+def _pieces(text: str) -> list[str]:
+    """Paragraphs — and a paragraph longer than a chunk split on its lines, then its sentences. Many pages have no
+    blank lines at all: a 21k-character page used to go to the extractor as one piece (2026-10-12)."""
+    out = []
+    for para in re.split(r"\n\s*\n", text):
+        if len(para) <= CHUNK_CHARS:
+            out.append(para)
+            continue
+        for line in para.split("\n"):
+            out += [line] if len(line) <= CHUNK_CHARS else re.split(r"(?<=[.!?])\s+", line)
+    return out
+
+
 def _chunks(text: str) -> list[str]:
-    """Split on paragraph boundaries into ~CHUNK_CHARS pieces."""
+    """Split on paragraph (else line, else sentence) boundaries into ~CHUNK_CHARS pieces."""
     if len(text) <= CHUNK_CHARS:
         return [text]
     chunks, current = [], ""
-    for para in re.split(r"\n\s*\n", text):
+    for para in _pieces(text):
         if current and len(current) + len(para) > CHUNK_CHARS:
             chunks.append(current)
             current = ""
@@ -150,9 +196,17 @@ async def ingest(
     start = time.perf_counter()
     with observe("ingest", input={"source": source, "title": title, "chars": len(text)},
                  metadata={"domain": domain, "episode_uid": episode_uid}, tags=[domain, "ingest"]) as obs:
-        for chunk in _chunks(text):
-            report.chunks += 1
-            await _ingest_chunk(db, domain, description, grammar, chunk, source, episode_uid, cap, report)
+        chunks = _chunks(readable(text))
+        report.chunks = len(chunks)
+
+        async def read(chunk):
+            async with _reading:
+                return await _read_chunk(domain, description, grammar, chunk, source, cap, report)
+        reads = await asyncio.gather(*(read(c) for c in chunks))
+        async with _writing[domain]:
+            for r in reads:
+                if r:
+                    await _write_chunk(db, domain, r, source, episode_uid, report)
         report.timings["total"] = round(time.perf_counter() - start, 2)
         if report.gaps:
             await kgdb.set_episode_gaps(db, domain, episode_uid, dict(report.gaps))
@@ -195,7 +249,17 @@ async def _restate(facts: list[dict], kept: dict, by_name: dict, relations: list
     return [f for f in facts if id(f) not in restated] + out
 
 
-async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source, episode_uid, cap, report: Report):
+@dataclass
+class _Read:
+    """What reading a chunk produced — no database touched yet."""
+    kept: dict
+    commit: list
+    weak: list
+    entity_vec: dict
+
+
+async def _read_chunk(domain, description, grammar: Ontology, text, source, cap, report: Report) -> _Read | None:
+    """Extract → code gates → relate → validate → embed: model calls only, so chunks are read side by side."""
     stage = report.timings.stage
     with stage("extract"):
         ex = await extract(text, domain, description, grammar, source)
@@ -264,7 +328,7 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
         facts.append({"fact": f.fact.strip(), "relation": rel, "source": s, "target": t})
 
     if not kept:
-        return
+        return None
 
     with stage("relate"):
         facts = await _restate(facts, kept, by_name, grammar.relation_types)
@@ -294,7 +358,7 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
         e = kept.pop(key)
         report.entity(name=e["name"], type=e["type"], status="dropped", reason="no fact about it in the source")
     if not kept:
-        return
+        return None
 
     # ── Embeddings (one call for entities and facts) ───────────────────────
     entity_keys = list(kept)
@@ -309,6 +373,15 @@ async def _ingest_chunk(db, domain, description, grammar: Ontology, text, source
     entity_vec = dict(zip(entity_keys, vectors[: len(entity_keys)]))
     for f, v in zip(commit + weak, vectors[len(entity_keys):]):
         f["embedding"] = v
+    return _Read(kept, commit, weak, entity_vec)
+
+
+async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report):
+    """Resolve → write entities → reviews → link → write facts. Run one chunk at a time per domain (_writing): a
+    chunk must see the entities and facts the previous one wrote, or two chunks naming the same new thing would
+    both create it."""
+    stage = report.timings.stage
+    kept, commit, weak, entity_vec = r.kept, r.commit, r.weak, r.entity_vec
 
     # ── Resolve entities: name keys → candidates → LLM for the ambiguous ───
     uid_of: dict[str, str] = {}

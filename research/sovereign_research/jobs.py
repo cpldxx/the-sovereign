@@ -18,6 +18,8 @@ import httpx
 from sovereign_research import auth, missions, runner
 
 KG_URL = os.getenv("SOVEREIGN_KG_URL", "http://localhost:8080").rstrip("/")
+# Pages ingested at once (the KG reads chunks in parallel, INGEST_CONCURRENCY; writes stay one at a time).
+INGEST_PAGES = int(os.getenv("RESEARCH_INGEST_PAGES", "3"))
 DATA = Path(os.getenv("RESEARCH_DATA") or Path(__file__).resolve().parent.parent / ".data")
 JOBS_FILE = DATA / "jobs.json"
 MODES = ("bootstrap", "update", "mission")
@@ -155,30 +157,37 @@ class Jobs:
             job["status"] = "ingesting"
             self._save()
             by_url = {p["url"]: p for p in job["pages"]}
-            for page in readable:
+            # Pages go to the KG side by side: it reads their chunks in parallel and writes them one at a time.
+            gate = asyncio.Semaphore(INGEST_PAGES)
+            ingest_started = time.monotonic()
+
+            async def ingest(page):
                 entry = by_url[page.url]
                 if page.url in known:
                     entry["ingest"] = {"skipped": "already in the graph"}
-                    continue
-                self._step(job, f"ingesting {page.url}")
-                started = time.monotonic()
-                try:
-                    r = await kg.post(f"/domains/{domain}/ingest", json={
-                        "raw_text": page.markdown, "source": page.url, "title": page.title,
-                        "content_status": page.status,
-                    })
-                    r.raise_for_status()
-                    res = r.json()
-                    entry["ingest"] = {k: res.get(k) for k in (
-                        "duplicate", "entities_created", "entities_matched", "facts_created",
-                        "facts_strengthened", "facts_invalidated", "facts_rejected", "review_items",
-                        "chunks", "timings")}
-                    known.add(page.url)
-                except httpx.HTTPError as e:
-                    entry["ingest"] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
-                entry["ingest"]["seconds"] = round(time.monotonic() - started)
-                seconds["ingest"] += entry["ingest"]["seconds"]
-                self._save()
+                    return
+                known.add(page.url)
+                async with gate:
+                    self._step(job, f"ingesting {page.url}")
+                    started = time.monotonic()
+                    try:
+                        r = await kg.post(f"/domains/{domain}/ingest", json={
+                            "raw_text": page.markdown, "source": page.url, "title": page.title,
+                            "content_status": page.status,
+                        })
+                        r.raise_for_status()
+                        res = r.json()
+                        entry["ingest"] = {k: res.get(k) for k in (
+                            "duplicate", "entities_created", "entities_matched", "facts_created",
+                            "facts_strengthened", "facts_invalidated", "facts_rejected", "review_items",
+                            "chunks", "timings")}
+                    except httpx.HTTPError as e:
+                        known.discard(page.url)
+                        entry["ingest"] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+                    entry["ingest"]["seconds"] = round(time.monotonic() - started)
+                    self._save()
+            await asyncio.gather(*(ingest(p) for p in readable))
+            seconds["ingest"] = round(time.monotonic() - ingest_started)   # wall time: pages overlap
 
         totals = {k: sum((p.get("ingest") or {}).get(k) or 0 for p in job["pages"]) for k in (
             "entities_created", "facts_created", "facts_strengthened", "facts_invalidated", "review_items")}

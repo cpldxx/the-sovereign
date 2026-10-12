@@ -147,3 +147,47 @@ async def test_stored_states_are_relinked_once(domain, monkeypatch):
     assert {"has_state", "enables", "related_to"} <= rels
     again = await kg.relink_states(db, name)
     assert again["statements"] == 0 and len(calls) == 2              # dry run + real run; the third reads nothing
+
+
+@pytest.mark.db
+async def test_chunks_read_side_by_side_still_write_one_entity(domain, monkeypatch):
+    """Chunks are read in parallel but written one at a time: the same new entity in two chunks is created once."""
+    db, name = domain
+    import asyncio
+    running, peak = 0, 0
+
+    async def extract(text, *a, **k):
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.2)
+        running -= 1
+        return Extraction(
+            entities=[ExtractedEntity(name="Acme Labs", type="entity"), ExtractedEntity(name="Widget Engine", type="tool")],
+            facts=[ExtractedFact(source="Acme Labs", relation="enables", target="Widget Engine",
+                                 fact="Acme Labs enables the Widget Engine.")])
+    monkeypatch.setattr(kg, "extract", extract)
+    paragraph = "Acme Labs enables the Widget Engine. " * 60
+    text = "\n\n".join([paragraph] * 12)                       # several chunks
+    report = await kg.ingest(db, name, text, source="test")
+    assert report["chunks"] > 1 and peak > 1                   # read side by side
+    assert await _names(db, name) == {"Acme Labs", "Widget Engine"}
+    count = await db.cypher(name, "MATCH (e:Entity {name: 'Acme Labs'}) RETURN count(e) AS n")
+    assert count[0]["n"] == 1
+
+
+def test_the_model_reads_text_not_markup():
+    """Links become their text, images and menus go, share buttons go — a linked headline stays (it is content)."""
+    page = ("Intro [NVIDIA](https://nvidia.com/x) ships ![logo](a.png) Rubin.\n* [Home](/)\n* [About us](/about)\n"
+            "[Home](/) | [News](/n) | [Contact](/c)\nShare on Facebook Share on Twitter\n"
+            "  1. [Samsung Q3 profit jumps nearly nine-fold as AI memory boom lifts chip earnings](https://x.y/a)")
+    assert kg.readable(page) == ("Intro NVIDIA ships  Rubin.\n"
+                                 "  1. Samsung Q3 profit jumps nearly nine-fold as AI memory boom lifts chip earnings")
+
+
+def test_a_page_without_blank_lines_is_still_chunked():
+    """No paragraph breaks (common on the web): split on lines, then sentences — never one oversized chunk."""
+    one_line = " ".join(f"Sentence number {i} says something about HBM4 supply." for i in range(600))
+    chunks = kg._chunks(one_line)
+    assert len(chunks) > 1 and max(len(c) for c in chunks) <= kg.CHUNK_CHARS + 100
+    assert " ".join(chunks).split() == one_line.split()                     # nothing lost
