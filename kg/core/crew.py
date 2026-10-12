@@ -813,7 +813,7 @@ async def review_sweep(db: ArcadeDB, domain: str, minutes: float = 45) -> dict:
     while pending and time.monotonic() < deadline:
         rounds += 1
         try:
-            note = await _ask_head(domain, REVIEW, max_iterations=40)
+            note = await _ask_head(domain, REVIEW, max_iterations=30)   # Hermes caps a turn at 30
         except httpx.HTTPError as e:
             await _post(db, domain, thread, HEAD, "user", "note", f"Hermes unreachable ({type(e).__name__})", status=READ)
             break
