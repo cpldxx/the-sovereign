@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Send, Shapes, Users, Workflow } from 'lucide-react';
+import { Bot, Network, Newspaper, Settings2, Workflow } from 'lucide-react';
 import { ApiError, auth, kg, onSignedOut, research, type DomainDetail, type DomainSummary, type Ontology, type User } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
@@ -9,27 +9,18 @@ import { GraphPane } from './components/GraphPane';
 import { EntityPanel } from './components/EntityPanel';
 import { Welcome } from './components/Welcome';
 import { AskPanel } from './panels/AskPanel';
-import { IngestPanel } from './panels/IngestPanel';
-import { SearchPanel } from './panels/SearchPanel';
-import { OntologyPanel } from './panels/OntologyPanel';
-import { ReviewPanel } from './panels/ReviewPanel';
-import { ResearchPanel } from './panels/ResearchPanel';
-import { ReportPanel } from './panels/ReportPanel';
-import { ActionsPanel } from './panels/ActionsPanel';
-import { TeamPanel } from './panels/TeamPanel';
+import { PendingActions } from './panels/ActionsPanel';
+import { BriefingPanel } from './panels/BriefingPanel';
+import { SettingsPanel } from './panels/SettingsPanel';
 
-type Tab = 'ask' | 'team' | 'report' | 'actions' | 'research' | 'ingest' | 'search' | 'review' | 'ontology';
+// Three tabs: you talk to the Head (and confirm what it wants to do), read what happened, and set things up. The rest
+// is the Head's work, seen on the left — click an agent for its conversations; search lives in the graph tab.
+type Tab = 'head' | 'briefing' | 'settings';
 
 const TABS: { id: Tab; label: string; icon: typeof Bot }[] = [
-  { id: 'ask', label: 'Head', icon: Bot },
-  { id: 'team', label: 'Team', icon: Users },
-  { id: 'report', label: 'Report', icon: Newspaper },
-  { id: 'actions', label: 'Actions', icon: Send },
-  { id: 'research', label: 'Research', icon: Globe },
-  { id: 'ingest', label: 'Ingest', icon: FileInput },
-  { id: 'search', label: 'Search', icon: Search },
-  { id: 'review', label: 'Review', icon: Inbox },
-  { id: 'ontology', label: 'Ontology', icon: Shapes },
+  { id: 'head', label: 'Head', icon: Bot },
+  { id: 'briefing', label: 'Briefing', icon: Newspaper },
+  { id: 'settings', label: 'Settings', icon: Settings2 },
 ];
 
 
@@ -89,7 +80,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
   const [view, setView] = useState<'agents' | 'graph'>('agents');
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>('ask');
+  const [tab, setTab] = useState<Tab>('head');
   const [version, setVersion] = useState(0);  // bumps on every reload, so open panels refetch
   const [pendingActions, setPendingActions] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -177,13 +168,11 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
     const id = await kg.createDomain(name, description);
     await loadDomains();
     select(id);
-    // Start the research bootstrap right away when the research service is up; otherwise ingest by hand.
-    try {
-      await research.start(id, 'bootstrap');
-      setTab('research');
-    } catch {
-      setTab('ingest');
-    }
+    // Start the research bootstrap right away when the research service is up (the Researcher lights up on the
+    // left); otherwise paste sources into the Head chat.
+    setView('agents');
+    setTab('head');
+    await research.start(id, 'bootstrap').catch(() => undefined);
   }
 
   async function deleteDomain(id: string) {
@@ -231,9 +220,11 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                 </nav>
                 <div className="relative min-h-0 flex-1">
                   {view === 'agents'
-                    ? <AgentView key={active} domain={active} stats={{ entities: detail.stats.entity_count, facts: detail.stats.fact_count }} />
+                    ? <AgentView key={active} domain={active} onIngesting={refresh}
+                        stats={{ entities: detail.stats.entity_count, facts: detail.stats.fact_count }} />
                     : <GraphPane key={active} domain={active} entityTypes={entityTypes} highlight={highlight} selected={selected}
-                        version={version} onSelect={setSelected} onClearHighlight={() => setHighlight(new Set())} />}
+                        version={version} onSelect={setSelected} onHighlight={setHighlight}
+                        onClearHighlight={() => setHighlight(new Set())} />}
                   {selected && (
                     <EntityPanel
                       domain={active}
@@ -253,71 +244,34 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                     <button
                       key={id}
                       onClick={() => setTab(id)}
-                      title={label}
-                      className={`flex min-w-0 items-center justify-center gap-1.5 border-b-2 py-2.5 text-xs transition-colors ${
-                        tab === id ? 'flex-[2.2] border-accent text-ink' : 'flex-1 border-transparent text-faint hover:text-dim'
+                      className={`flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2.5 text-xs transition-colors ${
+                        tab === id ? 'border-accent text-ink' : 'border-transparent text-faint hover:text-dim'
                       }`}
                     >
-                      {/* Nine tabs: only the active one shows its name. */}
-                      <Icon size={13} className="shrink-0" /> {tab === id && <span className="truncate">{label}</span>}
-                      {id === 'actions' && pendingActions > 0 && (
-                        <span className="rounded-full bg-accent px-1.5 font-mono text-[9.5px] text-black">{pendingActions}</span>
-                      )}
-                      {id === 'review' && detail.stats.pending_reviews > 0 && (
-                        <span className="rounded-full bg-accent px-1.5 font-mono text-[9.5px] text-black">{detail.stats.pending_reviews}</span>
+                      <Icon size={13} className="shrink-0" /> {label}
+                      {id === 'head' && pendingActions > 0 && (
+                        <span className="rounded-full bg-accent px-1.5 font-mono text-[9.5px] text-black" title="Waiting for your confirmation">{pendingActions}</span>
                       )}
                     </button>
                   ))}
                 </nav>
                 <div className="min-h-0 flex-1">
-                  {/* Panels stay mounted so a running chat or ingest survives tab switches. */}
-                  <div className={tab === 'ask' ? 'h-full' : 'hidden'}>
-                    <AskPanel key={active} domain={active} onKnowledgeChanged={refresh} onHighlight={setHighlight} />
+                  {/* Panels stay mounted so a running chat survives tab switches. */}
+                  <div className={tab === 'head' ? 'flex h-full flex-col' : 'hidden'}>
+                    <PendingActions key={active} domain={active} version={version} onSelect={setSelected} onPending={setPendingActions} />
+                    <div className="min-h-0 flex-1">
+                      <AskPanel key={active} domain={active} onKnowledgeChanged={refresh} onHighlight={setHighlight}
+                        ontologyReady={detail.ontology_generated} />
+                    </div>
                   </div>
-                  <div className={tab === 'team' ? 'h-full' : 'hidden'}>
-                    <TeamPanel key={active} domain={active} />
+                  <div className={tab === 'briefing' ? 'h-full' : 'hidden'}>
+                    <BriefingPanel key={active} domain={active} version={version} onHighlight={setHighlight}
+                      onSelect={setSelected} onPending={setPendingActions} />
                   </div>
-                  <div className={tab === 'report' ? 'h-full' : 'hidden'}>
-                    <ReportPanel key={active} domain={active} version={version} onHighlight={setHighlight} onSelect={setSelected} />
-                  </div>
-                  <div className={tab === 'actions' ? 'h-full' : 'hidden'}>
-                    <ActionsPanel key={active} domain={active} version={version}
-                      onSelect={setSelected} onHighlight={setHighlight} onPending={setPendingActions} />
-                  </div>
-                  <div className={tab === 'research' ? 'h-full' : 'hidden'}>
-                    <ResearchPanel key={active} domain={active} onIngesting={refresh} />
-                  </div>
-                  <div className={tab === 'ingest' ? 'h-full' : 'hidden'}>
-                    <IngestPanel
-                      key={active}
-                      domain={active}
-                      onIngested={async uids => { await refresh(); setHighlight(new Set(uids)); }}
-                      ontologyReady={detail.ontology_generated}
-                    />
-                  </div>
-                  <div className={tab === 'search' ? 'h-full' : 'hidden'}>
-                    <SearchPanel
-                      key={active}
-                      domain={active}
-                      entityTypes={entityTypes}
-                      onHighlight={setHighlight}
-                      onSelect={setSelected}
-                    />
-                  </div>
-                  <div className={tab === 'review' ? 'h-full' : 'hidden'}>
-                    <ReviewPanel key={active} domain={active} version={version} onChanged={refresh} />
-                  </div>
-                  <div className={tab === 'ontology' ? 'h-full' : 'hidden'}>
-                    {ontology && (
-                      <OntologyPanel
-                        key={active}
-                        domain={active}
-                        ontology={ontology}
-                        generated={detail.ontology_generated}
-                        counts={detail.stats.categories}
-                        onChanged={async () => { await refresh(); await loadDomains(); }}
-                      />
-                    )}
+                  <div className={tab === 'settings' ? 'h-full' : 'hidden'}>
+                    <SettingsPanel key={active} domain={active} detail={detail} ontology={ontology} version={version}
+                      onSelect={setSelected} onHighlight={setHighlight} onPending={setPendingActions} onChanged={refresh}
+                      onOntologyChanged={async () => { await refresh(); await loadDomains(); }} />
                   </div>
                 </div>
               </aside>

@@ -13,7 +13,7 @@ const FACT_ICON: Record<IngestFactItem['status'], React.ReactNode> = {
 
 export function IngestPanel({ domain, onIngested, ontologyReady }: {
   domain: string;
-  onIngested: (touchedUids: string[]) => Promise<void>;
+  onIngested: (result: IngestResult) => Promise<void>;
   ontologyReady: boolean;
 }) {
   const [text, setText] = useState('');
@@ -39,7 +39,7 @@ export function IngestPanel({ domain, onIngested, ontologyReady }: {
       const r = await kg.ingest(domain, text.trim(), source.trim() || 'user_input', undefined, partial ? 'partial' : 'full');
       setResult(r);
       if (!r.duplicate) setText('');
-      await onIngested(r.touched_uids);
+      await onIngested(r);
     } catch (err) {
       setError((err as Error).message);
     } finally {

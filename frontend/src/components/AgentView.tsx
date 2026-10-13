@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Code2, Crown, Eye, FileText, GitMerge, Globe, Link2, Newspaper, Radar, ScanText, Send, Shapes, ShieldCheck, Target, User,
-  type LucideIcon,
+  X, type LucideIcon,
 } from 'lucide-react';
 import { kg, research, type ActivityEvent, type TeamAgent } from '../lib/api';
+import { SubNav } from '../panels/BriefingPanel';
+import { ResearchPanel } from '../panels/ResearchPanel';
+import { TeamPanel } from '../panels/TeamPanel';
 
 /**
  * The main view: the Head, the knowledge graph and the team, as the user drew it — the Head on top, the graph at the
  * centre, the agents on a dial around it. Drawn in graphite: an agent at work turns bone-white and its ring turns;
  * every hand-off (a task, a report, a tool call, facts written to the graph) travels its line as a comet, its kind
- * told by the comet's shape. Below, the console lists the hand-offs. Polls the KG's activity feed.
+ * told by the comet's shape. Below, the console lists the hand-offs. Click an agent for its conversations (the
+ * Researcher: its runs too; the Head: every conversation). Polls the KG's activity feed.
  */
 
 const W = 1000, H = 640;
@@ -137,8 +141,51 @@ interface Flight { id: number; d: string; glyph: Glyph }
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour12: false });
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
-export function AgentView({ domain, stats }: { domain: string; stats?: { entities: number; facts: number } }) {
+/** One agent up close: who it is, what it is doing, its conversations — and the Researcher's runs. */
+function AgentDrawer({ domain, name, agent, doing, onClose, onIngesting }: {
+  domain: string;
+  name: string;
+  agent?: TeamAgent;
+  doing?: string;
+  onClose: () => void;
+  onIngesting: () => Promise<void>;
+}) {
+  const [view, setView] = useState<'runs' | 'talk'>(name === 'research' ? 'runs' : 'talk');
+  const Icon = ICON[name] ?? Shapes;
+  const head = name === 'head';
+  return (
+    <div className="absolute inset-y-0 right-0 z-10 flex w-[360px] max-w-full flex-col border-l border-line bg-panel shadow-2xl shadow-black/60">
+      <div className="flex items-start gap-3 border-b border-line p-3">
+        <span className="rounded-full border border-line-2 p-2 text-ink"><Icon size={14} /></span>
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <div className="font-mono text-[11px] tracking-[0.2em] text-ink uppercase">{head ? 'Head' : agent?.title ?? name}</div>
+          <p className="text-[11px] leading-snug text-dim">
+            {head ? 'Leads the team: gives the work, reads the reports, decides what is done. You talk to it on the right.' : agent?.role}
+          </p>
+          {doing && <p className="truncate text-[11px] text-accent" title={doing}>● {doing}</p>}
+          {!!agent?.tasks.length && (
+            <p className="font-mono text-[10px] text-faint">tasks: {agent.tasks.map(t => t.name).join(' · ')}</p>
+          )}
+        </div>
+        <button onClick={onClose} className="rounded p-1 text-faint hover:text-ink" title="Close"><X size={14} /></button>
+      </div>
+      {name === 'research' && <SubNav items={[['runs', 'Runs'], ['talk', 'Conversations']]} value={view} onChange={setView} />}
+      <div className="min-h-0 flex-1">
+        {name === 'research' && view === 'runs'
+          ? <ResearchPanel domain={domain} onIngesting={onIngesting} />
+          : <TeamPanel key={name} domain={domain} agent={head ? undefined : name} />}
+      </div>
+    </div>
+  );
+}
+
+export function AgentView({ domain, stats, onIngesting }: {
+  domain: string;
+  stats?: { entities: number; facts: number };
+  onIngesting: () => Promise<void>;
+}) {
   const [agents, setAgents] = useState<TeamAgent[]>([]);
+  const [open, setOpen] = useState<string | null>(null);
   const [working, setWorking] = useState<Record<string, string[]>>({});
   const [log, setLog] = useState<ActivityEvent[]>([]);
   const [flights, setFlights] = useState<Flight[]>([]);
@@ -309,7 +356,8 @@ export function AgentView({ domain, stats }: { domain: string; stats?: { entitie
           </g>
 
           {/* the Head: a dial that turns while it works */}
-          <g>
+          <g onClick={() => setOpen(o => (o === 'head' ? null : 'head'))} style={{ cursor: 'pointer' }}>
+            <title>Head — every conversation</title>
             <g className={headOn ? 'spin-slow' : undefined}>
               {Array.from({ length: 72 }, (_, i) => {
                 const a = rad(i * 5), r2 = i % 6 === 0 ? 53 : 50;
@@ -333,7 +381,9 @@ export function AgentView({ domain, stats }: { domain: string; stats?: { entitie
             const lit = active(name), doing = working[name]?.[0], waiting = queued[name] ?? 0;
             const Icon = ICON[name] ?? Shapes;
             return (
-              <g key={name}>
+              <g key={name} onClick={() => setOpen(o => (o === name ? null : name))} style={{ cursor: 'pointer' }}>
+                <title>{`${title(name)} — its conversations`}</title>
+                {open === name && <circle cx={p.x} cy={p.y} r={NODE_R + 11} fill="none" stroke={C.accent} strokeWidth={1.2} />}
                 {lit && <circle cx={p.x} cy={p.y} r={NODE_R + 7} fill="none" stroke={C.accent} strokeOpacity={0.55}
                   strokeDasharray="2 5" className="spin-slow" />}
                 {!lit && waiting > 0 && <circle cx={p.x} cy={p.y} r={NODE_R + 6} fill="none" stroke={C.faint} strokeDasharray="1 4" />}
@@ -369,6 +419,10 @@ export function AgentView({ domain, stats }: { domain: string; stats?: { entitie
           ))}
         </svg>
 
+        {open && (
+          <AgentDrawer domain={domain} name={open} agent={agents.find(a => a.name === open)} doing={working[open]?.[0]}
+            onClose={() => setOpen(null)} onIngesting={onIngesting} />
+        )}
         <div className="pointer-events-none absolute bottom-3 left-4 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9.5px] tracking-wider text-faint uppercase">
           {LEGEND.map(([g, l]) => <span key={g} className="flex items-center gap-1.5"><GlyphIcon glyph={g} />{l}</span>)}
         </div>

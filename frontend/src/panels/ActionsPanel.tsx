@@ -6,7 +6,8 @@ import { kg, type ActionDef, type ActionParam, type Fact, type Playbook, type Pr
 import { Markdown } from '../components/Markdown';
 import { SensorsView } from '../components/SensorsView';
 
-type View = 'inbox' | 'playbooks' | 'sensors' | 'catalog';
+export type ActionsView = 'inbox' | 'playbooks' | 'sensors' | 'catalog';
+type View = ActionsView;
 
 function ago(iso: string) {
   const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
@@ -243,14 +244,66 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
   );
 }
 
-export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending }: {
+/** What waits for your confirmation — on top of the Head chat, where the decision to act was made. */
+export function PendingActions({ domain, version, onSelect, onPending }: {
+  domain: string;
+  version: number;
+  onSelect: (uid: string) => void;
+  onPending: (count: number) => void;
+}) {
+  const [pending, setPending] = useState<Proposal[]>([]);
+  const [facts, setFacts] = useState<Map<string, Fact>>(new Map());
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const ps = await kg.proposals(domain, 'proposed');
+      const uids = [...new Set(ps.flatMap(p => p.evidence ?? []))];
+      if (uids.length) {
+        const found = await kg.facts(domain, uids.slice(0, 200)).catch(() => []);
+        setFacts(new Map(found.map(f => [f.uid, f])));
+      }
+      setPending(ps);
+      onPending(ps.length);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [domain, onPending]);
+  useEffect(() => { void load(); }, [load, version]);
+  useEffect(() => {
+    const t = setInterval(load, 10000);
+    return () => clearInterval(t);
+  }, [load]);
+
+  async function decide(uid: string, approve: boolean, note: string) {
+    try { await kg.decideProposal(domain, uid, approve, note); } catch (e) { setError((e as Error).message); }
+    await load();
+  }
+
+  if (!pending.length && !error) return null;
+  return (
+    <div className="max-h-[45%] shrink-0 overflow-y-auto border-b border-line p-3">
+      <h4 className="mb-2 font-mono text-[10px] tracking-widest text-accent uppercase">Waiting for your confirmation · {pending.length}</h4>
+      {error && <p className="mb-2 text-xs text-bad">{error}</p>}
+      <ul className="space-y-2">
+        {pending.map(p => <PendingCard key={p.uid} p={p} facts={facts} onSelect={onSelect} onDecide={decide} />)}
+      </ul>
+    </div>
+  );
+}
+
+/** The actions' views; with `view`, just that one (the Briefing's activity, the Settings' playbooks / sensors / APIs). */
+export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending, view: only }: {
   domain: string;
   version: number;
   onSelect: (uid: string) => void;
   onHighlight: (uids: Set<string>) => void;
   onPending: (count: number) => void;
+  view?: View;
 }) {
-  const [view, setView] = useState<View>('inbox');
+  const [picked, setView] = useState<View>('inbox');
+  const view = only ?? picked;
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [playbooks, setPlaybooks] = useState<Playbook[]>([]);
   const [running, setRunning] = useState(false);
@@ -304,8 +357,8 @@ export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-line p-2">
-        {tabs.map(t => (
+      {(!only || view === 'playbooks') && <div className="flex items-center gap-1 border-b border-line p-2">
+        {!only && tabs.map(t => (
           <button key={t.id} onClick={() => setView(t.id)}
             className={`rounded-md px-2.5 py-1 text-[11.5px] ${view === t.id ? 'bg-panel-2 text-ink' : 'text-faint hover:text-dim'}`}>
             {t.label}
@@ -318,7 +371,7 @@ export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending
             {running ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} {running ? 'Running…' : 'Run now'}
           </button>
         )}
-      </div>
+      </div>}
       {error && <p className="flex items-center gap-1 px-3 pt-2 text-xs text-bad"><AlertTriangle size={11} /> {error}</p>}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
@@ -347,8 +400,8 @@ export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending
         {view === 'playbooks' && (
           <div className="space-y-2">
             <p className="text-[11px] leading-snug text-faint">
-              Responses prepared at night from the graph. When new knowledge shows a situation happening, its playbook
-              proposes the action by itself.
+              Responses prepared at night from the graph. When new knowledge or a live reading shows a situation
+              happening, the Watcher reports the playbook to the Head, which decides whether its Operator acts.
             </p>
             {playbooks.length === 0 && <p className="mt-4 text-center text-xs text-faint">No playbooks yet — they are written after the nightly research, or Run now.</p>}
             <ul className="space-y-2">

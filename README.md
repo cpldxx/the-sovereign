@@ -222,32 +222,42 @@ then use official data APIs instead of unofficial endpoints) · `ANTHROPIC_API_K
 
 ### Frontend (`frontend/`, port 5173)
 
-One screen per domain: the agents at work on the left, tools on the right — drawn in graphite (one neutral scale,
-a bone-white accent, Geist type bundled with the app): state shows as brightness and motion, not color.
+One screen per domain: the agents at work on the left, and three tabs on the right — you talk to the Head (and confirm
+what it wants to do), read what happened, and set things up; the rest is the Head's work. Drawn in graphite (one
+neutral scale, a bone-white accent, Geist type bundled with the app): state shows as brightness and motion, not color.
 
+Left — what the team is doing:
 - **Agents** (the main view) — the Head, the knowledge graph and the team as one picture: the Head on top, the
-  graph at the centre with its counts, the twelve agents on a dial around it, bracketed by team. An agent at work
+  graph at the centre with its counts, the thirteen agents on a dial around it, bracketed by team. An agent at work
   turns white, its ring turns and its line to the graph flows, with what it is doing beside it; every hand-off travels
   its line as a comet whose shape tells the kind (● task · ○ report · ■ tool call · ◆ facts stored). The console below
   lists the hand-offs with live counts of agents working, tasks queued and hand-offs per minute
-  (`GET /domains/{domain}/activity`, polled).
+  (`GET /domains/{domain}/activity`, polled). **Click an agent** for who it is, what it is doing and its conversations
+  with the Head (tasks, questions, answers, reports, the Head's decisions); the Researcher also shows its runs —
+  bootstrap, "what's new" and missions, each with the pages read, what each added and the report; the Head shows
+  every conversation.
 - **Knowledge graph** (a tab of the main view, drawn only while open) — the 300 most connected entities by default
   (1000 / all to choose; `GET /graph/{domain}?limit=&include=`), plus whatever the Head just talked about. It is
-  an Obsidian-style live graph: entities tinted by type and sized by their links, faint links that brighten as facts gain evidence, names fading in as you zoom, hover to light an entity and its neighbours, drag to shake it; entities no fact connects yet float as a cloud around it; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
-- **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph.
-- **Team** — the Head and its thirteen agents at a glance: who is working or queued, and every conversation between them (tasks, questions, answers, reports, the Head's decisions), live.
-- **Voice** — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.
-- **Ingest** — paste text + source; shows new/known entities and created/strengthened/superseded/rejected facts with reasons.
-- **Search** — Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources.
-- **Review** — the ambiguous writes (weak facts, possible merges and links). The Head decides them by itself every
-  30 min (`HEAD_REVIEW_EVERY_MINUTES`, a sweep of at most `HEAD_REVIEW_MINUTES`, default 10) and every night before
-  the report (at most `NIGHTLY_REVIEW_MINUTES`, default 45 per domain); its notes are on a Team thread. "Head review"
-  makes it decide now, and you can still approve or dismiss one yourself.
-- **Ontology** — the domain's grammar with per-type counts; edit it or have the Ontologist regenerate it.
-- **Report** — the daily briefing: what the graph learned, what changed (superseded and confirmed facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now.
-- **Actions** — the fast path. *Inbox*: proposals waiting for your confirmation (rationale, the facts behind it, a dry run of exactly what will happen) plus the activity feed (alerts, drafts, executed and rejected actions). *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*: live-data tools, each backed by many sources (APIs and web pages) — read one now, see which source answered and each source's success rate and code, or have the Scout find more sources. *Catalog*: built-in actions and the APIs you connect (webhooks) — each asks you first, or, marked *auto*, runs
-  when the Head says so (for actions with no real-world effect, e.g. a simulation).
-- **Research** — bootstrap, "what's new" and custom missions; each run shows the pages read, what each added to the graph (and how long it took), failures and the report.
+  an Obsidian-style live graph: entities tinted by type and sized by their links, faint links that brighten as facts gain evidence, names fading in as you zoom, hover to light an entity and its neighbours, drag to shake it; entities no fact connects yet float as a cloud around it; toggle superseded facts. Click an entity for its facts, history and sources. **Search the graph** opens beside it (Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources) and lights up what it finds. Refreshes by itself when agents add knowledge.
+
+Right — three tabs:
+- **Head** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the
+  graph. On top, what waits for your confirmation (rationale, the facts behind it, a dry run of exactly what will
+  happen; the tab shows the count). 📎 adds a source: paste an article or notes with its source, the pipeline learns
+  it (new / known entities, created / strengthened / superseded / rejected facts with reasons) and the chat notes it.
+- **Voice** (in the Head tab) — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.
+- **Briefing** — *Report*: the daily briefing — what the graph learned, what changed (superseded and confirmed
+  facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now. *What was
+  done*: alerts, drafts, the APIs run and what they returned, rejected and expired proposals.
+- **Settings** — *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*:
+  live-data tools, each backed by many sources (APIs and web pages) — read one now, see which source answered and
+  each source's success rate and code, or have the Scout find more sources. *APIs*: built-in actions and the APIs
+  you connect (webhooks) — each asks you first, or, marked *auto*, runs when the Head says so (for actions with no
+  real-world effect, e.g. a simulation). *Ontology*: the domain's grammar with per-type counts; edit it or have the
+  Ontologist regenerate it. *Review*: the ambiguous writes (weak facts, possible merges and links) — the Head
+  decides them by itself every 30 min (`HEAD_REVIEW_EVERY_MINUTES`, a sweep of at most `HEAD_REVIEW_MINUTES`,
+  default 10) and every night before the report (at most `NIGHTLY_REVIEW_MINUTES`, default 45 per domain), with its
+  notes on a thread; "Head review" makes it decide now, and you can still overrule one.
 - **Status** — KG API / ArcadeDB / Hermes / Research / search + crawler health in the sidebar, plus a link to the LangFuse traces when tracing is on (admins).
 - **Accounts** — sign in; Members (header) shares a domain with other accounts as viewer / editor / owner; Account (sidebar) changes the password, makes API tokens for MCP clients and, for admins, invite links.
 

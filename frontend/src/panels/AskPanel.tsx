@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, Check, Loader2, Mic, MicOff, Send, Square, Trash2, Volume2, VolumeX, Wrench } from 'lucide-react';
-import { hermes, kg, type AgentEvent, type Turn } from '../lib/api';
+import { AudioLines, Check, Loader2, Mic, MicOff, Paperclip, Send, Square, Trash2, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { hermes, kg, type AgentEvent, type IngestResult, type Turn } from '../lib/api';
+import { IngestPanel } from './IngestPanel';
 import { Markdown } from '../components/Markdown';
 import { canSpeak, speak, stopSpeaking } from '../lib/voice';
 import { VoiceSession, type VoiceState } from '../lib/voiceSession';
@@ -63,12 +64,14 @@ function Steps({ steps }: { steps: Step[] }) {
   );
 }
 
-export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
+export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyReady }: {
   domain: string;
   onKnowledgeChanged: () => Promise<void>;
   onHighlight: (uids: Set<string>) => void;
+  ontologyReady: boolean;
 }) {
   const [messages, setMessages] = useState<Message[]>(() => loadChat(domain));
+  const [attaching, setAttaching] = useState(false);   // a source pasted in: the pipeline learns it, the chat notes it
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [draft, setDraft] = useState('');
@@ -260,6 +263,18 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
     localStorage.setItem('sovereign.wakeWord', next ? '1' : '0');
   }
 
+  async function ingested(r: IngestResult) {
+    await onKnowledgeChanged();
+    onHighlight(new Set(r.touched_uids));
+    const parts = r.duplicate ? ['already in the graph, nothing new'] : [
+      `${r.facts_created} new facts`, r.facts_strengthened && `${r.facts_strengthened} strengthened`,
+      r.facts_invalidated && `${r.facts_invalidated} superseded`, r.facts_review && `${r.facts_review} to review`,
+      r.facts_rejected && `${r.facts_rejected} rejected (the text doesn't support them)`,
+      `${r.entities_created} new entities`,
+    ].filter(Boolean);
+    setMessages(m => [...m, { role: 'assistant', content: `**Source stored** through the pipeline: ${parts.join(' · ')}.` }]);
+  }
+
   function toggleVoiceOut() {
     const next = !voiceOut;
     setVoiceOut(next);
@@ -288,12 +303,23 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
         </div>
       </div>
 
-      <div ref={scroller} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div className="relative min-h-0 flex-1">
+      {attaching && (
+        <div className="absolute inset-0 z-10 flex flex-col bg-bg">
+          <div className="flex items-center gap-2 border-b border-line px-4 py-2">
+            <Paperclip size={12} className="text-dim" />
+            <span className="flex-1 text-[11px] text-dim">Add a source — the pipeline extracts its facts and checks each against the text</span>
+            <button onClick={() => setAttaching(false)} className="rounded p-1 text-faint hover:text-ink" title="Back to the conversation"><X size={13} /></button>
+          </div>
+          <div className="min-h-0 flex-1"><IngestPanel domain={domain} onIngested={ingested} ontologyReady={ontologyReady} /></div>
+        </div>
+      )}
+      <div ref={scroller} className="h-full space-y-4 overflow-y-auto px-4 py-4">
         {messages.length === 0 && !busy && (
           <div className="mt-10 space-y-2 text-center text-xs text-faint">
             <p className="font-mono tracking-widest text-dim">HEAD AGENT</p>
             <p>"What do we know about …?"</p>
-            <p>"Ingest this: …"</p>
+            <p>📎 paste an article to learn it</p>
             <p>"What's the biggest risk right now?"</p>
           </div>
         )}
@@ -323,6 +349,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
           </div>
         )}
       </div>
+      </div>
 
       {(voice !== 'off' || voiceError) && (
         <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-[11.5px]">
@@ -348,6 +375,11 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
         onSubmit={e => { e.preventDefault(); void send(input); }}
         className="flex items-end gap-2 border-t border-line p-3"
       >
+        <button type="button" onClick={() => setAttaching(a => !a)}
+          className={`rounded-md border p-2.5 ${attaching ? 'border-accent text-accent' : 'border-line-2 text-dim hover:text-ink'}`}
+          title="Add a source: paste an article, notes or a report — its facts are learned into the graph">
+          <Paperclip size={15} />
+        </button>
         <textarea
           value={input}
           onChange={e => setInput(e.target.value)}

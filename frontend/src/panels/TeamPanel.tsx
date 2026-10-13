@@ -97,10 +97,11 @@ function Conversation({ domain, uid, onBack }: { domain: string; uid: string; on
   );
 }
 
-export function TeamPanel({ domain }: { domain: string }) {
+/** Every conversation, or — with `agent` — that agent's (the agent view's drawer). */
+export function TeamPanel({ domain, agent }: { domain: string; agent?: string }) {
   const [agents, setAgents] = useState<TeamAgent[]>([]);
   const [threads, setThreads] = useState<CrewThread[] | null>(null);
-  const [filter, setFilter] = useState<string | null>(null);
+  const [filter, setFilter] = useState<string | null>(agent ?? null);
   const [open, setOpen] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -126,7 +127,7 @@ export function TeamPanel({ domain }: { domain: string }) {
 
   return (
     <div className="flex h-full flex-col">
-      <Roster agents={agents} filter={filter} onFilter={setFilter} />
+      {!agent && <Roster agents={agents} filter={filter} onFilter={setFilter} />}
       {error && <p className="px-3 pt-2 text-xs text-bad">{error}</p>}
       <ul className="min-h-0 flex-1 divide-y divide-line overflow-y-auto">
         {threads && threads.length === 0 && (
