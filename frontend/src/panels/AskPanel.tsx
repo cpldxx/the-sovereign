@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, Check, Loader2, Mic, MicOff, Paperclip, Send, Square, Trash2, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AudioLines, Bell, Check, Hourglass, Loader2, Mic, MicOff, Paperclip, Send, Square, Trash2, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { hermes, kg, type AgentEvent, type IngestResult, type Turn } from '../lib/api';
 import { IngestPanel } from './IngestPanel';
 import { Markdown } from '../components/Markdown';
@@ -24,11 +24,26 @@ const VOICE_LABEL: Record<VoiceState, string> = {
   off: '', listening: 'Listening', hearing: 'Hearing you…', working: 'Thinking…', speaking: 'Speaking — talk to interrupt',
 };
 
+/** What the Head did on the way to its answer: a tool call, or what it said before one (kept, not replaced). */
 interface Step {
   id: string;
   name: string;
   args: unknown;
   done: boolean;
+  said?: string;
+  outcome?: { action: string; status: string; title: string };   // an action the Operator ran or holds for you
+}
+
+/** The proposal a propose_action call returned, if the result is one. */
+function actionOutcome(result: string): Step['outcome'] {
+  try {
+    const p = JSON.parse(result);
+    if (!p?.action || !p?.status) return undefined;
+    const t = p.params?.title ?? p.params?.question ?? p.params?.message ?? '';
+    return { action: p.action, status: p.status, title: typeof t === 'string' ? t : '' };
+  } catch {
+    return undefined;
+  }
 }
 
 interface Message {
@@ -49,10 +64,34 @@ function argSummary(args: unknown): string {
   return typeof main === 'string' ? main.slice(0, 90) : '';
 }
 
-function Steps({ steps }: { steps: Step[] }) {
+function Outcome({ o, onOpen }: { o: NonNullable<Step['outcome']>; onOpen?: () => void }) {
+  const waiting = o.status === 'proposed';
+  const where = waiting ? 'waiting for your confirmation at the top of this tab'
+    : o.action === 'alert' ? 'shown as a pop-up and in Briefing › What was done'
+    : 'its result is in Briefing › What was done';
+  return (
+    <div className="rounded border border-line-2 bg-panel px-2.5 py-1.5 text-[11px]">
+      <div className="flex items-center gap-1.5">
+        {waiting ? <Hourglass size={11} className="shrink-0 text-accent" /> : <Bell size={11} className="shrink-0 text-accent" />}
+        <span className="shrink-0 text-ink">{o.action === 'alert' && !waiting ? 'Alert sent' : `${o.action} ${o.status}`}</span>
+        {o.title && <span className="min-w-0 truncate text-dim">“{o.title}”</span>}
+      </div>
+      <div className="mt-0.5 flex items-center gap-2 pl-[17px] text-faint">
+        <span>{where}</span>
+        {!waiting && onOpen && <button onClick={onOpen} className="ml-auto shrink-0 underline hover:text-ink">open</button>}
+      </div>
+    </div>
+  );
+}
+
+function Steps({ steps, onOpenBriefing }: { steps: Step[]; onOpenBriefing?: () => void }) {
   return (
     <div className="mb-2 space-y-1">
-      {steps.map(s => (
+      {steps.map(s => s.said ? (
+        <p key={s.id} className="text-[12px] leading-snug text-dim">{s.said}</p>
+      ) : s.outcome ? (
+        <Outcome key={s.id} o={s.outcome} onOpen={onOpenBriefing} />
+      ) : (
         <div key={s.id} className="flex items-center gap-1.5 text-[11px] text-faint">
           {s.done ? <Check size={11} className="text-good" /> : <Loader2 size={11} className="animate-spin text-accent" />}
           <Wrench size={10} />
@@ -64,11 +103,12 @@ function Steps({ steps }: { steps: Step[] }) {
   );
 }
 
-export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyReady }: {
+export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyReady, onOpenBriefing }: {
   domain: string;
   onKnowledgeChanged: () => Promise<void>;
   onHighlight: (uids: Set<string>) => void;
   ontologyReady: boolean;
+  onOpenBriefing?: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>(() => loadChat(domain));
   const [attaching, setAttaching] = useState(false);   // a source pasted in: the pipeline learns it, the chat notes it
@@ -124,17 +164,24 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
     abort.current = controller;
     const collected: Step[] = [];
     let final: Message | null = null;
+    let streamed = '';   // what the Head is saying now; kept as a step when it goes on to a tool
 
     const onEvent = (e: AgentEvent) => {
       switch (e.type) {
         case 'tool_start':
           if (!collected.length) onFirstTool?.();
+          if (streamed.trim()) collected.push({ id: `said-${collected.length}`, name: '', args: null, done: true, said: streamed.trim() });
+          streamed = '';
+          setDraft('');
           collected.push({ id: e.id, name: e.name, args: e.args, done: false });
           setSteps([...collected]);
           break;
         case 'tool_end': {
           const s = collected.find(x => x.id === e.id);
-          if (s) s.done = true;
+          if (s) {
+            s.done = true;
+            if (e.name === 'propose_action') s.outcome = actionOutcome(e.result);
+          }
           setSteps([...collected]);
           // Light up what the agent read (query) or stored (ingest) in the graph.
           if (e.name === 'ingest_data' || e.name === 'update_ontology') {
@@ -145,10 +192,11 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
           break;
         }
         case 'delta':
-          setDraft(d => d + e.text);
+          streamed += e.text;
+          setDraft(streamed);
           break;
         case 'answer':
-          final = { role: 'assistant', content: e.text || '(no answer)', steps: collected };
+          final = { role: 'assistant', content: e.text || streamed.trim() || '(no answer)', steps: collected };
           break;
         case 'error':
           final = { role: 'assistant', content: e.detail, steps: collected, error: true };
@@ -329,7 +377,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
             <div key={i} className="ml-8 rounded-lg bg-panel-2 px-3 py-2 text-[13px] whitespace-pre-wrap">{m.content}</div>
           ) : (
             <div key={i} className={`border-l-2 pl-3 ${m.error ? 'border-bad/60' : 'border-accent/60'}`}>
-              {m.steps && m.steps.length > 0 && <Steps steps={m.steps} />}
+              {m.steps && m.steps.length > 0 && <Steps steps={m.steps} onOpenBriefing={onOpenBriefing} />}
               {m.error ? <p className="text-[13px] text-bad">{m.content}</p> : <Markdown>{m.content}</Markdown>}
             </div>
           ),
@@ -337,7 +385,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
 
         {busy && (
           <div className="border-l-2 border-accent/60 pl-3">
-            {steps.length > 0 && <Steps steps={steps} />}
+            {steps.length > 0 && <Steps steps={steps} onOpenBriefing={onOpenBriefing} />}
             {draft ? (
               <Markdown>{draft}</Markdown>
             ) : (

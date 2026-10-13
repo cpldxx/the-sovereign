@@ -1,21 +1,29 @@
-import { useState } from 'react';
 import { ActionsPanel } from './ActionsPanel';
+import { MacNotifySwitch } from '../components/AlertToasts';
 import { ReportPanel } from './ReportPanel';
 
-type View = 'report' | 'activity';
+export type BriefingView = 'report' | 'activity';
 
 /** What happened: the daily report, and what was done (alerts, drafts, the APIs run and what they returned). */
-export function BriefingPanel({ domain, version, onHighlight, onSelect, onPending }: {
+export function BriefingPanel({ domain, version, view, onView, onHighlight, onSelect, onPending }: {
   domain: string;
   version: number;
+  view: BriefingView;
+  onView: (v: BriefingView) => void;
   onHighlight: (uids: Set<string>) => void;
   onSelect: (uid: string) => void;
   onPending: (count: number) => void;
 }) {
-  const [view, setView] = useState<View>('report');
   return (
     <div className="flex h-full flex-col">
-      <SubNav items={[['report', 'Report'], ['activity', 'What was done']]} value={view} onChange={setView} />
+      <SubNav items={[['report', 'Report'], ['activity', 'What was done']]} value={view} onChange={onView} />
+      {view === 'activity' && (
+        <div className="flex items-center gap-2 border-b border-line px-3 py-2 text-[10.5px] leading-snug text-faint">
+          <span className="flex-1">An alert pops up in this window when it runs and stays listed here. Nothing is sent
+            off this Mac — connect Slack, Telegram or mail under Settings › APIs to get alerts there.</span>
+          <MacNotifySwitch />
+        </div>
+      )}
       <div className="min-h-0 flex-1">
         {view === 'report'
           ? <ReportPanel domain={domain} version={version} onHighlight={onHighlight} onSelect={onSelect} />

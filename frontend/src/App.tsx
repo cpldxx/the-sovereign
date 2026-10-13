@@ -10,7 +10,8 @@ import { EntityPanel } from './components/EntityPanel';
 import { Welcome } from './components/Welcome';
 import { AskPanel } from './panels/AskPanel';
 import { PendingActions } from './panels/ActionsPanel';
-import { BriefingPanel } from './panels/BriefingPanel';
+import { BriefingPanel, type BriefingView } from './panels/BriefingPanel';
+import { AlertToasts } from './components/AlertToasts';
 import { SettingsPanel } from './panels/SettingsPanel';
 
 // Three tabs: you talk to the Head (and confirm what it wants to do), read what happened, and set things up. The rest
@@ -81,6 +82,8 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('head');
+  const [briefing, setBriefing] = useState<BriefingView>('report');
+  const openDone = useCallback(() => { setTab('briefing'); setBriefing('activity'); }, []);
   const [version, setVersion] = useState(0);  // bumps on every reload, so open panels refetch
   const [pendingActions, setPendingActions] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -261,11 +264,12 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                     <PendingActions key={active} domain={active} version={version} onSelect={setSelected} onPending={setPendingActions} />
                     <div className="min-h-0 flex-1">
                       <AskPanel key={active} domain={active} onKnowledgeChanged={refresh} onHighlight={setHighlight}
-                        ontologyReady={detail.ontology_generated} />
+                        ontologyReady={detail.ontology_generated} onOpenBriefing={openDone} />
                     </div>
                   </div>
                   <div className={tab === 'briefing' ? 'h-full' : 'hidden'}>
-                    <BriefingPanel key={active} domain={active} version={version} onHighlight={setHighlight}
+                    <BriefingPanel key={active} domain={active} version={version} view={briefing} onView={setBriefing}
+                      onHighlight={setHighlight}
                       onSelect={setSelected} onPending={setPendingActions} />
                   </div>
                   <div className={tab === 'settings' ? 'h-full' : 'hidden'}>
@@ -275,6 +279,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                   </div>
                 </div>
               </aside>
+              <AlertToasts key={active} domain={active} onOpen={openDone} />
             </div>
           </>
         )}

@@ -46,7 +46,9 @@ _TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool
 
 BUILTIN = {
     "alert": {
-        "description": "Tell the user something that needs their attention now.",
+        "description": "Tell the user something that needs their attention now. It pops up in the Sovereign window "
+                       "(and as a Mac notification if they turned that on) and stays in Briefing › What was done — "
+                       "nothing is sent off this machine.",
         "params": [
             {"name": "title", "type": "string", "description": "One line", "required": True},
             {"name": "message", "type": "string", "description": "What happened and why it matters, with facts",
@@ -174,7 +176,7 @@ async def propose(db: ArcadeDB, domain: str, action: str, params: dict, rational
 async def _preview(spec: dict, params: dict, domain: str) -> str:
     """Dry run: what executing would do, without doing it."""
     if spec["kind"] == "builtin":
-        return {"alert": "Show the alert in the Actions tab.", "draft": "Save the draft for you to use.",
+        return {"alert": "Pop the alert up in the Sovereign window and list it in Briefing › What was done.", "draft": "Save the draft for you to use.",
                 "research": f"Start a research mission: {params.get('question', '')}"}[spec["name"]]
     host = urlsplit(spec["url"]).netloc
     preview = f"POST to {host} ({spec['name']}) with {params}"

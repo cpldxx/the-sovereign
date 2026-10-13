@@ -241,14 +241,17 @@ Left — what the team is doing:
   an Obsidian-style live graph: entities tinted by type and sized by their links, faint links that brighten as facts gain evidence, names fading in as you zoom, hover to light an entity and its neighbours, drag to shake it; entities no fact connects yet float as a cloud around it; toggle superseded facts. Click an entity for its facts, history and sources. **Search the graph** opens beside it (Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources) and lights up what it finds. Refreshes by itself when agents add knowledge.
 
 Right — three tabs:
-- **Head** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the
-  graph. On top, what waits for your confirmation (rationale, the facts behind it, a dry run of exactly what will
+- **Head** — streaming chat: each KG tool call shows live, what the Head says on the way stays above its answer,
+  and the nodes it read or stored light up in the graph. An action it took shows as a card saying where it went. On top, what waits for your confirmation (rationale, the facts behind it, a dry run of exactly what will
   happen; the tab shows the count). 📎 adds a source: paste an article or notes with its source, the pipeline learns
   it (new / known entities, created / strengthened / superseded / rejected facts with reasons) and the chat notes it.
 - **Voice** (in the Head tab) — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.
 - **Briefing** — *Report*: the daily briefing — what the graph learned, what changed (superseded and confirmed
   facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now. *What was
   done*: alerts, drafts, the APIs run and what they returned, rejected and expired proposals.
+- **Alerts** — where they go: a pop-up in the Sovereign window the moment one runs (the Head's or a playbook's), a
+  macOS notification too if you switch that on (Briefing › What was done), and the list there. Nothing leaves this
+  Mac; to get alerts in Slack, Telegram or mail, connect that API under Settings › APIs.
 - **Settings** — *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*:
   live-data tools, each backed by many sources (APIs and web pages) — read one now, see which source answered and
   each source's success rate and code, or have the Scout find more sources. *APIs*: built-in actions and the APIs
