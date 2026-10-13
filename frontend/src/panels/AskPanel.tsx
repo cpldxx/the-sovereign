@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { AudioLines, Bell, Check, Hourglass, Loader2, Mic, MicOff, Paperclip, Send, Square, Trash2, Volume2, VolumeX, Wrench, X } from 'lucide-react';
-import { hermes, kg, type AgentEvent, type IngestResult, type Turn } from '../lib/api';
+import { hermes, kg, type AgentEvent, type ChatTurn, type IngestResult, type Turn } from '../lib/api';
 import { IngestPanel } from './IngestPanel';
 import { Markdown } from '../components/Markdown';
 import { canSpeak, speak, stopSpeaking } from '../lib/voice';
@@ -51,10 +51,22 @@ interface Message {
   content: string;
   steps?: Step[];
   error?: boolean;
+  pending?: boolean;   // the Head is still writing it (asked before a reload): it arrives by itself
 }
 
+// The conversation lives in the KG (Hermes saves each question and answer as it happens); this browser keeps a copy
+// only to show something before the KG answers, or when it can't.
 function loadChat(domain: string): Message[] {
   try { return JSON.parse(localStorage.getItem(`sovereign.chat.${domain}`) ?? '[]'); } catch { return []; }
+}
+
+function cacheChat(domain: string, messages: Message[]) {
+  try { localStorage.setItem(`sovereign.chat.${domain}`, JSON.stringify(messages.slice(-60))); } catch { /* full: the KG has it */ }
+}
+
+function fromTurns(turns: ChatTurn[]): Message[] {
+  return turns.map(t => ({ role: t.role, content: t.content, steps: (t.steps ?? []) as Step[],
+                           error: t.status === 'error', pending: t.status === 'pending' }));
 }
 
 function argSummary(args: unknown): string {
@@ -133,9 +145,38 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
   wakeRef.current = wakeWord;
   messagesRef.current = messages;
 
+  useEffect(() => { cacheChat(domain, messages); }, [domain, messages]);
+
+  // The conversation from the KG; this browser's old local one is moved there once.
+  const waiting = messages.some(m => m.pending);
   useEffect(() => {
-    localStorage.setItem(`sovereign.chat.${domain}`, JSON.stringify(messages));
-  }, [domain, messages]);
+    let alive = true;
+    (async () => {
+      try {
+        let turns = await kg.chat(domain);
+        const local = loadChat(domain).filter(m => !m.pending);
+        if (!turns.length && local.length) {
+          // Light enough to send: the words and what was done, not each tool call's arguments.
+          await kg.importChat(domain, local.slice(-400).map(m => ({
+            role: m.role, content: m.content, error: m.error,
+            steps: (m.steps ?? []).map(({ args: _args, ...step }) => step),
+          })));
+          turns = await kg.chat(domain);
+        }
+        if (alive && !abort.current) setMessages(fromTurns(turns));
+      } catch { /* the KG is unreachable: the local copy stays */ }
+    })();
+    return () => { alive = false; };
+  }, [domain]);
+  // An answer still being written (asked before a reload): look again until it lands.
+  useEffect(() => {
+    if (!waiting) return;
+    const t = setInterval(async () => {
+      const turns = await kg.chat(domain).catch(() => null);
+      if (turns && !abort.current) setMessages(fromTurns(turns));
+    }, 3000);
+    return () => clearInterval(t);
+  }, [domain, waiting]);
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' });
@@ -154,7 +195,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
   async function send(text: string, spoken = false, onFirstTool?: () => void): Promise<Message | null> {
     text = text.trim();
     if (!text || abort.current) return null;
-    const history: Turn[] = messagesRef.current.filter(m => !m.error).map(m => ({ role: m.role, content: m.content }));
+    const history: Turn[] = messagesRef.current.filter(m => !m.error && !m.pending).map(m => ({ role: m.role, content: m.content }));
     setMessages(m => [...m, { role: 'user', content: text }]);
     setInput('');
     setBusy(true);
@@ -320,7 +361,9 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
       r.facts_rejected && `${r.facts_rejected} rejected (the text doesn't support them)`,
       `${r.entities_created} new entities`,
     ].filter(Boolean);
-    setMessages(m => [...m, { role: 'assistant', content: `**Source stored** through the pipeline: ${parts.join(' · ')}.` }]);
+    const note = `**Source stored** through the pipeline: ${parts.join(' · ')}.`;
+    setMessages(m => [...m, { role: 'assistant', content: note }]);
+    void kg.addChat(domain, { role: 'assistant', content: note }).catch(() => undefined);
   }
 
   function toggleVoiceOut() {
@@ -341,7 +384,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
             </button>
           )}
           <button
-            onClick={() => setMessages([])}
+            onClick={() => { setMessages([]); void kg.clearChat(domain).catch(() => undefined); }}
             disabled={busy || messages.length === 0}
             className="rounded p-1 text-faint hover:text-ink disabled:opacity-30"
             title="Clear conversation"
@@ -378,7 +421,11 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
           ) : (
             <div key={i} className={`border-l-2 pl-3 ${m.error ? 'border-bad/60' : 'border-accent/60'}`}>
               {m.steps && m.steps.length > 0 && <Steps steps={m.steps} onOpenBriefing={onOpenBriefing} />}
-              {m.error ? <p className="text-[13px] text-bad">{m.content}</p> : <Markdown>{m.content}</Markdown>}
+              {m.pending ? (
+                <p className="flex items-center gap-2 text-xs text-faint">
+                  <Loader2 size={12} className="animate-spin" /> The Head is still answering — it appears here when done.
+                </p>
+              ) : m.error ? <p className="text-[13px] text-bad">{m.content}</p> : <Markdown>{m.content}</Markdown>}
             </div>
           ),
         )}

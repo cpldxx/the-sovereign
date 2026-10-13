@@ -355,3 +355,33 @@ async def test_propose_action_takes_a_rationale_tucked_into_params(db, team, mon
     assert p["status"] == "executed" and p["rationale"] == "the graph says so" and p["evidence"] == ["f1"]
     q = await mcp.propose_action(domain, "alert", {"title": "E2E", "message": "no reason given"})
     assert q["status"] == "executed" and q["rationale"] == "no reason given"
+
+
+@pytest.mark.db
+async def test_a_conversation_is_kept_per_person_and_survives_a_reload(team):
+    from core import chat
+    db, domain, _ = team
+    await chat.add(db, domain, "u1", "user", "What changed?")
+    pending = await chat.add(db, domain, "u1", "assistant", "", status="pending")
+    await chat.add(db, domain, "u2", "user", "someone else's question")
+    turns = await chat.turns(db, domain, "u1")
+    assert [(t["role"], t["status"]) for t in turns] == [("user", "done"), ("assistant", "pending")]
+    # the answer lands later (Hermes), whoever reloaded meanwhile; only the person's own turn can be changed
+    assert not await chat.update(db, domain, "u2", pending["uid"], {"content": "hijack"})
+    assert await chat.update(db, domain, "u1", pending["uid"], {"content": "HBM is tight.", "status": "done",
+                                                               "steps": [{"id": "s", "said": "Let me check."}]})
+    last = (await chat.turns(db, domain, "u1"))[-1]
+    assert last["content"] == "HBM is tight." and last["status"] == "done" and last["steps"][0]["said"]
+    # a browser's old local chat moves in only once, into an empty conversation
+    assert await chat.import_turns(db, domain, "u3", [{"role": "user", "content": "old"}]) == 1
+    assert await chat.import_turns(db, domain, "u3", [{"role": "user", "content": "again"}]) == 0
+    await chat.clear(db, domain, "u1")
+    assert await chat.turns(db, domain, "u1") == [] and len(await chat.turns(db, domain, "u2")) == 1
+
+
+def test_anyone_in_a_domain_may_keep_a_conversation_with_its_head():
+    from core import auth
+    assert auth.needed("POST", "/domains/d/chat") == ("d", "viewer")
+    assert auth.needed("PATCH", "/domains/d/chat/chat_1") == ("d", "viewer")
+    assert auth.needed("DELETE", "/domains/d/chat") == ("d", "viewer")
+    assert auth.needed("POST", "/domains/d/ingest") == ("d", "editor")

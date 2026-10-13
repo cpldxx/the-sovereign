@@ -90,6 +90,15 @@ export interface TeamAgent {
   queued: number;
 }
 
+export interface ChatTurn {
+  uid: string;
+  role: 'user' | 'assistant';
+  content: string;
+  status: 'pending' | 'done' | 'error';
+  steps: unknown[];
+  created_at: string;
+}
+
 export interface CrewThread {
   uid: string;
   title: string;
@@ -700,6 +709,17 @@ export const kg = {
 
   thread: (id: string, uid: string) =>
     request<CrewThread & { messages: CrewMessage[] }>(KG_API, `${d(id)}/threads/${encodeURIComponent(uid)}`),
+
+  /** Your conversation with the Head, kept in the KG (Hermes writes each question and answer as it happens). */
+  chat: (id: string) => request<{ turns: ChatTurn[] }>(KG_API, `${d(id)}/chat`).then(r => r.turns),
+
+  addChat: (id: string, turn: { role: 'user' | 'assistant'; content: string; status?: ChatTurn['status']; steps?: unknown[] }) =>
+    request<ChatTurn>(KG_API, `${d(id)}/chat`, json(turn)),
+
+  clearChat: (id: string) => request<unknown>(KG_API, `${d(id)}/chat`, { method: 'DELETE' }),
+
+  importChat: (id: string, turns: unknown[]) =>
+    request<{ imported: number }>(KG_API, `${d(id)}/chat/import`, json({ turns })),
 
   retirePlaybook: (id: string, uid: string) =>
     request<unknown>(KG_API, `${d(id)}/playbooks/${encodeURIComponent(uid)}`, {

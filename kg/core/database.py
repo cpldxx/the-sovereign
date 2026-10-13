@@ -15,6 +15,7 @@ One ArcadeDB database per domain:
     Proposal   (document) an action someone wants taken: action, params, rationale, status, result…
     Playbook   (document) a pre-computed "if this happens, do that" rule derived from the graph
     Sensor     (document) a live-data tool: name, description, params, code, last run…
+    ChatTurn   (document) one side of a person's conversation with the Head (core/chat.py)
 
 A synapse's strength is a noisy-OR over its independent sources:
     weight = 1 - disbelief,  disbelief = Π (1 - reliability of each distinct source)
@@ -89,6 +90,11 @@ CREATE PROPERTY Message.thread IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Message (thread) NOTUNIQUE;
 CREATE PROPERTY Message.status IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Message (status) NOTUNIQUE;
+CREATE DOCUMENT TYPE ChatTurn IF NOT EXISTS;
+CREATE PROPERTY ChatTurn.uid IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON ChatTurn (uid) UNIQUE;
+CREATE PROPERTY ChatTurn.user IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON ChatTurn (user) NOTUNIQUE;
 """
 
 # Vector indexes need the embedding dimension, so they are created on first use.

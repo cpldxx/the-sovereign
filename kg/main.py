@@ -11,6 +11,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from api.actions import router as actions_router
 from api.auth import router as auth_router
+from api.chat import router as chat_router
 from api.crew import router as crew_router
 from api.domains import router as domains_router
 from api.entities import router as entities_router
@@ -100,6 +101,7 @@ app.include_router(actions_router)
 app.include_router(playbooks_router)
 app.include_router(sensors_router)
 app.include_router(crew_router)
+app.include_router(chat_router)
 app.include_router(system_router)
 
 

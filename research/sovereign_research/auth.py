@@ -77,7 +77,9 @@ def headers(domain: str | None = None) -> dict:
 
 _DOMAIN_PATH = re.compile(r"^/(?:domains|graph)/(?P<domain>[^/]+)(?P<rest>/.*)?$")
 _READ_POSTS = re.compile(r"^/(?:query|ask|ask/stream|sensors/[^/]+/read)$")   # POSTs that only read
-_ANY_MEMBER = (("DELETE", re.compile(r"^/members/[^/]+$")),)                 # leaving (the handler checks whose)
+# Leaving a domain, and your own conversation with its Head (the handlers check whose).
+_ANY_MEMBER = (("DELETE", re.compile(r"^/members/[^/]+$")), ("POST", re.compile(r"^/chat(?:/import)?$")),
+               ("PATCH", re.compile(r"^/chat/[^/]+$")), ("DELETE", re.compile(r"^/chat$")))
 _OWNER = (("DELETE", re.compile(r"^$")), ("PUT", re.compile(r"^/members$")),
           ("POST", re.compile(r"^/actions$")), ("DELETE", re.compile(r"^/actions/[^/]+$")))
 

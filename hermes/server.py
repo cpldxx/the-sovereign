@@ -11,6 +11,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import Literal
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,6 +60,74 @@ class AskRequest(BaseModel):
     voice: bool = Field(default=False, description="Spoken conversation: short answers meant to be read aloud")
 
 
+# ── The conversation, kept in the KG (kg/core/chat.py) ──────────────────────
+# A person's question is saved when it arrives and the Head's answer when it is done — from here, not from the page,
+# so an answer still lands if the page was reloaded or closed while the Head worked.
+
+def _chat_open(domain: str, user: str | None, message: str) -> tuple[str, str] | None:
+    """Save the question and a pending answer; (user, answer uid), or None (a service caller, or the KG said no)."""
+    if not user:
+        return None
+    try:
+        with httpx.Client(base_url=auth.KG_URL, timeout=10, headers=auth.headers(domain)) as kg:
+            kg.post(f"/domains/{domain}/chat", json={"role": "user", "content": message, "user": user}).raise_for_status()
+            r = kg.post(f"/domains/{domain}/chat", json={"role": "assistant", "status": "pending", "user": user})
+            r.raise_for_status()
+            return user, r.json()["uid"]
+    except httpx.HTTPError as e:
+        print(f"[Hermes] conversation not saved for {domain}: {type(e).__name__}", flush=True)
+        return None
+
+
+def _chat_close(domain: str, handle: tuple[str, str] | None, content: str, steps: list, status: str) -> None:
+    if not handle:
+        return
+    try:
+        with httpx.Client(base_url=auth.KG_URL, timeout=10, headers=auth.headers(domain)) as kg:
+            kg.patch(f"/domains/{domain}/chat/{handle[1]}",
+                     json={"content": content, "steps": steps, "status": status, "user": handle[0]}).raise_for_status()
+    except httpx.HTTPError as e:
+        print(f"[Hermes] answer not saved for {domain}: {type(e).__name__}", flush=True)
+
+
+class _Steps:
+    """What the Head did on the way, as the Ask panel shows it: its words before a tool, the tools, the actions."""
+
+    def __init__(self) -> None:
+        self.steps: list[dict] = []
+        self.said = ""
+
+    def record(self, e: dict | None) -> None:
+        if not e:
+            return
+        if e["type"] == "delta":
+            self.said += e["text"]
+        elif e["type"] == "tool_start":
+            if self.said.strip():
+                self.steps.append({"id": f"said-{len(self.steps)}", "name": "", "args": None, "done": True,
+                                   "said": self.said.strip()})
+            self.said = ""
+            args = e["args"] if isinstance(e["args"], dict) else {}
+            self.steps.append({"id": e["id"], "name": e["name"], "done": False,
+                               "args": {k: str(args[k])[:200] for k in ("query", "raw_text", "action") if k in args}})
+        elif e["type"] == "tool_end":
+            for s in self.steps:
+                if s["id"] == e["id"]:
+                    s["done"] = True
+                    if e["name"] == "propose_action":
+                        try:
+                            p = json.loads(e["result"])
+                            t = (p.get("params") or {}).get("title") or (p.get("params") or {}).get("message") or ""
+                            s["outcome"] = {"action": p["action"], "status": p["status"], "title": str(t)}
+                        except (ValueError, KeyError, TypeError, AttributeError):
+                            pass
+
+
+def _user() -> str | None:
+    p = auth.current.get()
+    return p.user["uid"] if p and p.kind == "user" and p.user else None
+
+
 @app.post("/domains/{domain_name}/ask")
 async def ask(domain_name: str, request: AskRequest):
     """One turn with the Head Agent, grounded in the domain's KG.
@@ -66,15 +135,19 @@ async def ask(domain_name: str, request: AskRequest):
     Hermes's orchestration loop is synchronous, so it runs in a worker thread.
     """
     history = [t.model_dump() for t in request.history]
+    handle = await asyncio.to_thread(_chat_open, domain_name, _user(), request.message)
     try:
         answer = await asyncio.to_thread(
             ask_head, domain_name, request.message, history, max_iterations=request.max_iterations,
             voice=request.voice, tools=_tools(domain_name),
         )
     except DomainNotFound:
+        await asyncio.to_thread(_chat_close, domain_name, handle, "This domain does not exist.", [], "error")
         raise HTTPException(status_code=404, detail=f"Domain '{domain_name}' does not exist")
     except Exception as e:
+        await asyncio.to_thread(_chat_close, domain_name, handle, f"Head Agent failed: {type(e).__name__}", [], "error")
         raise HTTPException(status_code=500, detail=f"Head Agent failed: {type(e).__name__}: {e}")
+    await asyncio.to_thread(_chat_close, domain_name, handle, answer, [], "done")
     return {"domain": domain_name, "message": request.message, "answer": answer}
 
 
@@ -94,11 +167,15 @@ async def ask_stream(domain_name: str, request: AskRequest):
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
     tools = _tools(domain_name)
+    handle = await asyncio.to_thread(_chat_open, domain_name, _user(), request.message)
+    log = _Steps()
 
     def emit(event: dict | None) -> None:  # called from the agent's worker thread
+        log.record(event)
         loop.call_soon_threadsafe(queue.put_nowait, event)
 
     def run() -> None:
+        content, status = "", "error"
         try:
             answer = ask_head(
                 domain_name,
@@ -109,12 +186,17 @@ async def ask_stream(domain_name: str, request: AskRequest):
                 voice=request.voice,
                 tools=tools,
             )
+            content, status = answer or log.said.strip() or "(no answer)", "done"
             emit({"type": "answer", "text": answer})
         except DomainNotFound:
-            emit({"type": "error", "detail": f"Domain '{domain_name}' does not exist"})
+            content = f"Domain '{domain_name}' does not exist"
+            emit({"type": "error", "detail": content})
         except Exception as e:
-            emit({"type": "error", "detail": f"Head Agent failed: {type(e).__name__}: {e}"})
+            content = f"Head Agent failed: {type(e).__name__}: {e}"
+            emit({"type": "error", "detail": content})
         finally:
+            # Saved even if the page that asked is gone: the worker thread outlives the stream.
+            _chat_close(domain_name, handle, content, log.steps, status)
             emit(None)
 
     worker = asyncio.create_task(asyncio.to_thread(run))
