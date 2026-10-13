@@ -341,3 +341,17 @@ async def test_one_review_sweep_per_domain_at_a_time(team, monkeypatch):
 
 async def _async(value):
     return value
+
+
+@pytest.mark.db
+async def test_propose_action_takes_a_rationale_tucked_into_params(db, team, monkeypatch):
+    """The local model's slip (measured 2026-10-13): rationale inside params, or none at all."""
+    from api import mcp
+    _, domain, _ = team
+    monkeypatch.setattr(mcp, "db", db)
+    monkeypatch.setattr(mcp, "_require", lambda d: None)
+    p = await mcp.propose_action(domain, "alert", {"title": "E2E", "message": "Trainium 3 is AWS-only",
+                                                               "rationale": "the graph says so", "evidence": ["f1"]})
+    assert p["status"] == "executed" and p["rationale"] == "the graph says so" and p["evidence"] == ["f1"]
+    q = await mcp.propose_action(domain, "alert", {"title": "E2E", "message": "no reason given"})
+    assert q["status"] == "executed" and q["rationale"] == "no reason given"

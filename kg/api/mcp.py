@@ -276,7 +276,7 @@ async def list_playbooks(domain: str) -> list[dict]:
 
 
 @tool()
-async def propose_action(domain: str, action: str, params: dict, rationale: str,
+async def propose_action(domain: str, action: str, params: dict | None = None, rationale: str = "",
                          evidence: list[str] | None = None) -> dict:
     """Have your Operator run an action from the catalog (list_actions). `rationale`: why, grounded in the graph —
     cite facts with their weight; `evidence`: the uids of those facts. Internal actions and connectors the user
@@ -284,6 +284,18 @@ async def propose_action(domain: str, action: str, params: dict, rationale: str,
     and wait for the user's confirmation in the Actions tab — the Operator reports to you once one has run. Never
     say one was done unless its status is "executed"."""
     _require(domain)
+    # A local model often tucks the rationale or the evidence into params: take them out rather than fail the call.
+    params = dict(params or {})
+    spec = next((a for a in await actions.catalog(db, domain) if a["name"] == action), None)
+    own = {p["name"] for p in spec["params"]} if spec else set()
+    for key in ("rationale", "reason", "evidence"):
+        if key in params and key not in own:
+            value = params.pop(key)
+            if key == "evidence":
+                evidence = evidence or (value if isinstance(value, list) else [str(value)])
+            else:
+                rationale = rationale or str(value)
+    rationale = rationale.strip() or str(params.get("message") or params.get("body") or "(no rationale given)")
     try:
         with activity.working(domain, "operator", action):
             p = await actions.propose(db, domain, action, params, rationale, evidence, source="head")

@@ -29,14 +29,16 @@ TRACING = bool(os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_K
     os.getenv("LANGFUSE_TRACING", "true").strip().lower() not in ("false", "off", "0", "no")
 
 
-def _enable_hermes_plugin(name: str) -> None:
+def _set_hermes_plugin(name: str, on: bool) -> None:
+    """Hermes keeps enabled plugins in HERMES_HOME/config.yaml (a volume): switch it both ways, or a plugin turned
+    on once stays on (measured: traces kept being sent to a LangFuse that wasn't running)."""
     import yaml
 
     path = Path(os.environ["HERMES_HOME"]) / "config.yaml"
     config = (yaml.safe_load(path.read_text()) if path.exists() else None) or {}
     enabled = config.setdefault("plugins", {}).setdefault("enabled", [])
-    if name not in enabled:
-        enabled.append(name)
+    if on != (name in enabled):
+        enabled.append(name) if on else enabled.remove(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(config, sort_keys=False))
 
@@ -45,11 +47,21 @@ if TRACING:
     for _key in ("PUBLIC_KEY", "SECRET_KEY", "BASE_URL"):
         if os.getenv(f"LANGFUSE_{_key}"):
             os.environ.setdefault(f"HERMES_LANGFUSE_{_key}", os.environ[f"LANGFUSE_{_key}"])
-    _enable_hermes_plugin("observability/langfuse")
+else:
+    os.environ["LANGFUSE_TRACING_ENABLED"] = "false"   # the SDK's own switch, for anything else that loads it
+_set_hermes_plugin("observability/langfuse", TRACING)
 
 import auth  # noqa: E402
 from run_agent import AIAgent  # noqa: E402
 from tools.mcp_tool import register_mcp_servers  # noqa: E402
+import tools.mcp_tool as _mcp_tool  # noqa: E402
+
+# Hermes counts every tool error as a server failure and, after 3 in a row, blocks the whole KG server for 60 s.
+# A local model's argument slips (a missing field, a misplaced one) are tool errors too: measured 2026-10-13, three
+# bad propose_action calls locked the Head out of every KG tool for the rest of its turn. A really dead server still
+# trips it.
+_mcp_tool._CIRCUIT_BREAKER_THRESHOLD = 6
+_mcp_tool._CIRCUIT_BREAKER_COOLDOWN_SEC = 20.0
 
 KG_URL = os.getenv("SOVEREIGN_KG_URL", "http://localhost:8080").rstrip("/")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")

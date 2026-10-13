@@ -54,7 +54,7 @@ function Status({ label, ok, hint, note }: { label: string; ok: boolean | null; 
         <span className="text-faint">{label}</span>
         <span className={`h-1.5 w-1.5 rounded-full ${color}`} />
       </div>
-      {note && <div className="truncate text-[10px] text-bad/80">{note}</div>}
+      {note && <div className="truncate text-[10px] text-faint">{note}</div>}
     </div>
   );
 }
