@@ -16,8 +16,9 @@ const W = 1000, H = 640;
 const HEAD = { x: 500, y: 76 }, USER = { x: 850, y: 76 }, CORE = { x: 500, y: 262, r: 74 };
 const ARC = { rx: 432, ry: 318 };   // the team's dial, centred on the graph: every line to it is a clear spoke
 const NODE_R = 21;
-const TEAMS: { label: string; agents: string[] }[] = [
-  { label: 'Learning', agents: ['research', 'extractor', 'validator', 'resolver', 'linker', 'ontologist'] },
+const TEAMS: { label: string; agents: string[]; caption?: number }[] = [
+  // caption: where along its span a team is named (default the middle); Learning's steep end holds agents' status
+  { label: 'Learning', agents: ['research', 'extractor', 'validator', 'resolver', 'linker', 'ontologist'], caption: 0.75 },
   { label: 'Live data', agents: ['scout', 'coder'] },
   { label: 'Decisions', agents: ['strategist', 'watcher'] },
   { label: 'Briefing', agents: ['summarizer', 'reporter'] },
@@ -44,14 +45,14 @@ const on = (a: number, r = 0) => ({ x: CORE.x + (ARC.rx + r) * Math.cos(a), y: C
 /** Agent angles along the dial, left to right, a gap between teams; and each team's span. */
 function layout() {
   const angle: Record<string, number> = {};
-  const spans: { label: string; from: number; to: number }[] = [];
+  const spans: { label: string; from: number; to: number; caption: number }[] = [];
   const slots = TEAMS.reduce((n, t) => n + t.agents.length, 0) - 1 + (TEAMS.length - 1) * 0.6;
   const at = (s: number) => rad(172 - (s / slots) * 164);    // 172° → 8°: below the graph
   let s = 0;
   for (const team of TEAMS) {
     const first = s;
     for (const name of team.agents) angle[name] = at(s++);
-    spans.push({ label: team.label, from: at(first - 0.3), to: at(s - 1 + 0.3) });
+    spans.push({ label: team.label, from: at(first - 0.3), to: at(s - 1 + 0.3), caption: team.caption ?? 0.5 });
     s += 0.6;
   }
   return { angle, spans };
@@ -231,7 +232,7 @@ export function AgentView({ domain, stats }: { domain: string; stats?: { entitie
             return <line key={i} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={C.line2} strokeWidth={1} />;
           })}
           {SPANS.map(s => {
-            const mid = (s.from + s.to) / 2, l = on(mid, -62);
+            const l = on(s.from + (s.to - s.from) * s.caption, -62);
             const cap = (a: number) => { const p = on(a, -40), q = on(a, -47); return <line x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={C.edge} />; };
             return (
               <g key={s.label}>
