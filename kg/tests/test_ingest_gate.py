@@ -191,3 +191,12 @@ def test_a_page_without_blank_lines_is_still_chunked():
     chunks = kg._chunks(one_line)
     assert len(chunks) > 1 and max(len(c) for c in chunks) <= kg.CHUNK_CHARS + 100
     assert " ".join(chunks).split() == one_line.split()                     # nothing lost
+
+
+def test_an_english_name_for_a_thing_a_korean_text_names_passes_the_mention_gate():
+    from core.kg import _in_text, _translated
+    korean = "삼성전자는 3분기 영업이익 107조원을 기록했다. SK하이닉스는 부진했다. 공정거래위원회는 담합을 제재했다."
+    assert _in_text(["Samsung Electronics", "삼성전자"], korean)          # the alias as written is found
+    assert _translated(["Fair Trade Commission"], korean)                 # no alias: English name, Korean text
+    assert not _translated(["Fair Trade Commission"], "The FTC imposed sanctions for collusion.")   # English text
+    assert not _translated(["공정위"], korean)                             # a Korean name must be in the text

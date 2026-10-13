@@ -131,6 +131,18 @@ def _in_text(names: list[str], text: str) -> bool:
     return any(" ".join(n.lower().split()) in lowered for n in names if n.strip())
 
 
+def _latin_share(text: str) -> float:
+    letters = [c for c in text if c.isalpha()]
+    return sum(c.isascii() for c in letters) / len(letters) if letters else 1.0
+
+
+def _translated(names: list[str], text: str) -> bool:
+    """An English name for a thing a non-Latin text names in its own script (삼성전자 → Samsung Electronics) can't
+    be found in it by spelling. Measured 2026-10-13: a Korean news page lost all 10 entities and 8 facts to the
+    mention gate. Such entities pass it; their facts are still checked against the text by the Validator."""
+    return _latin_share(text) < 0.5 and all(_latin_share(n) > 0.9 for n in names if n.strip())
+
+
 class Report:
     def __init__(self, episode_uid: str):
         self.episode_uid = episode_uid
@@ -312,7 +324,7 @@ async def _read_chunk(domain, description, grammar: Ontology, text, source, cap,
             report.gaps[f"type:{etype}"] += 1
             detail.add(key)
             continue
-        if not _in_text(names, text):
+        if not _in_text(names, text) and not _translated(names, text):
             report.entity(name=e.name, type=etype, status="dropped", reason="not mentioned in the source")
             continue
         if key in kept:  # same entity listed twice: keep one, union its aliases

@@ -17,7 +17,8 @@ STATE = "has_state"
 class ExtractedEntity(BaseModel):
     name: str = Field(description="Most specific name used in the text, at most 5 words")
     type: str = Field(description="One of the ENTITY TYPES")
-    aliases: list[str] = Field(default_factory=list, description="Other names for the same thing in the text")
+    aliases: list[str] = Field(default_factory=list, description="Other names for the same thing in the text — "
+                               "always including the name exactly as the text writes it when that differs from name")
     description: str = Field(default="", description="One short sentence: what this entity is, from the text")
 
 
@@ -61,6 +62,10 @@ ENTITY RULES
 5. Each real-world thing appears ONCE. When the text uses several names for it ("CoWoS", "CoWoS packaging",
    "CoWoS advanced packaging") list one entity and put the other names in aliases. Variants and versions are
    different things — keep the exact variant the text names (CoWoS vs CoWoS-L, HBM3 vs HBM3E).
+6. The graph is kept in English. For a text in another language, write name, description and fact in English —
+   name is the thing's usual English name — and put the name EXACTLY as the text writes it in aliases
+   (삼성전자 → name "Samsung Electronics", aliases ["삼성전자"]; 공정거래위원회 → "Fair Trade Commission",
+   ["공정거래위원회"]). That alias is how the entity is found in the source.
 
 FACT RULES
 1. source and target must be names from your entities list.
