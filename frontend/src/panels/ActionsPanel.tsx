@@ -165,7 +165,7 @@ function parseParams(text: string): ActionParam[] {
 }
 
 function Catalog({ domain, actions, onChanged }: { domain: string; actions: ActionDef[]; onChanged: () => Promise<void> }) {
-  const [form, setForm] = useState({ name: '', description: '', url: '', params: '', dry_run: false });
+  const [form, setForm] = useState({ name: '', description: '', url: '', params: '', dry_run: false, auto: false });
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -174,7 +174,7 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
     setError(null);
     try {
       await kg.addAction(domain, { ...form, params: parseParams(form.params) });
-      setForm({ name: '', description: '', url: '', params: '', dry_run: false });
+      setForm({ name: '', description: '', url: '', params: '', dry_run: false, auto: false });
       setAdding(false);
       await onChanged();
     } catch (err) {
@@ -191,7 +191,7 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
             <div className="flex items-center gap-2">
               <span className="font-mono text-[12px] text-ink">{a.name}</span>
               <span className={`rounded px-1.5 text-[9.5px] ${a.confirm ? 'bg-accent/15 text-accent' : 'bg-panel-2 text-faint'}`}>
-                {a.confirm ? 'needs confirmation' : 'runs at once'}
+                {a.confirm ? 'asks you first' : a.auto ? 'runs when the Head says' : 'runs at once'}
               </span>
               {a.dry_run && <span className="rounded bg-panel-2 px-1.5 text-[9.5px] text-faint">dry run</span>}
               {a.kind === 'webhook' && (
@@ -210,8 +210,9 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
       {adding ? (
         <form onSubmit={add} className="space-y-2 rounded-md border border-line-2 p-3">
           <p className="text-[11px] text-faint">
-            An external action: the URL receives a JSON POST with the parameters (Slack, n8n, Zapier, your own API…).
-            Agents can only propose it; it runs when you confirm.
+            Connect an API: the URL receives a JSON POST with the parameters and answers with a result (a simulation,
+            Slack, n8n, your own API…). Only the Head decides to use it — its Operator runs it and reports what came
+            back.
           </p>
           <input className={input} placeholder="name, e.g. notify_slack" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} />
           <input className={input} placeholder="What it does (agents read this)" value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} />
@@ -222,6 +223,11 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
             <input type="checkbox" checked={form.dry_run} onChange={e => setForm({ ...form, dry_run: e.target.checked })} />
             The endpoint understands <code className="font-mono">dry_run: true</code> (its answer becomes the preview)
           </label>
+          <label className="flex items-start gap-2 text-[11px] text-dim">
+            <input type="checkbox" className="mt-0.5" checked={form.auto} onChange={e => setForm({ ...form, auto: e.target.checked })} />
+            <span>Runs when the Head says so, without asking you — only for actions with no real-world effect
+              (a simulation, a calculation). Otherwise each run waits for your confirmation here.</span>
+          </label>
           {error && <p className="text-xs text-bad">{error}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="px-2 text-[11.5px] text-dim hover:text-ink">Cancel</button>
@@ -230,7 +236,7 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
         </form>
       ) : (
         <button onClick={() => setAdding(true)} className="flex items-center gap-1.5 rounded-md border border-dashed border-line-2 px-3 py-1.5 text-[11.5px] text-dim hover:text-ink">
-          <Plus size={12} /> Add an external action (webhook)
+          <Plus size={12} /> Connect an API (webhook)
         </button>
       )}
     </div>
@@ -325,8 +331,9 @@ export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending
             )}
             {pending.length === 0 && (
               <p className="text-[11.5px] leading-snug text-faint">
-                Nothing waits for you. External actions proposed by the Head Agent or a playbook appear here with a dry
-                run; they run only when you confirm. Alerts and drafts land in the activity below.
+                Nothing waits for you. When the Head decides to use an API that asks you first, it appears here with a
+                dry run and runs only when you confirm; the Operator then reports the result to the Head. Alerts,
+                drafts and auto runs land in the activity below.
               </p>
             )}
             {activity.length > 0 && (

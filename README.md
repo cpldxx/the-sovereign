@@ -72,16 +72,18 @@ The gap widens as the knowledge graph grows deeper.
        │              ▲   ▲   ▲   ▲     │
        ▼              │   │   │   │     │
   research · scout · coder · extractor · validator · resolver · linker
-  ontologist · strategist · watcher · summarizer · reporter
+  ontologist · strategist · watcher · operator · summarizer · reporter
 ```
 
-The Head Agent leads twelve agents (`kg/core/crew.py`). It gives them work with `assign_task` (the inputs are
+The Head Agent leads thirteen agents (`kg/core/crew.py`). It gives them work with `assign_task` (the inputs are
 checked by the task's Pydantic model) and asks them questions with `ask_agent` — each answers from what it knows
 right now: the Scout from its sensors and sources, the Validator from what it rejected, the Strategist from its
 playbooks. Work goes out on one queue (one message at a time: the agents share the local model; long jobs such as a
 scout or a research mission run beside it). When an agent finishes, it reports on the thread and the Head is woken
-to read the report and decide — store the findings, follow up on the same thread, propose an action. Agents with
-news of their own (a playbook fired, the morning report is ready) leave a notice in the Head's inbox. The graph only
+to read the report and decide — store the findings, follow up on the same thread, have the Operator act. Only the
+Head decides to act: a playbook that fires is reported to it by the Watcher, the Operator runs what it says and
+reports what came back (an action the user confirmed later included). Other news (the morning report is ready) is
+a notice in the Head's inbox. The graph only
 ever receives facts that the pipeline checked against their source; the conversations stay in the threads, which the
 **Team** tab shows. Guard: a thread wakes the Head at most 4 times and a domain 12 times an hour (`HEAD_MAX_WAKES`,
 `HEAD_WAKES_PER_HOUR`; `HEAD_WAKE=off` leaves every report in the inbox).
@@ -233,36 +235,47 @@ a bone-white accent, Geist type bundled with the app): state shows as brightness
   (1000 / all to choose; `GET /graph/{domain}?limit=&include=`), plus whatever the Head just talked about. It is
   an Obsidian-style live graph: entities tinted by type and sized by their links, faint links that brighten as facts gain evidence, names fading in as you zoom, hover to light an entity and its neighbours, drag to shake it; entities no fact connects yet float as a cloud around it; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
 - **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph.
-- **Team** — the Head and its twelve agents at a glance: who is working or queued, and every conversation between them (tasks, questions, answers, reports, the Head's decisions), live.
+- **Team** — the Head and its thirteen agents at a glance: who is working or queued, and every conversation between them (tasks, questions, answers, reports, the Head's decisions), live.
 - **Voice** — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.
 - **Ingest** — paste text + source; shows new/known entities and created/strengthened/superseded/rejected facts with reasons.
 - **Search** — Graph RAG: closest entities and facts by meaning plus the strongest facts around them, with sources.
-- **Review** — the ambiguous writes (weak facts, possible merges and links). The Head decides them every night
-  before the report (in rounds, at most `NIGHTLY_REVIEW_MINUTES`, default 45 per domain; its notes are on a Team
-  thread); "Head review" makes it decide now, and you can still approve or dismiss one yourself.
+- **Review** — the ambiguous writes (weak facts, possible merges and links). The Head decides them by itself every
+  30 min (`HEAD_REVIEW_EVERY_MINUTES`, a sweep of at most `HEAD_REVIEW_MINUTES`, default 10) and every night before
+  the report (at most `NIGHTLY_REVIEW_MINUTES`, default 45 per domain); its notes are on a Team thread. "Head review"
+  makes it decide now, and you can still approve or dismiss one yourself.
 - **Ontology** — the domain's grammar with per-type counts; edit it or have the Ontologist regenerate it.
 - **Report** — the daily briefing: what the graph learned, what changed (superseded and confirmed facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now.
-- **Actions** — the fast path. *Inbox*: proposals waiting for your confirmation (rationale, the facts behind it, a dry run of exactly what will happen) plus the activity feed (alerts, drafts, executed and rejected actions). *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*: live-data tools, each backed by many sources (APIs and web pages) — read one now, see which source answered and each source's success rate and code, or have the Scout find more sources. *Catalog*: built-in actions and your own external actions (webhooks).
+- **Actions** — the fast path. *Inbox*: proposals waiting for your confirmation (rationale, the facts behind it, a dry run of exactly what will happen) plus the activity feed (alerts, drafts, executed and rejected actions). *Playbooks*: the "if this happens, do that" rules written nightly from the graph. *Sensors*: live-data tools, each backed by many sources (APIs and web pages) — read one now, see which source answered and each source's success rate and code, or have the Scout find more sources. *Catalog*: built-in actions and the APIs you connect (webhooks) — each asks you first, or, marked *auto*, runs
+  when the Head says so (for actions with no real-world effect, e.g. a simulation).
 - **Research** — bootstrap, "what's new" and custom missions; each run shows the pages read, what each added to the graph (and how long it took), failures and the report.
 - **Status** — KG API / ArcadeDB / Hermes / Research / search + crawler health in the sidebar, plus a link to the LangFuse traces when tracing is on (admins).
 - **Accounts** — sign in; Members (header) shares a domain with other accounts as viewer / editor / owner; Account (sidebar) changes the password, makes API tokens for MCP clients and, for admins, invite links.
 
 Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_URL` (see `frontend/.env.example`).
 
-### Acting: propose → confirm → execute
+### Acting: the Head decides → the Operator runs it → the Head hears back
 
 ```
 slow path (night)   research → graph → report → playbooks evaluated against today's changes → playbooks rewritten
-fast path (now)     you ask / a playbook fires → Head checks graph + playbooks + live sensors → propose_action
-                    → alert / draft / research run at once; external actions wait for YOUR confirmation
+fast path (now)     you ask / the Watcher reports a fired playbook → Head checks graph + playbooks + live sensors
+                    → propose_action: the Operator runs it → alert / draft / research / auto APIs run at once and
+                    return their result; other APIs wait for YOUR confirmation, then the Operator reports the result
 ```
 
-- **Agents only propose.** Confirming is a REST call the UI makes for you; no agent tool can confirm or execute an
-  external action. A confirmed proposal runs exactly as previewed, once, and expires after 24 h (`PROPOSAL_TTL_HOURS`).
-- **External actions are webhooks you configure** (Actions → Catalog): Slack, n8n, Zapier, a broker or ticket API — the
-  URL receives the parameters as JSON. If the endpoint understands `dry_run: true`, its answer becomes the preview.
+- **Only the Head decides to act.** The Watcher never acts: a fired playbook is reported to the Head with the action it
+  calls for, and the Head runs it (as is or adjusted), or lets it pass and says why (`HEAD_WAKE=off`: proposed
+  directly instead). The Operator runs what the Head says and reports what came back.
+- **Confirming is yours.** It is a REST call the UI makes for you; no agent tool can confirm an action. A confirmed
+  proposal runs exactly as previewed, once, expires after 24 h (`PROPOSAL_TTL_HOURS`), and its result goes to the Head.
+- **External actions are APIs you connect** (Actions → Catalog): a simulation, Slack, n8n, a lab or ticket API — the
+  URL receives the parameters as JSON and answers with a result. If the endpoint understands `dry_run: true`, its
+  answer becomes the preview. Mark one *auto* when it has no real-world effect (a simulation run: "mix A and B"): the
+  Head runs it without asking you and reads the result right away. A simulation's output is the Head's experiment,
+  not a fact from the world — it stores it only as a source that says so. (A local API, e.g. on this Mac, needs
+  `ALLOW_PRIVATE_WEBHOOKS=true` and `http://host.docker.internal:<port>/…` from Docker.)
 - **Playbooks can watch live data**: a playbook may carry a sensor condition (e.g. AMD `change_percent <= -8`, every
-  60 min). The KG checks due conditions around the clock and fires the playbook's action the moment one holds.
+  60 min). The KG checks due conditions around the clock and the Watcher reports the playbook to the Head the moment
+  one holds.
 - **Sensors have many sources, and a reading always ends in an answer or an honest "not found".** Each read climbs
   a ladder until something answers:
   1. *parsers* — sources the Scout wrote code for (an API, or a web page opened in a real browser): fast and cheap;
@@ -356,7 +369,7 @@ fast path (now)     you ask / a playbook fires → Head checks graph + playbooks
 | `GET` | `/domains/{domain}/episodes` | Ingested sources, newest first |
 | `GET` / `POST` | `/domains/{domain}/reviews`, `/reviews/{uid}` | Head review queue / decide `{approve, note}` |
 | `GET` / `POST` | `/domains/{domain}/reports`, `/reports/{uid}` | Daily reports / write one now `{hours: 24, wait?}`: refreshes stale entity summaries, then a briefing of the period's changes |
-| `GET` / `POST` / `DELETE` | `/domains/{domain}/actions`, `/actions/{name}` | Action catalog / add a webhook action `{name, description, url, params, dry_run}` / remove it |
+| `GET` / `POST` / `DELETE` | `/domains/{domain}/actions`, `/actions/{name}` | Action catalog / connect an API `{name, description, url, params, dry_run, auto}` / remove it |
 | `GET` / `POST` | `/domains/{domain}/proposals`, `/proposals/{uid}` | Proposals (`?status=proposed`) / decide one `{approve, note}` — the user's call |
 | `GET` / `POST` / `PATCH` | `/domains/{domain}/playbooks`, `/playbooks/cycle`, `/playbooks/{uid}` | Playbooks / evaluate + rewrite `{hours, refresh, wait}` / retire one |
 | `GET` / `POST` / `DELETE` | `/domains/{domain}/sensors`, `/sensors/{name}`, `/sensors/{name}/read` | Sensors (groups of sources) / ask for one `{need, backend?, group?}` — the Scout by default; `group`: more sources for that sensor / read one now `{params}` |
@@ -381,7 +394,7 @@ Every endpoint but `/health` and the sign-in ones needs a session cookie or `Aut
 | `POST` | `/fetch` | Read one page now `{url}` — robots.txt, SSRF guard, pacing, crawl4ai |
 | `GET` | `/health` | Model, SearXNG, crawler, nightly schedule |
 
-Every night (03:00, `RESEARCH_NIGHTLY_HOUR`) each domain gets a "what's new" run — or a bootstrap if it never had one — and, once its runs are finished, its daily report and playbook cycle.
+Every night (03:00, `RESEARCH_NIGHTLY_HOUR`) each domain gets a "what's new" run — or a bootstrap if it never had one — and, once its runs are finished, its sensor check, Head review, daily report and playbook cycle (each step on its own: one that fails doesn't skip the rest). A run that can't reach the KG before its research is done (a timeout — e.g. the Mac swapping) is tried once more 10 min later (`RESEARCH_RETRY_MINUTES`).
 
 Search uses the local SearXNG by default. Its free engines throttle heavy use (searches are paced, and Sovereign never works around a block); for reliable daily research set `TAVILY_API_KEY` or `BRAVE_API_KEY` in `research/.env` (both have free tiers).
 
@@ -445,7 +458,8 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 
 ### ✅ Phase E — Agents + action (the fast path)
 - Roles as MCP endpoints (`/mcp`, `/mcp/readonly`); only the user confirms external actions
-- Actions: built-in alert / draft / research, user webhooks; proposals with dry run, executed once, expire in 24 h
+- Actions: built-in alert / draft / research, connected APIs (auto or confirmed); only the Head decides, the Operator
+  runs them and reports back; proposals with dry run, executed once, expire in 24 h
 - Playbooks written nightly from the graph, triggered by new facts or live sensor conditions
 - Sensors: live-data tools backed by many sources (APIs + browser-rendered pages) found by the Scout, cross-checked,
   falling back from source to source, run in a locked sandbox

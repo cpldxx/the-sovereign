@@ -22,6 +22,9 @@ KG_URL = os.getenv("SOVEREIGN_KG_URL", "http://localhost:8080").rstrip("/")
 INGEST_PAGES = int(os.getenv("RESEARCH_INGEST_PAGES", "3"))
 DATA = Path(os.getenv("RESEARCH_DATA") or Path(__file__).resolve().parent.parent / ".data")
 JOBS_FILE = DATA / "jobs.json"
+# A run that fails reaching the KG (a timeout, a dropped connection — the machine briefly overloaded) before its
+# research is done is queued once more, this many minutes later.
+RETRY_MINUTES = float(os.getenv("RESEARCH_RETRY_MINUTES", "10"))
 MODES = ("bootstrap", "update", "mission")
 
 
@@ -94,7 +97,14 @@ class Jobs:
                 await self._run(job)
                 job["status"] = "done"
             except Exception as e:
-                job.update(status="failed", error=f"{type(e).__name__}: {e}")
+                if isinstance(e, httpx.TransportError) and not job.get("retried") and not job["report"]:
+                    job.update(status="queued", retried=True, started_at=None)
+                    self._step(job, f"{type(e).__name__} reaching the KG — trying again in {RETRY_MINUTES:g} min")
+                    asyncio.get_running_loop().call_later(RETRY_MINUTES * 60, self.queue.put_nowait, job["id"])
+                    continue
+                detail = str(e) or ("no answer in time — the KG or the machine was overloaded"
+                                    if isinstance(e, httpx.TimeoutException) else "")
+                job.update(status="failed", error=f"{type(e).__name__}: {detail}")
             job["finished_at"] = now()
             self._save()
 

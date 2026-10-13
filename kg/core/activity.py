@@ -42,6 +42,10 @@ def working(domain: str, agent: str, what: str = ""):
         _working[domain].pop(token, None)
 
 
+def busy(domain: str, agent: str) -> bool:
+    return any(w["agent"] == agent for w in _working[domain].values())
+
+
 def snapshot(domain: str, after: int = 0) -> dict:
     """What is going on now: busy agents (one entry per agent, with everything it is doing) and the hand-offs
     after `after`."""

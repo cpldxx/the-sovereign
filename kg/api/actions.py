@@ -35,6 +35,8 @@ class WebhookAction(BaseModel):
     url: str = Field(description="Receives a JSON POST: {domain, action, params, dry_run, proposal, rationale}")
     params: list[ParamSpec] = Field(default_factory=list)
     dry_run: bool = Field(default=False, description="The endpoint supports dry_run: true (used for previews)")
+    auto: bool = Field(default=False, description="Runs when the Head says so, without your confirmation — only for "
+                                                  "actions with no real-world effect, e.g. a simulation")
 
 
 class Decision(BaseModel):
@@ -62,7 +64,7 @@ async def add_action(domain_name: str, action: WebhookAction, req: Request):
     _require(domain_name)
     try:
         return await actions.add_webhook(req.app.state.db, domain_name, action.name, action.description, action.url,
-                                         [p.model_dump() for p in action.params], action.dry_run)
+                                         [p.model_dump() for p in action.params], action.dry_run, action.auto)
     except actions.ActionError as e:
         raise HTTPException(status_code=422, detail=str(e))
 

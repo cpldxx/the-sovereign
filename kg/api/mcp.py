@@ -76,7 +76,7 @@ _caller: contextvars.ContextVar[tuple[auth.Principal, str]] = contextvars.Contex
 # Which agent a tool call reaches, for the live agent view (the rest read or write the graph itself).
 _TOOL_AGENT = {"ingest_data": "extractor", "list_sensors": "scout", "read_sensor": "scout", "list_research": "research",
                "research_status": "research", "list_playbooks": "strategist", "list_proposals": "watcher",
-               "propose_action": "watcher", "daily_report": "reporter", "list_reviews": "validator",
+               "propose_action": "operator", "daily_report": "reporter", "list_reviews": "validator",
                "resolve_review": "validator", "update_ontology": "ontologist", "get_ontology": "ontologist"}
 
 
@@ -259,8 +259,9 @@ async def daily_report(domain: str) -> dict:
 
 @tool("readonly")
 async def list_actions(domain: str) -> list[dict]:
-    """What this domain can do: built-in actions (alert, draft, research — they run at once) and the user's
-    external actions (webhooks — they run only after the user confirms). Each with its parameters."""
+    """What your Operator can run: built-in actions (alert, draft, research — they run at once) and the APIs the
+    user connected (webhooks — they run after the user confirms, or at once when marked auto, e.g. a
+    simulation). Each with its parameters."""
     _require(domain)
     return await actions.catalog(db, domain)
 
@@ -277,15 +278,20 @@ async def list_playbooks(domain: str) -> list[dict]:
 @tool()
 async def propose_action(domain: str, action: str, params: dict, rationale: str,
                          evidence: list[str] | None = None) -> dict:
-    """Propose an action from the catalog (list_actions). `rationale`: why, grounded in the graph — cite facts
-    with their weight; `evidence`: the uids of those facts. Internal actions run at once; external actions
-    are recorded with a dry-run preview and wait for the user's confirmation in the Actions tab — never say
-    one was done unless its status is "executed"."""
+    """Have your Operator run an action from the catalog (list_actions). `rationale`: why, grounded in the graph —
+    cite facts with their weight; `evidence`: the uids of those facts. Internal actions and connectors the user
+    marked auto run at once and return their result; other external actions are recorded with a dry-run preview
+    and wait for the user's confirmation in the Actions tab — the Operator reports to you once one has run. Never
+    say one was done unless its status is "executed"."""
     _require(domain)
     try:
-        return await actions.propose(db, domain, action, params, rationale, evidence, source="head")
+        with activity.working(domain, "operator", action):
+            p = await actions.propose(db, domain, action, params, rationale, evidence, source="head")
     except actions.ActionError as e:
+        activity.event(domain, "operator", "head", "answer", f"{action}: {e}")
         raise ToolError(str(e)) from e
+    activity.event(domain, "operator", "head", "report", f"{action} {p['status']}")
+    return p
 
 
 @tool("readonly")

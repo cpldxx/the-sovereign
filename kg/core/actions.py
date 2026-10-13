@@ -1,16 +1,19 @@
-"""Actions — the fast path's last step: propose → (user confirms) → execute.
+"""Actions — the fast path's last step: the Head decides → the Operator runs it → (the user confirms) → the Head hears back.
 
 The catalog of what a domain can do:
     built-in   alert     tell the user something (shown in the Actions tab)            internal: runs at once
                draft     write a document for the user to use (memo, email, plan)      internal: runs at once
                research  send the research agent on a mission                          internal: runs at once
-    webhooks   user-configured external actions (Slack, n8n, Zapier, a broker or ticket API, …): a URL that
-               receives the action's parameters as JSON. External: never runs without the user's confirmation.
+    webhooks   user-configured connectors to an API (a simulation, Slack, n8n, a ticket or lab API, …): a URL that
+               receives the action's parameters as JSON and answers with a result. External: waits for the user's
+               confirmation — unless the user marked it `auto` (no real-world effect, e.g. a simulation run), then it
+               runs when the Head says so.
 
-Agents (the Head, playbooks) can only PROPOSE. A proposal stores the exact parameters and a dry-run preview
-of what will happen; confirming or rejecting it is the user's call through the REST API / UI — no agent
-tool exists for it. A confirmed proposal runs exactly as previewed, once. Proposals expire after
-PROPOSAL_TTL hours: a decision made on stale knowledge should be re-proposed, not executed.
+Only the Head decides to act (propose_action — its Operator runs it); a playbook that fires is reported to the Head,
+which decides (core.playbooks). A proposal stores the exact parameters and a dry-run preview of what will happen;
+confirming or rejecting one is the user's call through the REST API / UI — no agent tool exists for it. A confirmed
+proposal runs exactly as previewed, once, and the Operator reports the result to the Head (core.crew.action_outcome).
+Proposals expire after PROPOSAL_TTL hours: a decision made on stale knowledge should be re-proposed, not executed.
 
 Webhooks reach public addresses only — a tenant's webhook must not reach the services beside the KG (Ollama,
 ArcadeDB, the other Sovereign APIs). ALLOW_PRIVATE_WEBHOOKS=true lifts that for a single-user install whose
@@ -75,8 +78,9 @@ async def catalog(db: ArcadeDB, domain: str, *, with_urls: bool = False) -> list
     """Every action the domain can take. Webhook URLs only with `with_urls` (the user's view, never agents')."""
     actions = [{"name": n, "kind": "builtin", "risk": "internal", "confirm": False, **a} for n, a in BUILTIN.items()]
     for a in await kgdb.find_docs(db, domain, "Action", ACTION_JSON, order="name ASC"):
-        entry = {"name": a["name"], "kind": "webhook", "risk": "external", "confirm": True,
-                 "description": a["description"], "params": a["params"], "dry_run": bool(a.get("dry_run"))}
+        entry = {"name": a["name"], "kind": "webhook", "risk": "external", "confirm": not a.get("auto"),
+                 "auto": bool(a.get("auto")), "description": a["description"], "params": a["params"],
+                 "dry_run": bool(a.get("dry_run"))}
         if with_urls:
             entry |= {"uid": a["uid"], "url": a["url"]}
         actions.append(entry)
@@ -84,9 +88,10 @@ async def catalog(db: ArcadeDB, domain: str, *, with_urls: bool = False) -> list
 
 
 async def add_webhook(db: ArcadeDB, domain: str, name: str, description: str, url: str, params: list[dict],
-                      dry_run: bool = False) -> dict:
+                      dry_run: bool = False, auto: bool = False) -> dict:
     """A user-configured external action. With `dry_run`, proposing it first POSTs the parameters with
-    "dry_run": true, and the endpoint's answer becomes the preview (e.g. a broker's order preview)."""
+    "dry_run": true, and the endpoint's answer becomes the preview (e.g. a broker's order preview). With `auto`, it
+    runs when the Head says so, without the user's confirmation — for actions with no real-world effect."""
     if not _NAME.fullmatch(name):
         raise ActionError("name: lowercase letters, digits and _ (2-41 chars), starting with a letter")
     if name in BUILTIN or await kgdb.find_docs(db, domain, "Action", where="name = :name", name=name):
@@ -98,7 +103,7 @@ async def add_webhook(db: ArcadeDB, domain: str, name: str, description: str, ur
         if not _NAME.fullmatch(p.get("name", "")) or p.get("type") not in _TYPES:
             raise ActionError(f"Invalid parameter {p!r}: needs a name and a type ({', '.join(_TYPES)})")
     return await kgdb.insert_doc(db, domain, "Action", {
-        "name": name, "description": description.strip(), "url": url.strip(), "dry_run": dry_run,
+        "name": name, "description": description.strip(), "url": url.strip(), "dry_run": dry_run, "auto": auto,
         "params": [{"name": p["name"], "type": p["type"], "description": p.get("description", ""),
                     "required": bool(p.get("required", True))} for p in params],
     }, ACTION_JSON)
@@ -202,7 +207,7 @@ async def decide(db: ArcadeDB, domain: str, uid: str, approve: bool, note: str =
     if not approve:
         await kgdb.update_doc(db, domain, "Proposal", uid, {"status": "rejected", "decided_at": now(), "note": note},
                               if_status="proposed")
-        return {**proposal, "status": "rejected", "note": note}
+        return await _told({**proposal, "status": "rejected", "note": note}, db, domain)
     if proposal["expires_at"] < now():
         await kgdb.update_doc(db, domain, "Proposal", uid, {"status": "expired"}, if_status="proposed")
         raise ActionError(f"Proposal {uid} expired: it was based on what was known {PROPOSAL_TTL:g}h ago — "
@@ -210,7 +215,18 @@ async def decide(db: ArcadeDB, domain: str, uid: str, approve: bool, note: str =
     actions = {a["name"]: a for a in await catalog(db, domain, with_urls=True)}
     if proposal["action"] not in actions:
         raise ActionError(f"Action {proposal['action']!r} no longer exists")
-    return await _execute(db, domain, proposal, actions[proposal["action"]], decided_by="user", note=note)
+    return await _told(await _execute(db, domain, proposal, actions[proposal["action"]], decided_by="user", note=note),
+                       db, domain)
+
+
+async def _told(proposal: dict, db: ArcadeDB, domain: str) -> dict:
+    """The user decided one of the Head's proposals: the Operator tells the Head how it went."""
+    from core import crew   # crew imports this module
+    try:
+        await crew.action_outcome(db, domain, proposal)
+    except Exception as e:  # the decision stands even if the Head can't be told
+        print(f"[Actions] couldn't tell the Head about {proposal['uid']}: {type(e).__name__}: {e}", flush=True)
+    return proposal
 
 
 async def _execute(db: ArcadeDB, domain: str, proposal: dict, spec: dict, decided_by: str, note: str = "") -> dict:

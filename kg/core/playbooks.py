@@ -5,10 +5,12 @@ every 60 min). check_triggers() runs around the clock in the KG process: the com
 second source of the sensor must agree before the playbook fires (one source can misread or lag); the Watcher only
 fills in the action's parameters.
 
+A playbook that fires doesn't act: the Watcher reports it to the Head with the action it calls for, and the Head
+decides — the Operator runs what the Head says (core.crew). Without a Head (HEAD_WAKE=off) it is proposed directly.
+
 Nightly cycle (after the daily report):
   evaluate  each active playbook against the period's changes on the entities it watches (the Watcher LLM
-            runs only when there are such changes) → a proposal of its action, citing the new facts
-            (alerts run at once; external actions wait for the user)
+            runs only when there are such changes) → reported to the Head with its action, citing the new facts
   refresh   the Strategist revises the playbook set from the graph as it now is: add / revise / retire (by name —
             playbooks it doesn't mention stay)
 Evaluate runs first: playbooks are the expectations formed before today's news — refreshed first, they would
@@ -16,6 +18,7 @@ be derived from the very facts they are then checked against.
 """
 
 import asyncio
+import json
 import operator
 import os
 import time
@@ -315,7 +318,7 @@ async def _evaluate(db: ArcadeDB, domain: str, since: str) -> dict:
                + [{**f, "change": "confirmed by another source"} for f in changes["facts_strengthened"]]
                + [{**f, "change": "superseded"} for f in changes["facts_invalidated"]])
     catalog = {a["name"]: a for a in await actions.catalog(db, domain)}
-    result = {"evaluated": 0, "triggered": 0, "proposals": []}
+    result = {"evaluated": 0, "triggered": 0, "reported": []}
     for pb in await list_playbooks(db, domain):
         watched = {w["uid"] for w in pb["watch"]}
         facts = [f for f in changed if f["source_uid"] in watched or f["target_uid"] in watched]
@@ -329,20 +332,36 @@ async def _evaluate(db: ArcadeDB, domain: str, since: str) -> dict:
         known = {f["uid"] for f in facts}
         evidence = [u for u in verdict.evidence if u in known] or [f["uid"] for f in facts[:5]]
         rationale = f"Playbook “{pb['name']}”: {verdict.rationale}"
-        try:
-            proposal = await actions.propose(db, domain, action["name"], verdict.params, rationale, evidence,
-                                             source="playbook", playbook_uid=pb["uid"])
-        except actions.ActionError:
-            # The Watcher filled the action badly: still tell the owner.
-            proposal = await actions.propose(db, domain, "alert", {"title": pb["name"], "message": verdict.rationale,
-                                                                   "severity": "warning"},
-                                             rationale, evidence, source="playbook", playbook_uid=pb["uid"])
+        fired = await _escalate(db, domain, pb, action, verdict.params, rationale, evidence, verdict.rationale)
         await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {"last_fired_at": now(),
                                                                   "fired": (pb.get("fired") or 0) + 1})
         result["triggered"] += 1
-        result["proposals"].append({"uid": proposal["uid"], "action": proposal["action"],
-                                    "status": proposal["status"], "playbook": pb["name"]})
+        result["reported"].append(fired)
     return result
+
+
+async def _escalate(db: ArcadeDB, domain: str, pb: dict, action: dict, params: dict, rationale: str,
+                    evidence: list[str], message: str) -> dict:
+    """A playbook fired: the Watcher reports it to the Head with the action it calls for, and the Head decides
+    whether its Operator runs it. Without a Head to wake, the action is proposed directly (alerts still reach you)."""
+    from core import crew   # crew imports this module
+    if crew.HEAD_WAKE:
+        msg = await crew.report(
+            db, domain, "watcher", f"playbook fired — {pb['name']}",
+            f"{rationale}\nIt calls for {action['name']}({json.dumps(params, ensure_ascii=False)}). Evidence: "
+            f"{', '.join(evidence) or 'none'}.\nDecide: have your Operator run it (propose_action) — as is or "
+            f"adjusted to what you know now — or let it pass, and say why.",
+            {"playbook": pb["uid"], "action": action["name"], "params": params, "evidence": evidence})
+        return {"playbook": pb["name"], "action": action["name"], "thread": msg["thread"], "status": "reported"}
+    try:
+        proposal = await actions.propose(db, domain, action["name"], params, rationale, evidence,
+                                         source="playbook", playbook_uid=pb["uid"])
+    except actions.ActionError:  # the Watcher filled the action badly: still tell the owner
+        proposal = await actions.propose(db, domain, "alert", {"title": pb["name"], "message": message,
+                                                               "severity": "warning"},
+                                         rationale, evidence, source="playbook", playbook_uid=pb["uid"])
+    return {"playbook": pb["name"], "action": proposal["action"], "proposal": proposal["uid"],
+            "status": proposal["status"]}
 
 
 async def cycle(db: ArcadeDB, domain: str, hours: int = 24, refresh_after: bool = True) -> dict:
@@ -366,18 +385,13 @@ async def cycle(db: ArcadeDB, domain: str, hours: int = 24, refresh_after: bool 
 # ── Live triggers (sensors) ────────────────────────────────────────────────
 
 async def _fire(db: ArcadeDB, domain: str, pb: dict, reading: str, why: str) -> dict:
-    """Propose a playbook's action for a met live condition. The Watcher fills in the action's parameters."""
+    """A live condition met: the Watcher fills in the action's parameters and reports it to the Head."""
     catalog = {a["name"]: a for a in await actions.catalog(db, domain)}
     action = catalog.get(pb["action"]) or catalog["alert"]
     verdict = await judge(pb, action, [{"uid": "live", "weight": 1.0, "change": "live sensor reading", "fact": reading}])
     rationale = f"Playbook “{pb['name']}”: {why}. {verdict.rationale}".strip()
-    try:
-        return await actions.propose(db, domain, action["name"], verdict.params, rationale, pb["evidence"],
-                                     source="playbook", playbook_uid=pb["uid"])
-    except actions.ActionError:
-        return await actions.propose(db, domain, "alert", {"title": pb["name"], "message": f"{why}. {pb['response']}",
-                                                           "severity": "warning"},
-                                     rationale, pb["evidence"], source="playbook", playbook_uid=pb["uid"])
+    return await _escalate(db, domain, pb, action, verdict.params, rationale, pb["evidence"] or [],
+                           f"{why}. {pb['response']}")
 
 
 async def check_triggers(db: ArcadeDB, domain: str) -> list[dict]:
@@ -413,10 +427,9 @@ async def check_triggers(db: ArcadeDB, domain: str) -> list[dict]:
         args = ", ".join(f"{k}={v}" for k, v in t["params"].items())
         confirmed = f", confirmed by {out['agreement']['other_source']} ({other})" if isinstance(other, (int, float)) else ""
         why = f"live {t['sensor']}({args}) {t['field']} = {value} from {out['source']} ({t['op']} {t['value']}){confirmed}"
-        proposal = await _fire(db, domain, pb, f"{why}, read {now()}", why)
+        fired.append(await _fire(db, domain, pb, f"{why}, read {now()}", why))
         await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {"last_fired_at": now(),
                                                                   "fired": (pb.get("fired") or 0) + 1})
-        fired.append({"playbook": pb["name"], "proposal": proposal["uid"], "status": proposal["status"]})
     return fired
 
 
@@ -426,11 +439,8 @@ async def watch_loop(db: ArcadeDB, interval: float = 60) -> None:
         await asyncio.sleep(interval)
         for domain in list_domains():
             try:
-                for f in await check_triggers(db, domain):
+                for f in await check_triggers(db, domain):   # each one is already reported to the Head
                     print(f"[KG] playbook fired in {domain}: {f}", flush=True)
-                    from core import crew  # noqa: PLC0415 — the crew imports this module
-                    await crew.notify(db, domain, "watcher", f"Live trigger fired: {f['playbook']} → proposal "
-                                      f"{f['proposal']} ({f['status']})", f)
             except Exception as e:
                 print(f"[KG] trigger check for {domain} failed: {type(e).__name__}: {e}", flush=True)
 

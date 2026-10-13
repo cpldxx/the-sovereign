@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Code2, Crown, Eye, FileText, GitMerge, Globe, Link2, Newspaper, Radar, ScanText, Shapes, ShieldCheck, Target, User,
+  Code2, Crown, Eye, FileText, GitMerge, Globe, Link2, Newspaper, Radar, ScanText, Send, Shapes, ShieldCheck, Target, User,
   type LucideIcon,
 } from 'lucide-react';
 import { kg, research, type ActivityEvent, type TeamAgent } from '../lib/api';
@@ -20,13 +20,13 @@ const TEAMS: { label: string; agents: string[]; caption?: number }[] = [
   // caption: where along its span a team is named (default the middle); Learning's steep end holds agents' status
   { label: 'Learning', agents: ['research', 'extractor', 'validator', 'resolver', 'linker', 'ontologist'], caption: 0.75 },
   { label: 'Live data', agents: ['scout', 'coder'] },
-  { label: 'Decisions', agents: ['strategist', 'watcher'] },
+  { label: 'Decisions', agents: ['strategist', 'watcher', 'operator'] },
   { label: 'Briefing', agents: ['summarizer', 'reporter'] },
 ];
 const ICON: Record<string, LucideIcon> = {
   head: Crown, user: User, research: Globe, extractor: ScanText, validator: ShieldCheck, resolver: GitMerge,
   linker: Link2, ontologist: Shapes, scout: Radar, coder: Code2, strategist: Target, watcher: Eye,
-  summarizer: FileText, reporter: Newspaper,
+  operator: Send, summarizer: FileText, reporter: Newspaper,
 };
 // The graphite scale (index.css) — SVG attributes take no CSS variables.
 const C = { bg: '#0a0a0a', node: '#101010', line: '#1e1e1e', line2: '#2e2e2e', edge: '#3a3a3a',
@@ -98,11 +98,13 @@ function path(from: string, to: string): string {
 const LOOP_TASKS = `M ${HEAD.x - 44} ${HEAD.y - 30} C 150 ${HEAD.y - 40}, 26 ${CORE.y - 70}, ${POS.research.x - 14} ${POS.research.y - 30}`;
 const LOOP_REPORTS = `M ${POS.reporter.x + 14} ${POS.reporter.y - 30} C ${W - 26} ${CORE.y - 70}, ${W - 150} ${HEAD.y - 40}, ${HEAD.x + 44} ${HEAD.y - 30}`;
 
-/** Where an agent's current work is written: under it, or — where the dial is steep — inside the dial beside it. */
+/** Where an agent's current work is written: under it, or — where the dial is steep — beside it: inside the dial
+ * at its ends, outside where the right side has room. */
 function doingAt(name: string) {
   const a = ANGLE[name], p = POS[name];
   if (a > rad(140)) return { x: p.x + NODE_R + 10, y: p.y + 4, anchor: 'start' as const };
-  if (a < rad(40)) return { x: p.x - NODE_R - 10, y: p.y + 4, anchor: 'end' as const };
+  if (a < rad(25)) return { x: p.x - NODE_R - 10, y: p.y + 4, anchor: 'end' as const };
+  if (a < rad(45)) return { x: p.x + NODE_R + 10, y: p.y + 4, anchor: 'start' as const };
   return { x: p.x, y: p.y + NODE_R + 30, anchor: 'middle' as const };
 }
 

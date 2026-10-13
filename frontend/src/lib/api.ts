@@ -364,12 +364,13 @@ export interface ActionParam {
   required: boolean;
 }
 
-/** Something a domain can do: built-in (runs at once) or a user-configured webhook (needs confirmation). */
+/** Something a domain can do: built-in (runs at once) or a connected API (asks you first, unless marked auto). */
 export interface ActionDef {
   name: string;
   kind: 'builtin' | 'webhook';
   risk: 'internal' | 'external';
   confirm: boolean;
+  auto?: boolean;   // a connector the Head may run without asking (no real-world effect)
   description: string;
   params: ActionParam[];
   dry_run?: boolean;
@@ -655,7 +656,7 @@ export const kg = {
 
   actions: (id: string) => request<{ actions: ActionDef[] }>(KG_API, `${d(id)}/actions`).then(r => r.actions),
 
-  addAction: (id: string, action: { name: string; description: string; url: string; params: ActionParam[]; dry_run: boolean }) =>
+  addAction: (id: string, action: { name: string; description: string; url: string; params: ActionParam[]; dry_run: boolean; auto: boolean }) =>
     request<unknown>(KG_API, `${d(id)}/actions`, json(action)),
 
   removeAction: (id: string, name: string) =>

@@ -51,6 +51,9 @@ async def lifespan(app: FastAPI):
     watch = asyncio.create_task(playbooks.watch_loop(app.state.db)) if playbooks.WATCH else None
     # The Head's team: tasks and questions queued for the agents, reports back on threads.
     team = asyncio.create_task(crew.work_loop(app.state.db))
+    # The review queue is the Head's: it decides what waits there every HEAD_REVIEW_EVERY_MINUTES (0: nightly only).
+    reviews = (asyncio.create_task(crew.review_loop(app.state.db))
+               if crew.HEAD_WAKE and crew.REVIEW_EVERY > 0 else None)
     # The MCP apps' own lifespans never run (only their routes are served), so the host enters their
     # session managers.
     async with AsyncExitStack() as stack:
@@ -60,6 +63,8 @@ async def lifespan(app: FastAPI):
     if watch:
         watch.cancel()
     team.cancel()
+    if reviews:
+        reviews.cancel()
     await app.state.db.close()
     tracing.shutdown()
 

@@ -3,7 +3,9 @@
     Head → agent   assign(agent, task, inputs): a task on a thread, its inputs checked against the task's model;
                    ask(agent, question): a question, answered from what that agent knows right now (its desk)
     agent → Head   a finished task is reported on its thread and the Head is woken to read it and decide (HEAD_WAKE);
-                   an agent with news of its own (a triggered playbook, the morning report) leaves a notice
+                   so is news the Head must decide on — a playbook that fired (Watcher), an action the user confirmed
+                   and what it returned (Operator): report(). Other news (the morning report) is a notice.
+    acting         only the Head decides to act; the Operator runs the action and reports back. Nobody else acts.
     the graph      gets FACTS only. Findings are stored through the pipeline — extracted, then validated against
                    their source — by the Head's ingest_data or a research / learn task; a conversation never is.
 
@@ -14,6 +16,8 @@ A restart re-queues what was waiting and reports what it interrupted.
 
 Runaway guard: one thread wakes the Head at most MAX_WAKES times and a domain at most WAKES_PER_HOUR times an hour;
 past that, reports wait in the inbox for the next conversation.
+
+The review queue is the Head's too: review_loop has it decide what waits there every REVIEW_EVERY minutes.
 """
 
 import asyncio
@@ -45,6 +49,8 @@ RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstr
 HEAD_WAKE = os.getenv("HEAD_WAKE", "on").strip().lower() not in ("0", "off", "false", "no")
 MAX_WAKES = int(os.getenv("HEAD_MAX_WAKES", "4"))           # per thread
 WAKES_PER_HOUR = int(os.getenv("HEAD_WAKES_PER_HOUR", "12"))  # per domain
+REVIEW_EVERY = float(os.getenv("HEAD_REVIEW_EVERY_MINUTES", "30"))   # 0: only the nightly sweep
+REVIEW_TURN = float(os.getenv("HEAD_REVIEW_MINUTES", "10"))          # time box of one automatic sweep
 WAKE_SECONDS = 1200        # a woken Head may ingest (minutes of pipeline)
 JOB_POLL = 10              # seconds between looks at a background job
 JOB_LIMIT = 3600           # a background job is given up after this long
@@ -326,11 +332,31 @@ async def _watch(db: ArcadeDB, domain: str, x: Since) -> Outcome:
     since = (datetime.now(timezone.utc) - timedelta(hours=x.hours)).isoformat(timespec="seconds")
     fired = await playbooks.check_triggers(db, domain)
     evaluated = await playbooks.evaluate(db, domain, since)
-    proposals = evaluated.get("proposals", []) + fired
+    reported = evaluated.get("reported", []) + fired
     return Outcome(f"Checked {evaluated.get('evaluated', 0)} playbooks against the last {x.hours} h and the live "
-                   f"triggers: {len(proposals)} proposed" + ("" if not proposals else " — " + "; ".join(
-                       str(p.get("action") or p.get("playbook") or p.get("uid")) for p in proposals[:8])),
-                   {"proposals": proposals[:20]})
+                   f"triggers: {len(reported)} fired and reported to you" + ("" if not reported else " — " + "; ".join(
+                       str(p.get("playbook") or p.get("action")) for p in reported[:8])),
+                   {"reported": reported[:20]})
+
+
+class RunAction(BaseModel):
+    action: str = Field(description="An action from the catalog (list_actions)")
+    params: dict = Field(default_factory=dict, description="Its parameters")
+    rationale: str = Field(description="Why — the facts it rests on, with their weights")
+    evidence: list[str] = Field(default_factory=list, description="uids of those facts")
+
+
+async def _run_action(db: ArcadeDB, domain: str, x: RunAction) -> Outcome:
+    try:
+        p = await actions.propose(db, domain, x.action, x.params, x.rationale, x.evidence, source="head")
+    except actions.ActionError as e:
+        return Outcome(str(e), ok=False)
+    if p["status"] == "proposed":
+        return Outcome(f"{x.action} waits for the user's confirmation in the Actions tab (proposal {p['uid']}); I'll "
+                       f"report what it returns once it has run.", {"proposal": p["uid"], "status": p["status"]})
+    return Outcome(f"{x.action} {p['status']}: {json.dumps(p.get('result'), ensure_ascii=False)[:1500]}",
+                   {"proposal": p["uid"], "status": p["status"], "result": p.get("result")},
+                   ok=p["status"] == "executed")
 
 
 async def _summarize(db: ArcadeDB, domain: str, x: Since) -> Outcome:
@@ -430,13 +456,23 @@ async def _desk_strategist(db: ArcadeDB, domain: str) -> str:
 
 
 async def _desk_watcher(db: ArcadeDB, domain: str) -> str:
-    props = await actions.list_proposals(db, domain, limit=12)
     pbs = await playbooks.list_playbooks(db, domain)
     fired = [p for p in pbs if p.get("last_fired_at")]
-    return ("Recent proposals:\n" + "\n".join(f"- {p.get('created_at', '')[:16]} {p.get('action')} [{p.get('status')}] "
-                                               f"{(p.get('rationale') or '')[:160]}" for p in props)
-            + "\nPlaybooks that fired: " + (", ".join(f"{p.get('name')} at {p['last_fired_at'][:16]}" for p in fired)
-                                            or "none yet"))
+    return ("Playbooks that fired (each reported to the Head, who decides): "
+            + (", ".join(f"{p.get('name')} at {p['last_fired_at'][:16]}" for p in fired) or "none yet")
+            + "\nLive triggers: " + (", ".join(f"{p.get('name')} — last read {p.get('trigger_value')}"
+                                               for p in pbs if p.get("trigger")) or "none"))
+
+
+async def _desk_operator(db: ArcadeDB, domain: str) -> str:
+    cat = await actions.catalog(db, domain)
+    props = await actions.list_proposals(db, domain, limit=12)
+    return ("Actions I run when the Head says so:\n" + "\n".join(
+                f"- {a['name']}: {a['description']} [{'asks the user first' if a['confirm'] else 'runs at once'}]"
+                for a in cat)
+            + "\nRecent runs:\n" + ("\n".join(f"- {p.get('created_at', '')[:16]} {p.get('action')} [{p.get('status')}] "
+                                             f"{json.dumps(p.get('result'), ensure_ascii=False)[:160] if p.get('result') else ''}"
+                                             for p in props) or "none yet"))
 
 
 async def _desk_summarizer(db: ArcadeDB, domain: str) -> str:
@@ -486,9 +522,13 @@ ROSTER: dict[str, Member] = {m.name: m for m in [
     _member("strategist", "Strategist", "turns what the graph knows into playbooks: if this happens, do that",
             _desk_strategist, Task("refresh_playbooks", "Rewrite the playbooks from the graph now", Nothing,
                                    _refresh_playbooks)),
-    _member("watcher", "Watcher", "checks new knowledge and live triggers against the playbooks and proposes actions",
-            _desk_watcher, Task("check_now", "Check the playbooks against recent changes and live triggers now",
-                                Since, _watch)),
+    _member("watcher", "Watcher", "checks new knowledge and live triggers against the playbooks and reports what fired "
+            "to the Head — it never acts itself", _desk_watcher,
+            Task("check_now", "Check the playbooks against recent changes and live triggers now", Since, _watch)),
+    _member("operator", "Operator", "runs an action — built-in, or an API the user connected (a simulation, a "
+            "webhook) — when the Head says so, and reports what came back", _desk_operator,
+            Task("run", "Run one action from the catalog: the result is reported back (external ones wait for the "
+                 "user's confirmation unless the user marked them auto)", RunAction, _run_action)),
     _member("summarizer", "Summarizer", "rewrites entity summaries from their current facts",
             _desk_summarizer, Task("refresh", "Refresh the summaries of entities that changed", Since, _summarize)),
     _member("reporter", "Reporter", "writes the daily briefing of what changed",
@@ -589,6 +629,37 @@ async def notify(db: ArcadeDB, domain: str, agent: str, text: str, data: dict | 
     msg = await _post(db, domain, uid, member.name, HEAD, "notice", text, data)
     await kgdb.update_doc(db, domain, "Thread", uid, {"status": DONE})
     return msg
+
+
+async def report(db: ArcadeDB, domain: str, agent: str, title: str, text: str, data: dict | None = None) -> dict:
+    """An agent's news the Head must decide on (a playbook fired, an action ran), on its own thread; the Head is
+    woken to read it — within the runaway guard, otherwise it waits in the inbox."""
+    member = _member_of(agent)
+    uid = await _open(db, domain, member.name, f"{member.title}: {title}"[:160], member.name, None)
+    msg = await _post(db, domain, uid, member.name, HEAD, "report", text, data)
+    await kgdb.update_doc(db, domain, "Thread", uid, {"status": DONE})
+    if HEAD_WAKE:
+        task = asyncio.get_running_loop().create_task(_wake(db, domain, uid))
+        _background.add(task)
+        task.add_done_callback(_background.discard)
+    return msg
+
+
+async def action_outcome(db: ArcadeDB, domain: str, proposal: dict) -> None:
+    """The user decided an action the Head proposed: the Operator tells the Head — what it returned wakes the Head
+    (a simulation's result is something to act on); a declined one is a notice."""
+    if proposal.get("source") != HEAD:
+        return
+    name = proposal["action"]
+    if proposal["status"] == "rejected":
+        note = f": {proposal['note']}" if proposal.get("note") else ""
+        await notify(db, domain, "operator", f"The user declined {name}{note}", {"proposal": proposal["uid"]})
+        return
+    result = json.dumps(proposal.get("result"), ensure_ascii=False)[:2000]
+    await report(db, domain, "operator", f"{name} {proposal['status']}",
+                 f"The user confirmed {name}({json.dumps(proposal.get('params'), ensure_ascii=False)[:400]}); it "
+                 f"{proposal['status']}. What came back: {result}",
+                 {"proposal": proposal["uid"], "status": proposal["status"], "result": proposal.get("result")})
 
 
 async def inbox(db: ArcadeDB, domain: str, mark_read: bool = True, limit: int = 20) -> list[dict]:
@@ -760,7 +831,7 @@ async def _wake(db: ArcadeDB, domain: str, thread_uid: str) -> None:
             return
         history = await _history(db, domain, {"thread": thread_uid, "uid": ""})
         message = (f"[Your team reports — thread {thread_uid}, “{t['title']}”]\n{history}\n\n"
-                   f"You were woken because a teammate finished. Decide what follows: store findings worth keeping as "
+                   f"You were woken because a teammate reported. Decide what follows: store findings worth keeping as "
                    f"facts (ingest_data — only what the sources state), follow up with a teammate on this same thread "
                    f"(assign_task / ask_agent with thread=\"{thread_uid}\"), propose an action, or close it. Don't "
                    f"repeat work that is done. End with a two-sentence note of what you decided.")
@@ -803,10 +874,39 @@ async def _pending_reviews(db: ArcadeDB, domain: str) -> int:
     return rows[0]["n"] if rows else 0
 
 
+_reviewing: set[str] = set()
+
+
 async def review_sweep(db: ArcadeDB, domain: str, minutes: float = 45) -> dict:
     """The Head decides the review queue (weak facts, possible merges and links) — in rounds, until it is empty, the
     time is up, or a round decides nothing. Each round is one Head turn; its note goes on a thread (Team tab)."""
     registry.load_domain(domain)
+    if domain in _reviewing:   # the loop and the nightly run never sweep a domain twice at once
+        return {"pending": await _pending_reviews(db, domain), "decided": 0, "rounds": 0, "busy": True}
+    _reviewing.add(domain)
+    try:
+        return await _sweep(db, domain, minutes)
+    finally:
+        _reviewing.discard(domain)
+
+
+async def review_loop(db: ArcadeDB, every: float = REVIEW_EVERY, turn: float = REVIEW_TURN) -> None:
+    """Around the clock: whatever waits in a domain's review queue, the Head decides — nobody works it by hand.
+    Skipped while the Head is busy with a teammate's report."""
+    await asyncio.sleep(120)
+    while True:
+        for domain in registry.list_domains():
+            try:
+                if (await db.exists(domain) and not activity.busy(domain, HEAD) and domain not in _waking
+                        and await _pending_reviews(db, domain)):
+                    r = await review_sweep(db, domain, turn)
+                    print(f"[Crew] Head reviews for {domain}: {r}", flush=True)
+            except Exception as e:
+                print(f"[Crew] review sweep for {domain} failed: {type(e).__name__}: {e}", flush=True)
+        await asyncio.sleep(every * 60)
+
+
+async def _sweep(db: ArcadeDB, domain: str, minutes: float) -> dict:
     start, deadline = await _pending_reviews(db, domain), time.monotonic() + minutes * 60
     if not start:
         return {"pending": 0, "decided": 0, "rounds": 0}

@@ -268,3 +268,76 @@ def test_the_activity_feed_shows_who_works_and_what_moves():
         assert [(e["source"], e["target"], e["kind"]) for e in snap["events"]] == [("head", "scout", "task")]
     after = activity.snapshot(d, snap["seq"])
     assert after["working"] == [] and after["events"] == []
+
+
+async def _quiet_desk(db, domain) -> str:
+    return ""
+
+
+@pytest.fixture
+def operators(monkeypatch):
+    """The Watcher and the Operator, beside the stand-in team."""
+    monkeypatch.setitem(crew.ROSTER, "watcher", crew.Member("watcher", "Watcher", "watches playbooks", _quiet_desk))
+    monkeypatch.setitem(crew.ROSTER, "operator", crew.Member("operator", "Operator", "runs actions", _quiet_desk))
+
+
+@pytest.mark.db
+async def test_a_fired_playbook_goes_to_the_head_and_nothing_acts_on_its_own(team, operators):
+    from core import actions, playbooks
+    db, domain, woken = team
+    pb = {"uid": "pb1", "name": "HBM squeeze", "response": "warn the team"}
+    alert = {"name": "alert"}
+    out = await playbooks._escalate(db, domain, pb, alert, {"title": "HBM", "message": "prices up"},
+                                    "Playbook “HBM squeeze”: prices up 12%", ["f1"], "prices up")
+    assert out["status"] == "reported" and out["action"] == "alert"
+    assert await _until(lambda: _async(len(woken) == 1))
+    assert "playbook fired" in woken[0] and "alert(" in woken[0] and "Decide" in woken[0]
+    assert await actions.list_proposals(db, domain) == []        # the Watcher proposed nothing itself
+
+
+@pytest.mark.db
+async def test_the_operator_reports_a_confirmed_action_and_its_result_to_the_head(team, operators):
+    db, domain, woken = team
+    done = {"uid": "p1", "action": "simulate_mix", "params": {"a": "x", "b": "y"}, "status": "executed",
+            "source": "head", "result": {"status_code": 200, "response": "{\"yield\": 0.82}"}}
+    await crew.action_outcome(db, domain, done)
+    assert await _until(lambda: _async(len(woken) == 1))
+    assert "simulate_mix" in woken[0] and "0.82" in woken[0]
+    # declined: a notice, no wake; someone else's proposal: nothing
+    await crew.action_outcome(db, domain, {**done, "uid": "p2", "status": "rejected", "note": "not now"})
+    await crew.action_outcome(db, domain, {**done, "uid": "p3", "source": "user"})
+    await asyncio.sleep(0.3)
+    assert len(woken) == 1 and await crew.unread(db, domain) == 1
+
+
+@pytest.mark.db
+async def test_an_auto_connector_runs_when_the_head_says_so(db, team, monkeypatch):
+    from core import actions
+    _, domain, _ = team
+    monkeypatch.setattr(actions, "ALLOW_PRIVATE_WEBHOOKS", True)
+    await actions.add_webhook(db, domain, "simulate_mix", "Run the mixing simulation", "http://127.0.0.1:9/sim",
+                              [{"name": "first", "type": "string"}], auto=True)
+    await actions.add_webhook(db, domain, "order_parts", "Order parts", "http://127.0.0.1:9/order",
+                              [{"name": "first", "type": "string"}])
+    cat = {a["name"]: a for a in await actions.catalog(db, domain)}
+    assert cat["simulate_mix"]["confirm"] is False and cat["order_parts"]["confirm"] is True
+    ran = await actions.propose(db, domain, "simulate_mix", {"first": "x"}, "test")
+    waits = await actions.propose(db, domain, "order_parts", {"first": "x"}, "test")
+    assert ran["status"] in ("executed", "failed") and ran["decided_by"] == "auto"   # nothing listens on :9
+    assert waits["status"] == "proposed"
+
+
+@pytest.mark.db
+async def test_one_review_sweep_per_domain_at_a_time(team, monkeypatch):
+    db, domain, _ = team
+    await kgdb.add_review(db, domain, "fact", "weak fact", {"fact": "f"})
+    crew._reviewing.add(domain)
+    try:
+        out = await crew.review_sweep(db, domain, minutes=1)
+    finally:
+        crew._reviewing.discard(domain)
+    assert out["busy"] and out["pending"] == 1 and out["decided"] == 0
+
+
+async def _async(value):
+    return value

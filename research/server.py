@@ -78,28 +78,26 @@ async def daily_reports(domains: list[str]) -> None:
         idle = [d for d in pending if not jobs.active(d) or time.monotonic() > deadline]
         for d in idle:
             pending.remove(d)
-            try:
-                # Summary refresh + report is LLM work on the KG side: minutes with a local model.
-                async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=httpx.Timeout(3600, connect=10)) as kg:
-                    # Every sensor source read once: broken ones sink, thin sensors get scouted again.
-                    r = await kg.post(f"/domains/{d}/sensors/check")
-                    print(f"[Research] nightly: sensors for {d}: "
-                          f"{r.json().get('sensors') if r.is_success else f'failed ({r.status_code})'}", flush=True)
-                    # The Head decides the day's ambiguous writes (weak facts, merges, links) before the report,
-                    # so the report shows what it kept — nobody has to work the review queue by hand.
-                    r = await kg.post(f"/domains/{d}/head-review", params={"minutes": REVIEW_MINUTES})
-                    print(f"[Research] nightly: Head reviews for {d}: "
-                          f"{r.json() if r.is_success else f'failed ({r.status_code})'}", flush=True)
-                    r = await kg.post(f"/domains/{d}/reports", json={"hours": 24, "wait": True})
-                    print(f"[Research] nightly: report for {d}: "
-                          f"{r.json().get('headline', '') if r.is_success else f'failed ({r.status_code})'}", flush=True)
-                    # Then the playbooks: today's changes checked against them (triggered ones become
-                    # proposals), and the set rewritten from the graph.
-                    r = await kg.post(f"/domains/{d}/playbooks/cycle", json={"hours": 24, "wait": True})
-                    print(f"[Research] nightly: playbooks for {d}: "
-                          f"{r.json() if r.is_success else f'failed ({r.status_code})'}", flush=True)
-            except httpx.HTTPError as e:
-                print(f"[Research] nightly: report / playbooks for {d} failed ({type(e).__name__})", flush=True)
+            # Summary refresh + report is LLM work on the KG side: minutes with a local model. Each step on its
+            # own: one that fails (the KG busy or briefly unreachable) doesn't skip the ones after it.
+            async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=httpx.Timeout(3600, connect=10)) as kg:
+                async def step(label: str, path: str, show, **kw) -> None:
+                    try:
+                        r = await kg.post(path, **kw)
+                        print(f"[Research] nightly: {label} for {d}: "
+                              f"{show(r.json()) if r.is_success else f'failed ({r.status_code})'}", flush=True)
+                    except httpx.HTTPError as e:
+                        print(f"[Research] nightly: {label} for {d} failed ({type(e).__name__})", flush=True)
+
+                # Every sensor source read once: broken ones sink, thin sensors get scouted again.
+                await step("sensors", f"/domains/{d}/sensors/check", lambda b: b.get("sensors"))
+                # The Head decides the day's ambiguous writes (weak facts, merges, links) before the report, so the
+                # report shows what it kept (the KG also has it do so every half hour).
+                await step("Head reviews", f"/domains/{d}/head-review", lambda b: b, params={"minutes": REVIEW_MINUTES})
+                await step("report", f"/domains/{d}/reports", lambda b: b.get("headline", ""), json={"hours": 24, "wait": True})
+                # Then the playbooks: today's changes checked against them (what fires is reported to the Head),
+                # and the set rewritten from the graph.
+                await step("playbooks", f"/domains/{d}/playbooks/cycle", lambda b: b, json={"hours": 24, "wait": True})
         if pending:
             await asyncio.sleep(60)
 
