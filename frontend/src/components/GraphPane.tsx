@@ -59,7 +59,7 @@ export function GraphPane({ domain, entityTypes, highlight, selected, version, o
         <div className="flex overflow-hidden rounded border border-line-2">
           {LIMITS.map(n => (
             <button key={n} onClick={() => choose(n)}
-              className={`px-2 py-0.5 ${limit === n ? 'bg-gold/15 text-gold' : 'bg-panel hover:text-ink'}`}>
+              className={`px-2 py-0.5 ${limit === n ? 'bg-accent/15 text-accent' : 'bg-panel hover:text-ink'}`}>
               {n === 0 ? 'all' : n}
             </button>
           ))}

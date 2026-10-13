@@ -84,7 +84,7 @@ export function EntityPanel({ domain, uid, entityTypes, version, onClose, onSele
                     ) : (
                       <span className="truncate text-dim">{ep.title || ep.source}</span>
                     )}
-                    {ep.content_status === 'partial' && <span className="shrink-0 text-[9.5px] text-gold">partial</span>}
+                    {ep.content_status === 'partial' && <span className="shrink-0 text-[9.5px] text-accent">partial</span>}
                     <span className="ml-auto shrink-0 font-mono text-[9.5px] text-faint">{ep.created_at?.slice(0, 10)}</span>
                   </li>
                 ))}

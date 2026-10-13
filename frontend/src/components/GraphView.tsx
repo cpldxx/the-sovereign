@@ -35,9 +35,9 @@ interface Link {
   valid: boolean;
 }
 
-const BG = '#0a0c0f';
-const GOLD = '#e2b356';
-const LABEL = '200, 206, 214';
+const BG = '#0a0a0a';
+const ACCENT = '#f2efe8';
+const LABEL = '214, 212, 206';
 const LABEL_FROM = 1.4;      // zoom where names start to fade in
 const LABEL_FULL = 2.4;      // … and are fully shown
 
@@ -93,9 +93,9 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
       .linkColor(link => {
         const f = focus();
         const on = f && f.has(endId(link.source)) && f.has(endId(link.target));
-        if (on) return alpha(GOLD, 0.75);
+        if (on) return alpha(ACCENT, 0.75);
         const base = link.valid ? 0.12 + link.weight * 0.22 : 0.08;
-        return `rgba(190, 200, 215, ${f ? base * 0.25 : base})`;
+        return `rgba(200, 200, 200, ${f ? base * 0.25 : base})`;
       })
       .linkWidth(link => 0.35 + link.weight * 0.6)
       .linkLineDash(link => (link.valid ? null : [2, 2]))
@@ -111,7 +111,7 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
         ctx.fill();
         if (node.id === sel || hl.has(node.id)) {
           ctx.lineWidth = 1.2 / Math.sqrt(scale);
-          ctx.strokeStyle = node.id === sel ? '#ffffff' : GOLD;
+          ctx.strokeStyle = node.id === sel ? '#ffffff' : ACCENT;
           ctx.stroke();
         }
         // Names fade in with zoom; the node in focus and its neighbours are always named.
@@ -120,7 +120,7 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
         const a = named ? 1 : lit ? fade * (node.lone ? 0.6 : 1) : 0;
         if (a <= 0.02) return;
         const size = Math.max(10 / scale, 3.2);
-        ctx.font = `${size}px ui-sans-serif, system-ui, sans-serif`;
+        ctx.font = `${size}px "Geist Variable", ui-sans-serif, system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         ctx.fillStyle = `rgba(${LABEL}, ${a})`;
@@ -227,7 +227,7 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
             {superseded > 0 && (
               <button
                 onClick={() => setShowSuperseded(v => !v)}
-                className={`flex items-center gap-1 rounded border border-line-2 bg-panel px-2 py-1 text-[10.5px] ${showSuperseded ? 'text-gold' : 'text-dim hover:text-ink'}`}
+                className={`flex items-center gap-1 rounded border border-line-2 bg-panel px-2 py-1 text-[10.5px] ${showSuperseded ? 'text-accent' : 'text-dim hover:text-ink'}`}
                 title="Show facts that newer information replaced"
               >
                 <History size={12} /> superseded ({superseded})

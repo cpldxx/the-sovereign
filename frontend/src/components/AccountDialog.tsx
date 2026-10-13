@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Check, Copy, KeyRound, Link2, Loader2, Trash2, X } from 'lucide-react';
 import { auth, KG_API, type ApiToken, type Invite, type User } from '../lib/api';
 
-const INPUT = 'w-full rounded-md border border-line-2 bg-bg px-3 py-1.5 text-sm outline-none focus:border-gold/60';
+const INPUT = 'w-full rounded-md border border-line-2 bg-bg px-3 py-1.5 text-sm outline-none focus:border-accent/60';
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -17,7 +17,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Secret({ value, note }: { value: string; note: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="mt-2 rounded-md border border-gold/30 bg-gold/5 p-2.5">
+    <div className="mt-2 rounded-md border border-accent/30 bg-accent/5 p-2.5">
       <div className="flex items-center gap-2">
         <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink">{value}</code>
         <button
@@ -169,7 +169,7 @@ export function AccountDialog({ user, onClose, onSignOut }: { user: User; onClos
         <div className="flex items-start justify-between">
           <div className="min-w-0">
             <h2 className="truncate text-sm font-medium">{user.name || user.email}</h2>
-            <p className="truncate text-xs text-dim">{user.email}{user.admin && <span className="ml-2 text-gold">admin</span>}</p>
+            <p className="truncate text-xs text-dim">{user.email}{user.admin && <span className="ml-2 text-accent">admin</span>}</p>
           </div>
           <button onClick={onClose} className="text-faint hover:text-ink"><X size={16} /></button>
         </div>

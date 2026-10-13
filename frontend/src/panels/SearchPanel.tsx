@@ -40,7 +40,7 @@ export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
           value={query}
           onChange={e => setQuery(e.target.value)}
           placeholder="Ask the graph by meaning…"
-          className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] outline-none focus:border-gold/60"
+          className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] outline-none focus:border-accent/60"
         />
         <select
           value={k}
@@ -50,7 +50,7 @@ export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
         >
           {[3, 5, 10, 20].map(n => <option key={n} value={n}>top {n}</option>)}
         </select>
-        <button type="submit" disabled={busy || !query.trim()} className="rounded-md bg-gold px-3 text-black disabled:opacity-40">
+        <button type="submit" disabled={busy || !query.trim()} className="rounded-md bg-accent px-3 text-black disabled:opacity-40">
           {busy ? <Loader2 size={15} className="animate-spin" /> : <Search size={15} />}
         </button>
       </form>
@@ -71,7 +71,7 @@ export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
                   <button
                     key={e.uid}
                     onClick={() => onSelect(e.uid)}
-                    className="flex items-center gap-1.5 rounded-full border border-line-2 px-2.5 py-1 text-[11.5px] hover:border-gold/60"
+                    className="flex items-center gap-1.5 rounded-full border border-line-2 px-2.5 py-1 text-[11.5px] hover:border-accent/60"
                     title={`similarity ${e.similarity}`}
                   >
                     <span className="h-2 w-2 rounded-full" style={{ background: categoryColor(e.type, entityTypes) }} />

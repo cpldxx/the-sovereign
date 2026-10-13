@@ -8,7 +8,7 @@ const KIND_LABEL: Record<CrewMessage['kind'], string> = {
 };
 
 const STATUS_STYLE: Record<CrewThread['status'], string> = {
-  open: 'text-dim', working: 'text-gold', done: 'text-good', failed: 'text-bad',
+  open: 'text-dim', working: 'text-accent', done: 'text-good', failed: 'text-bad',
 };
 
 function ago(iso: string) {
@@ -24,7 +24,7 @@ function Roster({ agents, filter, onFilter }: { agents: TeamAgent[]; filter: str
       <div className="flex justify-center">
         <button
           onClick={() => onFilter(null)}
-          className={`flex items-center gap-1.5 rounded-md border px-3 py-1 text-[12px] ${filter === null ? 'border-gold/60 text-gold' : 'border-line-2 text-dim hover:text-ink'}`}
+          className={`flex items-center gap-1.5 rounded-md border px-3 py-1 text-[12px] ${filter === null ? 'border-accent/60 text-accent' : 'border-line-2 text-dim hover:text-ink'}`}
           title="All conversations"
         >
           <Bot size={12} /> Head
@@ -36,9 +36,9 @@ function Roster({ agents, filter, onFilter }: { agents: TeamAgent[]; filter: str
             key={a.name}
             onClick={() => onFilter(filter === a.name ? null : a.name)}
             title={`${a.role}${a.tasks.length ? ` — tasks: ${a.tasks.map(t => t.name).join(', ')}` : ' — questions only'}`}
-            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[11.5px] ${filter === a.name ? 'border-gold/60 text-ink' : 'border-line-2 text-dim hover:text-ink'}`}
+            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-left text-[11.5px] ${filter === a.name ? 'border-accent/60 text-ink' : 'border-line-2 text-dim hover:text-ink'}`}
           >
-            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${a.state === 'working' ? 'animate-pulse bg-gold' : a.state === 'queued' ? 'bg-gold/50' : 'bg-line-2'}`} />
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${a.state === 'working' ? 'animate-pulse bg-accent' : a.state === 'queued' ? 'bg-accent/50' : 'bg-line-2'}`} />
             <span className="truncate">{a.title}</span>
             {a.queued > 0 && <span className="ml-auto font-mono text-[10px] text-faint">{a.queued}</span>}
           </button>
@@ -75,16 +75,16 @@ function Conversation({ domain, uid, onBack }: { domain: string; uid: string; on
           const head = m.sender === 'head';
           return (
             <li key={m.uid} className={`flex ${head ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[88%] rounded-lg border px-2.5 py-1.5 ${head ? 'border-gold/40 bg-gold/5' : 'border-line-2 bg-panel'}`}>
+              <div className={`max-w-[88%] rounded-lg border px-2.5 py-1.5 ${head ? 'border-accent/40 bg-accent/5' : 'border-line-2 bg-panel'}`}>
                 <div className="mb-0.5 flex items-center gap-1.5 text-[10.5px] text-faint">
-                  <span className={head ? 'text-gold' : 'text-dim'}>{head ? 'Head' : m.sender}</span>
+                  <span className={head ? 'text-accent' : 'text-dim'}>{head ? 'Head' : m.sender}</span>
                   <span>→ {m.recipient === 'head' ? 'Head' : m.recipient}</span>
                   <span className="rounded bg-line px-1">{KIND_LABEL[m.kind] ?? m.kind}{m.task ? ` · ${m.task}` : ''}</span>
                   <span className="ml-auto">{ago(m.created_at)}</span>
                 </div>
                 <div className="text-[12px] leading-snug text-ink"><Markdown>{m.text}</Markdown></div>
                 {(m.status === 'queued' || m.status === 'working' || m.status === 'waiting') && (
-                  <p className="mt-1 flex items-center gap-1 text-[10.5px] text-gold">
+                  <p className="mt-1 flex items-center gap-1 text-[10.5px] text-accent">
                     <Loader2 size={10} className="animate-spin" /> {m.status === 'queued' ? 'in the queue' : 'working on it'}
                   </p>
                 )}

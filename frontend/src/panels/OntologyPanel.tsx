@@ -75,17 +75,17 @@ export function OntologyPanel({ domain, ontology, generated, counts, onChanged }
           <label className="block">
             <span className="text-[11px] text-dim">Entity types (one per line)</span>
             <textarea value={entities} onChange={e => setEntities(e.target.value)} rows={7}
-              className="mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 font-mono text-[12px] outline-none focus:border-gold/60" />
+              className="mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 font-mono text-[12px] outline-none focus:border-accent/60" />
           </label>
           <label className="block">
             <span className="text-[11px] text-dim">Relation types (one per line)</span>
             <textarea value={relations} onChange={e => setRelations(e.target.value)} rows={6}
-              className="mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 font-mono text-[12px] outline-none focus:border-gold/60" />
+              className="mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 font-mono text-[12px] outline-none focus:border-accent/60" />
           </label>
           <p className="text-[10.5px] text-faint">Names are normalized: "Price Pattern" → price_pattern. Existing nodes keep their categories.</p>
           {error && <p className="text-xs text-bad">{error}</p>}
           <div className="flex gap-2">
-            <button onClick={save} disabled={busy} className="flex items-center gap-2 rounded-md bg-gold px-4 py-1.5 text-sm text-black disabled:opacity-40">
+            <button onClick={save} disabled={busy} className="flex items-center gap-2 rounded-md bg-accent px-4 py-1.5 text-sm text-black disabled:opacity-40">
               {busy && <Loader2 size={13} className="animate-spin" />} Save
             </button>
             <button onClick={() => setEditing(false)} className="px-3 text-sm text-dim hover:text-ink">Cancel</button>

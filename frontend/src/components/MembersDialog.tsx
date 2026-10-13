@@ -95,13 +95,13 @@ export function MembersDialog({ domain, me, role, onClose, onLeft }: {
             <div className="flex gap-2">
               <input
                 type="email" required placeholder="Their account's email" value={email} onChange={e => setEmail(e.target.value)}
-                className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-3 py-1.5 text-sm outline-none focus:border-gold/60"
+                className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-3 py-1.5 text-sm outline-none focus:border-accent/60"
               />
               <select value={newRole} onChange={e => setNewRole(e.target.value as Role)}
                 className="rounded-md border border-line-2 bg-bg px-2 text-xs text-dim">
                 {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
-              <button disabled={busy} className="flex items-center gap-1.5 rounded-md bg-gold px-3 text-xs font-medium text-black disabled:opacity-40">
+              <button disabled={busy} className="flex items-center gap-1.5 rounded-md bg-accent px-3 text-xs font-medium text-black disabled:opacity-40">
                 {busy && <Loader2 size={12} className="animate-spin" />} Share
               </button>
             </div>

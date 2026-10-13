@@ -36,7 +36,7 @@ export function DomainHeader({ detail, me, onDelete, onLeft }: {
       </div>
 
       {!detail.ontology_generated && (
-        <span className="flex items-center gap-1.5 rounded-full border border-gold/30 bg-gold/10 px-2.5 py-1 text-[11px] text-gold">
+        <span className="flex items-center gap-1.5 rounded-full border border-accent/30 bg-accent/10 px-2.5 py-1 text-[11px] text-accent">
           <Loader2 size={11} className="animate-spin" /> generating ontology
         </span>
       )}

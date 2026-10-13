@@ -220,14 +220,18 @@ then use official data APIs instead of unofficial endpoints) · `ANTHROPIC_API_K
 
 ### Frontend (`frontend/`, port 5173)
 
-One screen per domain: the knowledge graph on the left, tools on the right.
+One screen per domain: the agents at work on the left, tools on the right — drawn in graphite (one neutral scale,
+a bone-white accent, Geist type bundled with the app): state shows as brightness and motion, not color.
 
-- **Agents** (the main view) — the Head, the knowledge graph and the team as one picture: an agent at work glows
-  and says what it is doing, and every hand-off (a task, a report, a tool call, facts stored) travels along its line
+- **Agents** (the main view) — the Head, the knowledge graph and the team as one picture: the Head on top, the
+  graph at the centre with its counts, the twelve agents on a dial around it, bracketed by team. An agent at work
+  turns white, its ring turns and its line to the graph flows, with what it is doing beside it; every hand-off travels
+  its line as a comet whose shape tells the kind (● task · ○ report · ■ tool call · ◆ facts stored). The console below
+  lists the hand-offs with live counts of agents working, tasks queued and hand-offs per minute
   (`GET /domains/{domain}/activity`, polled).
 - **Knowledge graph** (a tab of the main view, drawn only while open) — the 300 most connected entities by default
   (1000 / all to choose; `GET /graph/{domain}?limit=&include=`), plus whatever the Head just talked about. It is
-  an Obsidian-style live graph: entities colored by type and sized by their links, faint links that brighten as facts gain evidence, names fading in as you zoom, hover to light an entity and its neighbours, drag to shake it; entities no fact connects yet float as a cloud around it; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
+  an Obsidian-style live graph: entities tinted by type and sized by their links, faint links that brighten as facts gain evidence, names fading in as you zoom, hover to light an entity and its neighbours, drag to shake it; entities no fact connects yet float as a cloud around it; toggle superseded facts. Click an entity for its facts, history and sources. Refreshes by itself when agents add knowledge.
 - **Head Agent** — streaming chat: each KG tool call shows live, and the nodes the agent read or stored light up in the graph.
 - **Team** — the Head and its twelve agents at a glance: who is working or queued, and every conversation between them (tasks, questions, answers, reports, the Head's decisions), live.
 - **Voice** — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing and what waits for your confirmation. Optional wake word ("Sovereign, …" / "자비스, …"). External actions are still confirmed by click, never by voice.

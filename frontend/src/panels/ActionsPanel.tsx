@@ -32,7 +32,7 @@ function Evidence({ uids, facts, onSelect }: { uids: string[]; facts: Map<string
     <ul className="space-y-0.5">
       {known.map(f => (
         <li key={f.uid} className="text-[11px] leading-snug">
-          <span className="font-mono text-[10px] text-gold">{f.weight.toFixed(2)}</span>{' '}
+          <span className="font-mono text-[10px] text-accent">{f.weight.toFixed(2)}</span>{' '}
           <span className={f.valid ? 'text-dim' : 'text-faint line-through'}>{f.fact}</span>{' '}
           <button onClick={() => onSelect(f.source_uid)} className="text-[10px] text-faint hover:text-ink">{f.source_name} ↗</button>
         </li>
@@ -54,11 +54,11 @@ function PendingCard({ p, facts, onSelect, onDecide }: {
     try { await onDecide(p.uid, approve, note); } finally { setBusy(false); }
   }
   return (
-    <li className="space-y-2 rounded-md border border-gold/40 bg-gold/5 p-3">
+    <li className="space-y-2 rounded-md border border-accent/40 bg-accent/5 p-3">
       <div className="flex items-center gap-2">
-        <Send size={12} className="text-gold" />
+        <Send size={12} className="text-accent" />
         <span className="font-mono text-[12px] text-ink">{p.action}</span>
-        <span className="rounded bg-panel-2 px-1.5 text-[9.5px] text-gold">needs your confirmation</span>
+        <span className="rounded bg-panel-2 px-1.5 text-[9.5px] text-accent">needs your confirmation</span>
         <span className="ml-auto text-[10px] text-faint">{until(p.expires_at)}</span>
       </div>
       <div className="text-[10.5px] text-faint">proposed by {p.source === 'playbook' ? 'a playbook' : p.source === 'head' ? 'the Head Agent' : 'you'} · {ago(p.created_at)}</div>
@@ -70,13 +70,13 @@ function PendingCard({ p, facts, onSelect, onDecide }: {
       </div>
       <div className="flex gap-2">
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
-          className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-2 py-1 text-[11.5px] outline-none focus:border-gold/60" />
+          className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-2 py-1 text-[11.5px] outline-none focus:border-accent/60" />
         <button onClick={() => decide(false)} disabled={busy}
           className="flex items-center gap-1 rounded-md border border-line-2 px-2.5 text-[11.5px] text-dim hover:text-ink disabled:opacity-40">
           <X size={12} /> Reject
         </button>
         <button onClick={() => decide(true)} disabled={busy}
-          className="flex items-center gap-1 rounded-md bg-gold px-2.5 text-[11.5px] text-black disabled:opacity-40">
+          className="flex items-center gap-1 rounded-md bg-accent px-2.5 text-[11.5px] text-black disabled:opacity-40">
           {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Confirm
         </button>
       </div>
@@ -89,7 +89,7 @@ function ActivityRow({ p, facts, onSelect }: { p: Proposal; facts: Map<string, F
   const Icon = ICON[p.action] ?? Send;
   const severity = p.params.severity;
   const tone = p.status === 'failed' ? 'text-bad' : p.action === 'alert' && severity === 'critical' ? 'text-bad'
-    : p.action === 'alert' && severity === 'warning' ? 'text-gold' : 'text-dim';
+    : p.action === 'alert' && severity === 'warning' ? 'text-accent' : 'text-dim';
   const body = p.params.message ?? p.params.body;
   return (
     <li className="border-b border-line py-1.5">
@@ -128,7 +128,7 @@ function PlaybookCard({ pb, facts, onSelect, onHighlight, onRetire }: {
           <div className="text-[12.5px] text-ink">{pb.name}</div>
           <p className="mt-0.5 text-[11.5px] leading-snug text-dim"><span className="text-faint">when </span>{pb.situation}</p>
           {pb.trigger && (
-            <p className="mt-0.5 font-mono text-[10.5px] text-gold" title="Checked around the clock; fires the playbook when it holds">
+            <p className="mt-0.5 font-mono text-[10.5px] text-accent" title="Checked around the clock; fires the playbook when it holds">
               live: {pb.trigger.sensor}({Object.entries(pb.trigger.params).map(([k, v]) => `${k}=${v}`).join(', ')}).{pb.trigger.field} {pb.trigger.op} {pb.trigger.value}
               <span className="text-faint"> · every {pb.trigger.every_minutes}m{pb.trigger_value != null ? ` · now ${pb.trigger_value}` : ''}</span>
             </p>
@@ -182,7 +182,7 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
     }
   }
 
-  const input = 'w-full rounded-md border border-line-2 bg-bg px-2 py-1 text-[12px] outline-none focus:border-gold/60';
+  const input = 'w-full rounded-md border border-line-2 bg-bg px-2 py-1 text-[12px] outline-none focus:border-accent/60';
   return (
     <div className="space-y-3">
       <ul className="space-y-1.5">
@@ -190,7 +190,7 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
           <li key={a.name} className="rounded-md border border-line px-3 py-2">
             <div className="flex items-center gap-2">
               <span className="font-mono text-[12px] text-ink">{a.name}</span>
-              <span className={`rounded px-1.5 text-[9.5px] ${a.confirm ? 'bg-gold/15 text-gold' : 'bg-panel-2 text-faint'}`}>
+              <span className={`rounded px-1.5 text-[9.5px] ${a.confirm ? 'bg-accent/15 text-accent' : 'bg-panel-2 text-faint'}`}>
                 {a.confirm ? 'needs confirmation' : 'runs at once'}
               </span>
               {a.dry_run && <span className="rounded bg-panel-2 px-1.5 text-[9.5px] text-faint">dry run</span>}
@@ -225,7 +225,7 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
           {error && <p className="text-xs text-bad">{error}</p>}
           <div className="flex justify-end gap-2">
             <button type="button" onClick={() => setAdding(false)} className="px-2 text-[11.5px] text-dim hover:text-ink">Cancel</button>
-            <button type="submit" disabled={!form.name || !form.url} className="rounded-md bg-gold px-3 py-1 text-[11.5px] text-black disabled:opacity-40">Add</button>
+            <button type="submit" disabled={!form.name || !form.url} className="rounded-md bg-accent px-3 py-1 text-[11.5px] text-black disabled:opacity-40">Add</button>
           </div>
         </form>
       ) : (

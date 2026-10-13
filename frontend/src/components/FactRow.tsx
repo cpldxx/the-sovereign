@@ -18,19 +18,19 @@ export function FactRow({ fact, focusUid, onSelect }: {
           <span className="font-mono text-faint">state</span>
         ) : focusUid ? (
           <>
-            <span className="font-mono text-gold">{outgoing ? `${fact.relation} →` : `← ${fact.relation}`}</span>
+            <span className="font-mono text-accent">{outgoing ? `${fact.relation} →` : `← ${fact.relation}`}</span>
             <button onClick={() => onSelect?.(otherUid)} className="truncate text-dim hover:text-ink">{otherName}</button>
           </>
         ) : (
           <>
             <button onClick={() => onSelect?.(fact.source_uid)} className="truncate text-dim hover:text-ink">{fact.source_name}</button>
-            <span className="shrink-0 font-mono text-gold">{fact.relation} →</span>
+            <span className="shrink-0 font-mono text-accent">{fact.relation} →</span>
             <button onClick={() => onSelect?.(fact.target_uid)} className="truncate text-dim hover:text-ink">{fact.target_name}</button>
           </>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1.5" title={`weight ${fact.weight} · ${fact.evidence} source(s)`}>
           <span className="h-1 w-10 rounded bg-line">
-            <span className="block h-1 rounded bg-gold" style={{ width: `${fact.weight * 100}%` }} />
+            <span className="block h-1 rounded bg-accent" style={{ width: `${fact.weight * 100}%` }} />
           </span>
           <span className="font-mono text-faint">{fact.weight.toFixed(2)} · {fact.evidence}×</span>
         </span>

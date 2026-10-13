@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { auth, type User } from '../lib/api';
 
-const INPUT = 'mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-gold/60';
+const INPUT = 'mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-accent/60';
 
 /** Sign in, or sign up (with the invite code from an invite link: #/invite/<code>). */
 export function SignIn({ invite, onSignedIn }: { invite: string | null; onSignedIn: (user: User) => void }) {
@@ -45,7 +45,7 @@ export function SignIn({ invite, onSignedIn }: { invite: string | null; onSigned
   return (
     <div className="flex h-full items-center justify-center p-4">
       <div className="w-full max-w-sm">
-        <div className="mb-1 font-mono text-[11px] tracking-[0.3em] text-gold">THE SOVEREIGN</div>
+        <div className="mb-1 font-mono text-[11px] tracking-[0.3em] text-accent">THE SOVEREIGN</div>
         <h1 className="mb-2 text-xl font-medium">
           {first ? 'Create the first account' : mode === 'in' ? 'Sign in' : 'Create your account'}
         </h1>
@@ -85,7 +85,7 @@ export function SignIn({ invite, onSignedIn }: { invite: string | null; onSigned
           )}
           {error && <p className="text-xs text-bad">{error}</p>}
           <button type="submit" disabled={busy || !config}
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-gold py-2 text-sm font-medium text-black disabled:opacity-40">
+            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent py-2 text-sm font-medium text-black disabled:opacity-40">
             {busy && <Loader2 size={14} className="animate-spin" />} {mode === 'in' ? 'Sign in' : 'Create account'}
           </button>
         </form>

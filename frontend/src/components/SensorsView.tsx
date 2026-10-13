@@ -12,11 +12,11 @@ function SourceRow({ domain, source, onChanged }: { domain: string; source: Sens
   return (
     <li className="text-[11px]">
       <div className="flex items-center gap-2">
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${source.cooldown_until ? 'bg-gold' : source.last_ok === false ? 'bg-bad' : source.last_ok ? 'bg-good' : 'bg-faint'}`} />
+        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${source.cooldown_until ? 'bg-accent' : source.last_ok === false ? 'bg-bad' : source.last_ok ? 'bg-good' : 'bg-faint'}`} />
         <span title={how}><Icon size={11} className="shrink-0 text-faint" /></span>
         <span className="min-w-0 flex-1 truncate font-mono text-dim" title={source.last_error ?? source.name}>{source.host || source.name}</span>
         {source.cooldown_until && (
-          <span className="shrink-0 text-[10px] text-gold" title={`The site refused us; not asked again before ${source.cooldown_until}`}>
+          <span className="shrink-0 text-[10px] text-accent" title={`The site refused us; not asked again before ${source.cooldown_until}`}>
             resting
           </span>
         )}
@@ -79,11 +79,11 @@ function SensorCard({ domain, group, onChanged }: { domain: string; group: Senso
               <label key={k} className="text-[10.5px] text-faint" title={v.description}>
                 {k}
                 <input value={params[k] ?? ''} onChange={e => setParams({ ...params, [k]: e.target.value })}
-                  className="mt-0.5 block w-32 rounded border border-line-2 bg-bg px-2 py-1 font-mono text-[11.5px] text-ink outline-none focus:border-gold/60" />
+                  className="mt-0.5 block w-32 rounded border border-line-2 bg-bg px-2 py-1 font-mono text-[11.5px] text-ink outline-none focus:border-accent/60" />
               </label>
             ))}
             <button onClick={read} disabled={busy}
-              className="flex items-center gap-1 rounded-md bg-gold px-2.5 py-1 text-[11.5px] text-black disabled:opacity-40">
+              className="flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-[11.5px] text-black disabled:opacity-40">
               {busy ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />} Read now
             </button>
           </div>
@@ -138,9 +138,9 @@ function RequestRow({ r }: { r: SensorRequest }) {
   return (
     <li className="border-b border-line py-1.5 text-[11.5px]">
       <button onClick={() => setOpen(o => !o)} className="flex w-full items-center gap-2 text-left">
-        {active ? <Loader2 size={11} className="shrink-0 animate-spin text-gold" /> : open ? <ChevronDown size={11} className="shrink-0 text-faint" /> : <ChevronRight size={11} className="shrink-0 text-faint" />}
+        {active ? <Loader2 size={11} className="shrink-0 animate-spin text-accent" /> : open ? <ChevronDown size={11} className="shrink-0 text-faint" /> : <ChevronRight size={11} className="shrink-0 text-faint" />}
         <span className="truncate text-dim">{r.group ? `more sources for ${r.group}` : r.need}</span>
-        <span className={`ml-auto shrink-0 font-mono text-[10px] ${r.status === 'failed' ? 'text-bad' : r.status === 'done' ? 'text-good' : 'text-gold'}`}>
+        <span className={`ml-auto shrink-0 font-mono text-[10px] ${r.status === 'failed' ? 'text-bad' : r.status === 'done' ? 'text-good' : 'text-accent'}`}>
           {r.status}{r.candidates?.length ? ` · ${works}/${r.candidates.length}` : ''}{r.seconds ? ` · ${Math.round(r.seconds / 60)}m` : ''} · {r.backend}
         </span>
       </button>
@@ -203,8 +203,8 @@ export function SensorsView({ domain, version }: { domain: string; version: numb
       </p>
       <form onSubmit={submit} className="flex gap-2">
         <input value={need} onChange={e => setNeed(e.target.value)} placeholder="New sensor, e.g. latest stock price for a ticker"
-          className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-3 py-1.5 text-[12px] outline-none focus:border-gold/60" />
-        <button type="submit" disabled={need.trim().length < 5} className="flex items-center gap-1 rounded-md bg-gold px-2.5 text-[11.5px] text-black disabled:opacity-40">
+          className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-3 py-1.5 text-[12px] outline-none focus:border-accent/60" />
+        <button type="submit" disabled={need.trim().length < 5} className="flex items-center gap-1 rounded-md bg-accent px-2.5 text-[11.5px] text-black disabled:opacity-40">
           <Plus size={12} /> Find sources
         </button>
       </form>

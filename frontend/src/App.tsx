@@ -215,22 +215,23 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
 
             <div className="flex min-h-0 flex-1 max-lg:flex-col max-lg:overflow-y-auto">
               <section className="relative flex min-w-0 flex-col border-line lg:flex-1 lg:border-r max-lg:h-[56vh] max-lg:min-h-[320px] max-lg:shrink-0 max-lg:border-b">
-                <nav className="flex gap-1 border-b border-line px-3 py-1.5">
+                <nav className="flex items-center gap-5 border-b border-line px-4">
                   {([['agents', 'Agents', Workflow], ['graph', `Knowledge graph · ${detail.stats.entity_count}`, Network]] as const).map(([id, label, Icon]) => (
                     <button key={id} onClick={() => setView(id)}
-                      className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-xs ${view === id ? 'bg-gold/10 text-gold' : 'text-dim hover:text-ink'}`}>
-                      <Icon size={13} /> {label}
+                      className={`-mb-px flex items-center gap-1.5 border-b py-2.5 font-mono text-[10.5px] tracking-[0.14em] uppercase transition-colors ${
+                        view === id ? 'border-accent text-accent' : 'border-transparent text-faint hover:text-dim'}`}>
+                      <Icon size={12} /> {label}
                     </button>
                   ))}
                   {view === 'agents' && highlight.size > 0 && (
-                    <button onClick={() => setView('graph')} className="ml-auto rounded border border-gold/40 px-2 py-0.5 text-[11px] text-gold hover:bg-gold/10">
+                    <button onClick={() => setView('graph')} className="ml-auto rounded border border-accent/40 px-2 py-0.5 text-[11px] text-accent hover:bg-accent/10">
                       See the {highlight.size} entities the Head used in the graph →
                     </button>
                   )}
                 </nav>
                 <div className="relative min-h-0 flex-1">
                   {view === 'agents'
-                    ? <AgentView key={active} domain={active} />
+                    ? <AgentView key={active} domain={active} stats={{ entities: detail.stats.entity_count, facts: detail.stats.fact_count }} />
                     : <GraphPane key={active} domain={active} entityTypes={entityTypes} highlight={highlight} selected={selected}
                         version={version} onSelect={setSelected} onClearHighlight={() => setHighlight(new Set())} />}
                   {selected && (
@@ -254,16 +255,16 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                       onClick={() => setTab(id)}
                       title={label}
                       className={`flex min-w-0 items-center justify-center gap-1.5 border-b-2 py-2.5 text-xs transition-colors ${
-                        tab === id ? 'flex-[2.2] border-gold text-ink' : 'flex-1 border-transparent text-faint hover:text-dim'
+                        tab === id ? 'flex-[2.2] border-accent text-ink' : 'flex-1 border-transparent text-faint hover:text-dim'
                       }`}
                     >
                       {/* Nine tabs: only the active one shows its name. */}
                       <Icon size={13} className="shrink-0" /> {tab === id && <span className="truncate">{label}</span>}
                       {id === 'actions' && pendingActions > 0 && (
-                        <span className="rounded-full bg-gold px-1.5 font-mono text-[9.5px] text-black">{pendingActions}</span>
+                        <span className="rounded-full bg-accent px-1.5 font-mono text-[9.5px] text-black">{pendingActions}</span>
                       )}
                       {id === 'review' && detail.stats.pending_reviews > 0 && (
-                        <span className="rounded-full bg-gold px-1.5 font-mono text-[9.5px] text-black">{detail.stats.pending_reviews}</span>
+                        <span className="rounded-full bg-accent px-1.5 font-mono text-[9.5px] text-black">{detail.stats.pending_reviews}</span>
                       )}
                     </button>
                   ))}

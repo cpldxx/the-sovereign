@@ -6,8 +6,8 @@ const STAGES = ['Extracting entities and facts', 'Validating against the source'
 
 const FACT_ICON: Record<IngestFactItem['status'], React.ReactNode> = {
   created: <Plus size={12} className="text-good" />,
-  strengthened: <ArrowUpRight size={12} className="text-gold" />,
-  review: <Hourglass size={12} className="text-gold" />,
+  strengthened: <ArrowUpRight size={12} className="text-accent" />,
+  review: <Hourglass size={12} className="text-accent" />,
   rejected: <X size={12} className="text-bad" />,
 };
 
@@ -54,7 +54,7 @@ export function IngestPanel({ domain, onIngested, ontologyReady }: {
     <div className="flex h-full flex-col overflow-y-auto p-4">
       <form onSubmit={submit} className="space-y-3">
         {!ontologyReady && (
-          <p className="rounded-md border border-gold/30 bg-gold/10 px-3 py-2 text-[11px] text-gold">
+          <p className="rounded-md border border-accent/30 bg-accent/10 px-3 py-2 text-[11px] text-accent">
             The ontology is still being generated. Ingesting now uses the default grammar — waiting a moment gives
             domain-specific types.
           </p>
@@ -64,23 +64,23 @@ export function IngestPanel({ domain, onIngested, ontologyReady }: {
           onChange={e => setText(e.target.value)}
           rows={9}
           placeholder="Paste an article, notes, a report… Entities become nodes, facts become weighted connections. A fact confirmed by another source gets stronger; a newer value supersedes the old one."
-          className="w-full resize-y rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-gold/60"
+          className="w-full resize-y rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] leading-relaxed outline-none focus:border-accent/60"
         />
         <input
           value={source}
           onChange={e => setSource(e.target.value)}
           placeholder="Source (URL, paper, report)"
-          className="w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] outline-none focus:border-gold/60"
+          className="w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] outline-none focus:border-accent/60"
         />
         <div className="flex items-center justify-between">
           <label className="flex items-center gap-2 text-[11.5px] text-dim" title="Only part of the source was readable (e.g. paywall) — its facts are trusted less">
-            <input type="checkbox" checked={partial} onChange={e => setPartial(e.target.checked)} className="accent-[#e2b356]" />
+            <input type="checkbox" checked={partial} onChange={e => setPartial(e.target.checked)} className="accent-[#f2efe8]" />
             partial source
           </label>
           <button
             type="submit"
             disabled={busy || !text.trim()}
-            className="flex items-center gap-2 rounded-md bg-gold px-4 py-1.5 text-sm font-medium text-black disabled:opacity-40"
+            className="flex items-center gap-2 rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-black disabled:opacity-40"
           >
             {busy && <Loader2 size={14} className="animate-spin" />} Ingest
           </button>
@@ -89,14 +89,14 @@ export function IngestPanel({ domain, onIngested, ontologyReady }: {
 
       {busy && (
         <p className="mt-4 flex items-center gap-2 text-xs text-dim">
-          <Loader2 size={12} className="animate-spin text-gold" /> {stage}… {elapsed}s
+          <Loader2 size={12} className="animate-spin text-accent" /> {stage}… {elapsed}s
           <span className="text-faint">(usually under a minute)</span>
         </p>
       )}
 
       {error && <p className="mt-4 text-xs text-bad">{error}</p>}
 
-      {result?.duplicate && <p className="mt-4 text-xs text-gold">This exact text was already ingested — nothing changed.</p>}
+      {result?.duplicate && <p className="mt-4 text-xs text-accent">This exact text was already ingested — nothing changed.</p>}
 
       {result && !result.duplicate && (
         <div className="mt-5 space-y-4">
@@ -127,10 +127,10 @@ export function IngestPanel({ domain, onIngested, ontologyReady }: {
                   title={e.reason ?? `${e.type} · ${e.status}`}
                   className={`flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] ${
                     e.status === 'dropped' ? 'border-line text-faint line-through'
-                      : e.status === 'matched' ? 'border-gold/40 text-ink' : 'border-good/40 text-ink'
+                      : e.status === 'matched' ? 'border-accent/40 text-ink' : 'border-good/40 text-ink'
                   }`}
                 >
-                  {e.status === 'matched' ? <GitMerge size={10} className="text-gold" /> : e.status === 'created' ? <Plus size={10} className="text-good" /> : null}
+                  {e.status === 'matched' ? <GitMerge size={10} className="text-accent" /> : e.status === 'created' ? <Plus size={10} className="text-good" /> : null}
                   {e.name}
                 </span>
               ))}
@@ -146,7 +146,7 @@ export function IngestPanel({ domain, onIngested, ontologyReady }: {
                   <div className="min-w-0">
                     <div className="font-mono text-[10px] text-faint">
                       {f.source}{f.source !== f.target ? ` —${f.relation}→ ${f.target}` : ' · state'} · {f.status}
-                      {f.invalidated && f.invalidated.length > 0 && <span className="text-gold"> · superseded {f.invalidated.length}</span>}
+                      {f.invalidated && f.invalidated.length > 0 && <span className="text-accent"> · superseded {f.invalidated.length}</span>}
                     </div>
                     <div className={f.status === 'rejected' ? 'text-faint' : 'text-ink'}>{f.fact}</div>
                     {f.reason && <div className="text-faint">{f.reason}</div>}
@@ -157,7 +157,7 @@ export function IngestPanel({ domain, onIngested, ontologyReady }: {
             {result.facts.length === 0 && <p className="text-xs text-faint">No facts could be extracted.</p>}
           </section>
           {result.review_items > 0 && (
-            <p className="flex items-center gap-1.5 text-[11.5px] text-gold">
+            <p className="flex items-center gap-1.5 text-[11.5px] text-accent">
               <Check size={12} /> {result.review_items} item{result.review_items === 1 ? '' : 's'} sent to the review queue
             </p>
           )}

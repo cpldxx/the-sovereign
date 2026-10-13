@@ -35,7 +35,7 @@ function Details({ review }: { review: Review }) {
   return (
     <ul className="space-y-0.5 text-[11px] text-dim">
       {existing.map(e => (
-        <li key={e.uid}>{mark(e.uid) && <span className="font-mono text-gold">{mark(e.uid)}: </span>}{e.fact}</li>
+        <li key={e.uid}>{mark(e.uid) && <span className="font-mono text-accent">{mark(e.uid)}: </span>}{e.fact}</li>
       ))}
     </ul>
   );
@@ -96,7 +96,7 @@ export function ReviewPanel({ domain, version, onChanged }: {
         <button
           onClick={headReview}
           disabled={!!busy || !reviews?.length}
-          className="flex shrink-0 items-center gap-1.5 rounded-md border border-gold/50 px-2.5 py-1.5 text-[11.5px] text-gold hover:bg-gold/10 disabled:opacity-40"
+          className="flex shrink-0 items-center gap-1.5 rounded-md border border-accent/50 px-2.5 py-1.5 text-[11.5px] text-accent hover:bg-accent/10 disabled:opacity-40"
           title="Let the Head Agent decide every pending item"
         >
           {busy === 'head' ? <Loader2 size={12} className="animate-spin" /> : <Bot size={12} />} Head review
@@ -106,14 +106,14 @@ export function ReviewPanel({ domain, version, onChanged }: {
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {error && <p className="mb-2 text-xs text-bad">{error}</p>}
         {headText && (
-          <div className="mb-3 rounded-md border border-gold/30 bg-gold/5 p-3"><Markdown>{headText}</Markdown></div>
+          <div className="mb-3 rounded-md border border-accent/30 bg-accent/5 p-3"><Markdown>{headText}</Markdown></div>
         )}
         {reviews && reviews.length === 0 && <p className="mt-8 text-center text-xs text-faint">Nothing to review.</p>}
         <ul className="space-y-2.5">
           {reviews?.map(r => (
             <li key={r.uid} className="rounded-md border border-line bg-panel-2/50 p-3">
               <div className="mb-1 flex items-center gap-2">
-                <span className="rounded bg-gold/15 px-1.5 py-0.5 font-mono text-[10px] text-gold">{KIND_LABEL[r.kind]}</span>
+                <span className="rounded bg-accent/15 px-1.5 py-0.5 font-mono text-[10px] text-accent">{KIND_LABEL[r.kind]}</span>
                 <span className="ml-auto font-mono text-[10px] text-faint">{r.created_at?.slice(0, 16).replace('T', ' ')}</span>
               </div>
               <p className="mb-1.5 text-[12.5px] leading-snug">{r.summary}</p>

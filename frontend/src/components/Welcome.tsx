@@ -4,7 +4,7 @@ export function Welcome({ onCreate }: { onCreate: (name: string, description: st
   return (
     <div className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-md">
-        <div className="mb-1 font-mono text-[11px] tracking-[0.3em] text-gold">THE SOVEREIGN</div>
+        <div className="mb-1 font-mono text-[11px] tracking-[0.3em] text-accent">THE SOVEREIGN</div>
         <h1 className="mb-2 text-xl font-medium">Build a domain expert.</h1>
         <p className="mb-6 text-sm leading-relaxed text-dim">
           Each domain gets its own knowledge graph. Feed it text, and the pipeline extracts, validates and links

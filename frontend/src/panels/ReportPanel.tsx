@@ -12,8 +12,8 @@ function minutes(seconds: number) {
   return seconds < 90 ? `${Math.round(seconds)}s` : `${Math.round(seconds / 60)}m`;
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone?: 'good' | 'bad' | 'gold' }) {
-  const color = !value ? 'text-faint' : tone === 'bad' ? 'text-bad' : tone === 'gold' ? 'text-gold' : tone === 'good' ? 'text-good' : 'text-ink';
+function Stat({ label, value, tone }: { label: string; value: number; tone?: 'good' | 'bad' | 'accent' }) {
+  const color = !value ? 'text-faint' : tone === 'bad' ? 'text-bad' : tone === 'accent' ? 'text-accent' : tone === 'good' ? 'text-good' : 'text-ink';
   return (
     <div className="rounded-md border border-line bg-panel-2/40 px-2 py-1.5">
       <div className={`font-mono text-[14px] ${color}`}>{value}</div>
@@ -91,7 +91,7 @@ function ReportView({ domain, summary, onHighlight, onSelect }: {
         <div className="flex items-start gap-2">
           <h3 className="flex-1 text-[14px] leading-snug text-ink">{r.headline}</h3>
           {canSpeak && (
-            <button onClick={toggleSpeak} className={`shrink-0 rounded p-1 ${speaking ? 'text-gold' : 'text-faint hover:text-ink'}`} title={speaking ? 'Stop' : 'Read aloud'}>
+            <button onClick={toggleSpeak} className={`shrink-0 rounded p-1 ${speaking ? 'text-accent' : 'text-faint hover:text-ink'}`} title={speaking ? 'Stop' : 'Read aloud'}>
               {speaking ? <Square size={13} /> : <Volume2 size={14} />}
             </button>
           )}
@@ -106,8 +106,8 @@ function ReportView({ domain, summary, onHighlight, onSelect }: {
         <Stat label="new entities" value={s.changes.entities_created} />
         <Stat label="new facts" value={s.changes.facts_created} tone="good" />
         <Stat label="strengthened" value={s.changes.facts_strengthened} tone="good" />
-        <Stat label="superseded" value={s.changes.facts_invalidated} tone="gold" />
-        <Stat label="to review" value={s.graph.pending_reviews} tone="gold" />
+        <Stat label="superseded" value={s.changes.facts_invalidated} tone="accent" />
+        <Stat label="to review" value={s.graph.pending_reviews} tone="accent" />
         <Stat label="research runs" value={s.research.runs} />
         <Stat label="runs failed" value={s.research.failed} tone="bad" />
       </div>
@@ -161,7 +161,7 @@ function ReportView({ domain, summary, onHighlight, onSelect }: {
                         <a href={/^https?:/.test(e.source) ? e.source : undefined} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-dim hover:text-ink">
                           <ExternalLink size={10} className="shrink-0" />
                           <span className="truncate">{e.title || e.source}</span>
-                          {e.content_status === 'partial' && <span className="shrink-0 text-[9.5px] text-gold">partial</span>}
+                          {e.content_status === 'partial' && <span className="shrink-0 text-[9.5px] text-accent">partial</span>}
                         </a>
                       </li>
                     ))}
@@ -252,7 +252,7 @@ export function ReportPanel({ domain, version, onHighlight, onSelect }: {
           </div>
         )}
         {generating && (
-          <p className="flex items-center gap-1.5 text-[11.5px] text-gold">
+          <p className="flex items-center gap-1.5 text-[11.5px] text-accent">
             <Loader2 size={12} className="animate-spin" /> Refreshing summaries and writing the report — a few minutes.
           </p>
         )}

@@ -38,7 +38,7 @@ export function DomainForm({ onCreate, onBusy }: {
           value={name}
           onChange={e => setName(e.target.value)}
           placeholder="Quant Trading"
-          className="mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-gold/60"
+          className="mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-accent/60"
         />
         {id && <span className="mt-1 block font-mono text-[10.5px] text-faint">id: {id} (+ a short suffix if another account has it)</span>}
       </label>
@@ -49,7 +49,7 @@ export function DomainForm({ onCreate, onBusy }: {
           onChange={e => setDescription(e.target.value)}
           rows={3}
           placeholder="Algorithmic trading strategies, technical analysis, market signals"
-          className="mt-1 w-full resize-none rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-gold/60"
+          className="mt-1 w-full resize-none rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-accent/60"
         />
         <span className="mt-1 block text-[10.5px] text-faint">
           The Ontologist turns this into the domain's grammar (entity and relation types) — usually under a minute.
@@ -59,7 +59,7 @@ export function DomainForm({ onCreate, onBusy }: {
       <button
         type="submit"
         disabled={busy || !id || !description.trim()}
-        className="flex w-full items-center justify-center gap-2 rounded-md bg-gold py-2 text-sm font-medium text-black disabled:opacity-40"
+        className="flex w-full items-center justify-center gap-2 rounded-md bg-accent py-2 text-sm font-medium text-black disabled:opacity-40"
       >
         {busy && <Loader2 size={14} className="animate-spin" />} Create domain
       </button>

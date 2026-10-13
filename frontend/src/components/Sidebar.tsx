@@ -69,7 +69,7 @@ export function Sidebar({ domains, active, onSelect, onCreate, me, onSignOut }: 
   return (
     <aside className="flex w-56 shrink-0 flex-col border-r border-line bg-panel max-md:w-44">
       <div className="px-4 pt-5 pb-4">
-        <div className="font-mono text-[13px] font-semibold tracking-[0.25em] text-gold">SOVEREIGN</div>
+        <div className="font-mono text-[13px] font-semibold tracking-[0.25em] text-accent">SOVEREIGN</div>
         <div className="mt-0.5 text-[10.5px] text-faint">domain knowledge graphs</div>
       </div>
 
@@ -94,7 +94,7 @@ export function Sidebar({ domains, active, onSelect, onCreate, me, onSignOut }: 
             }`}
           >
             <div className="flex items-center gap-2">
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${d.ontology_generated ? 'bg-gold' : 'bg-faint pulse-dot'}`} />
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${d.ontology_generated ? 'bg-accent' : 'bg-faint pulse-dot'}`} />
               <span className="truncate font-mono text-[12px]">{d.id}</span>
               {d.role !== 'owner' && <span className="ml-auto shrink-0 text-[9.5px] text-faint">{d.role}</span>}
             </div>
@@ -127,7 +127,7 @@ export function Sidebar({ domains, active, onSelect, onCreate, me, onSignOut }: 
       >
         <CircleUser size={14} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate text-[11.5px]">{me.name || me.email}</span>
-        {me.admin && <span className="text-[9.5px] text-gold">admin</span>}
+        {me.admin && <span className="text-[9.5px] text-accent">admin</span>}
       </button>
 
       {creating && <NewDomainDialog onCreate={onCreate} onClose={() => setCreating(false)} />}

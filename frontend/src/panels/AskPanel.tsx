@@ -53,7 +53,7 @@ function Steps({ steps }: { steps: Step[] }) {
     <div className="mb-2 space-y-1">
       {steps.map(s => (
         <div key={s.id} className="flex items-center gap-1.5 text-[11px] text-faint">
-          {s.done ? <Check size={11} className="text-good" /> : <Loader2 size={11} className="animate-spin text-gold" />}
+          {s.done ? <Check size={11} className="text-good" /> : <Loader2 size={11} className="animate-spin text-accent" />}
           <Wrench size={10} />
           <span className="font-mono text-dim">{s.name}</span>
           <span className="truncate">{argSummary(s.args)}</span>
@@ -273,7 +273,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
         <span className="text-[11px] text-faint">Answers grounded in this domain's knowledge graph</span>
         <div className="flex gap-1">
           {canSpeak && (
-            <button onClick={toggleVoiceOut} className={`rounded p-1 ${voiceOut ? 'text-gold' : 'text-faint hover:text-ink'}`} title="Read typed answers aloud">
+            <button onClick={toggleVoiceOut} className={`rounded p-1 ${voiceOut ? 'text-accent' : 'text-faint hover:text-ink'}`} title="Read typed answers aloud">
               {voiceOut ? <Volume2 size={13} /> : <VolumeX size={13} />}
             </button>
           )}
@@ -302,7 +302,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
           m.role === 'user' ? (
             <div key={i} className="ml-8 rounded-lg bg-panel-2 px-3 py-2 text-[13px] whitespace-pre-wrap">{m.content}</div>
           ) : (
-            <div key={i} className={`border-l-2 pl-3 ${m.error ? 'border-bad/60' : 'border-gold/60'}`}>
+            <div key={i} className={`border-l-2 pl-3 ${m.error ? 'border-bad/60' : 'border-accent/60'}`}>
               {m.steps && m.steps.length > 0 && <Steps steps={m.steps} />}
               {m.error ? <p className="text-[13px] text-bad">{m.content}</p> : <Markdown>{m.content}</Markdown>}
             </div>
@@ -310,7 +310,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
         )}
 
         {busy && (
-          <div className="border-l-2 border-gold/60 pl-3">
+          <div className="border-l-2 border-accent/60 pl-3">
             {steps.length > 0 && <Steps steps={steps} />}
             {draft ? (
               <Markdown>{draft}</Markdown>
@@ -328,13 +328,13 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
         <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-[11.5px]">
           {voice !== 'off' && (
             <>
-              <AudioLines size={14} className={voice === 'hearing' ? 'text-bad' : voice === 'speaking' ? 'text-gold' : 'text-dim'} />
+              <AudioLines size={14} className={voice === 'hearing' ? 'text-bad' : voice === 'speaking' ? 'text-accent' : 'text-dim'} />
               <span className="text-dim">{VOICE_LABEL[voice]}{wakeWord && voice === 'listening' ? ' for “Sovereign, …”' : ''}</span>
               <span className="h-1.5 w-16 overflow-hidden rounded bg-line">
-                <span className="block h-1.5 rounded bg-gold transition-[width] duration-75" style={{ width: `${Math.round(level * 100)}%` }} />
+                <span className="block h-1.5 rounded bg-accent transition-[width] duration-75" style={{ width: `${Math.round(level * 100)}%` }} />
               </span>
               {heard && <span className="min-w-0 flex-1 truncate text-faint" title={heard}>“{heard}”</span>}
-              <button onClick={toggleWakeWord} className={`ml-auto shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${wakeWord ? 'border-gold/60 text-gold' : 'border-line-2 text-faint hover:text-ink'}`}
+              <button onClick={toggleWakeWord} className={`ml-auto shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${wakeWord ? 'border-accent/60 text-accent' : 'border-line-2 text-faint hover:text-ink'}`}
                 title="Only answer when addressed: “Sovereign, …” / “자비스, …” (follow-ups within 30 s need no wake word)">
                 wake word
               </button>
@@ -354,12 +354,12 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
           onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(input); } }}
           rows={2}
           placeholder={voice !== 'off' ? 'Talk, or type…' : 'Ask the Head Agent…  (Enter to send)'}
-          className="min-h-[44px] flex-1 resize-none rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] outline-none focus:border-gold/60"
+          className="min-h-[44px] flex-1 resize-none rounded-md border border-line-2 bg-bg px-3 py-2 text-[13px] outline-none focus:border-accent/60"
         />
         <button
           type="button"
           onClick={() => void toggleVoice()}
-          className={`rounded-md border p-2.5 ${voice !== 'off' ? 'border-gold text-gold' : 'border-line-2 text-dim hover:text-ink'}`}
+          className={`rounded-md border p-2.5 ${voice !== 'off' ? 'border-accent text-accent' : 'border-line-2 text-dim hover:text-ink'}`}
           title={voice !== 'off' ? 'End the voice conversation' : 'Talk with the Head Agent (local speech; nothing leaves this machine)'}
         >
           {voice !== 'off' ? <MicOff size={15} /> : <Mic size={15} />}
@@ -369,7 +369,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight }: {
             <Square size={15} />
           </button>
         ) : (
-          <button type="submit" disabled={!input.trim()} className="rounded-md bg-gold p-2.5 text-black disabled:opacity-30" title="Send">
+          <button type="submit" disabled={!input.trim()} className="rounded-md bg-accent p-2.5 text-black disabled:opacity-30" title="Send">
             <Send size={15} />
           </button>
         )}
