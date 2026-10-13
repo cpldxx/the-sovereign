@@ -28,7 +28,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import actions, auth, crew, digest, kg, playbooks, sensors
+from core import actions, activity, auth, crew, digest, kg, playbooks, sensors
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -73,6 +73,13 @@ async def _research(method: str, path: str, timeout: float = 30, **kw) -> dict:
 _caller: contextvars.ContextVar[tuple[auth.Principal, str]] = contextvars.ContextVar("mcp_caller")
 
 
+# Which agent a tool call reaches, for the live agent view (the rest read or write the graph itself).
+_TOOL_AGENT = {"ingest_data": "extractor", "list_sensors": "scout", "read_sensor": "scout", "list_research": "research",
+               "research_status": "research", "list_playbooks": "strategist", "list_proposals": "watcher",
+               "propose_action": "watcher", "daily_report": "reporter", "list_reviews": "validator",
+               "resolve_review": "validator", "update_ontology": "ontologist", "get_ontology": "ontologist"}
+
+
 def _guarded(fn: Callable, need: str) -> Callable:
     """The tool, taking its caller from the HTTP request of each call. (MCP tools run in the session's task, so
     the middleware's contextvar doesn't reach them; the request does.)"""
@@ -82,6 +89,9 @@ def _guarded(fn: Callable, need: str) -> Callable:
         if principal is None:
             raise ToolError("Not signed in")
         reset = _caller.set((principal, need))
+        if isinstance(domain := kwargs.get("domain"), str):
+            activity.event(domain, "head" if principal.kind == "service" else "user",
+                           _TOOL_AGENT.get(fn.__name__, "graph"), "tool", fn.__name__)
         try:
             result = fn(*args, **kwargs)
             return await result if inspect.isawaitable(result) else result

@@ -30,3 +30,11 @@ async def list_episodes(domain_name: str, req: Request, limit: int = Query(50, g
     """Ingested sources, newest first."""
     _require(domain_name)
     return {"episodes": await kgdb.list_episodes(req.app.state.db, domain_name, limit)}
+
+
+@router.get("/{domain_name}/facts")
+async def api_facts(domain_name: str, req: Request, uids: str = ""):
+    """Facts by uid (comma-separated, at most 200) — e.g. the evidence of a proposal or a playbook."""
+    _require(domain_name)
+    wanted = [u for u in uids.split(",") if u][:200]
+    return {"facts": await kgdb.get_facts(req.app.state.db, domain_name, wanted)}

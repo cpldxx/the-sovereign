@@ -55,6 +55,23 @@ export interface Invite {
   code?: string;  // only right after creation
 }
 
+// ── Live activity (the agent view) ─────────────────────────────────────────
+
+export interface ActivityEvent {
+  seq: number;
+  at: string;
+  source: string;   // an agent's name, "head", "graph" or "user"
+  target: string;
+  kind: string;     // task · question · answer · report · notice · note · tool · write
+  text: string;
+}
+
+export interface Activity {
+  seq: number;
+  working: { agent: string; since: string; doing: string[] }[];
+  events: ActivityEvent[];
+}
+
 // ── The Head's team (crew) ──────────────────────────────────────────────────
 
 export interface AgentTask {
@@ -166,6 +183,7 @@ export interface Episode {
 export interface Graph {
   entities: Entity[];
   facts: Fact[];
+  total?: { entities: number; facts: number };
 }
 
 export interface EntityDetail {
@@ -594,7 +612,14 @@ export const kg = {
     request<{ members: Member[] }>(KG_API, `${d(id)}/members/${encodeURIComponent(uid)}`, { method: 'DELETE' })
       .then(r => r.members),
 
-  graph: (id: string) => request<Graph>(KG_API, `/graph/${encodeURIComponent(id)}`),
+  /** The most connected `limit` entities (0 = all) plus `include` — what the graph view draws. */
+  graph: (id: string, limit = 0, include: string[] = []) =>
+    request<Graph>(KG_API, `/graph/${encodeURIComponent(id)}?limit=${limit}${include.length ? `&include=${include.map(encodeURIComponent).join(',')}` : ''}`),
+
+  facts: (id: string, uids: string[]) =>
+    request<{ facts: Fact[] }>(KG_API, `${d(id)}/facts?uids=${uids.map(encodeURIComponent).join(',')}`).then(r => r.facts),
+
+  activity: (id: string, after = 0) => request<Activity>(KG_API, `${d(id)}/activity?after=${after}`),
 
   ingest: (id: string, raw_text: string, source: string, title?: string, content_status: 'full' | 'partial' = 'full') =>
     request<IngestResult>(KG_API, `${d(id)}/ingest`, json({ raw_text, source, title, content_status })),

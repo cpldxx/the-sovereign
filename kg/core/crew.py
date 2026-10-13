@@ -33,7 +33,7 @@ from pydantic_ai import Agent
 
 from agents.ontologist import generate_ontology
 from agents.validator import validate
-from core import actions, auth, catalog, coding, digest, kg, playbooks, sensors
+from core import actions, activity, auth, catalog, coding, digest, kg, playbooks, sensors
 from core import database as kgdb
 from core.database import ArcadeDB, now
 from core.llm import model_for, model_settings
@@ -515,6 +515,7 @@ async def _post(db: ArcadeDB, domain: str, thread: str, sender: str, recipient: 
     msg = await kgdb.insert_doc(db, domain, "Message", {
         "thread": thread, "sender": sender, "recipient": recipient, "kind": kind, "task": task, "text": text,
         "data": data or {}, "status": status, "finished_at": None}, MESSAGE_JSON)
+    activity.event(domain, sender, recipient, kind, f"{task}: {text}" if task and kind == "task" else text)
     await kgdb.update_doc(db, domain, "Thread", thread, {"updated_at": msg["created_at"]})
     if status == QUEUED:
         _ready.set()
@@ -701,12 +702,13 @@ async def _work(db: ArcadeDB, domain: str, msg: dict) -> None:
 
     async def run() -> None:
         try:
-            if msg["kind"] == "task":
-                if t is None:
-                    raise CrewError(f"The {member.title} has no task '{msg['task']}'")
-                outcome = await t.run(db, domain, t.inputs.model_validate((msg.get("data") or {}).get("inputs", {})))
-            else:
-                outcome = await _answer(db, domain, member, msg)
+            with activity.working(domain, member.name, msg.get("task") or msg["text"][:100]):
+                if msg["kind"] == "task":
+                    if t is None:
+                        raise CrewError(f"The {member.title} has no task '{msg['task']}'")
+                    outcome = await t.run(db, domain, t.inputs.model_validate((msg.get("data") or {}).get("inputs", {})))
+                else:
+                    outcome = await _answer(db, domain, member, msg)
         except Exception as e:
             outcome = Outcome(f"{type(e).__name__}: {e}"[:1000], ok=False)
         await _finish(db, domain, msg, outcome)
@@ -813,7 +815,8 @@ async def review_sweep(db: ArcadeDB, domain: str, minutes: float = 45) -> dict:
     while pending and time.monotonic() < deadline:
         rounds += 1
         try:
-            note = await _ask_head(domain, REVIEW, max_iterations=30)   # Hermes caps a turn at 30
+            with activity.working(domain, HEAD, f"reviewing {pending} items"):
+                note = await _ask_head(domain, REVIEW, max_iterations=30)   # Hermes caps a turn at 30
         except httpx.HTTPError as e:
             await _post(db, domain, thread, HEAD, "user", "note", f"Hermes unreachable ({type(e).__name__})", status=READ)
             break

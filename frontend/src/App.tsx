@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Send, Shapes, Users } from 'lucide-react';
-import { ApiError, auth, kg, onSignedOut, research, type DomainDetail, type DomainSummary, type Fact, type Graph, type Ontology, type User } from './lib/api';
+import { useCallback, useEffect, useState } from 'react';
+import { Bot, FileInput, Globe, Inbox, Network, Newspaper, Search, Send, Shapes, Users, Workflow } from 'lucide-react';
+import { ApiError, auth, kg, onSignedOut, research, type DomainDetail, type DomainSummary, type Ontology, type User } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
 import { DomainHeader } from './components/DomainHeader';
-import { GraphView } from './components/GraphView';
+import { AgentView } from './components/AgentView';
+import { GraphPane } from './components/GraphPane';
 import { EntityPanel } from './components/EntityPanel';
 import { Welcome } from './components/Welcome';
 import { AskPanel } from './panels/AskPanel';
@@ -31,7 +32,6 @@ const TABS: { id: Tab; label: string; icon: typeof Bot }[] = [
   { id: 'ontology', label: 'Ontology', icon: Shapes },
 ];
 
-const EMPTY_GRAPH: Graph = { entities: [], facts: [] };
 
 /** Active domain lives in the URL hash (#/quant_trading) so links and reloads keep it. */
 function readHash(): string | null {
@@ -85,13 +85,13 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
   const [active, setActive] = useState<string | null>(readHash);
   const [detail, setDetail] = useState<DomainDetail | null>(null);
   const [ontology, setOntology] = useState<Ontology | null>(null);
-  const [graph, setGraph] = useState<Graph>(EMPTY_GRAPH);
+  // The main view: the agents at work (default) or the knowledge graph, which only exists while it is open.
+  const [view, setView] = useState<'agents' | 'graph'>('agents');
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('ask');
   const [version, setVersion] = useState(0);  // bumps on every reload, so open panels refetch
   const [pendingActions, setPendingActions] = useState(0);
-  const factsById = useMemo(() => new Map<string, Fact>(graph.facts.map(f => [f.uid, f])), [graph]);
   const [error, setError] = useState<string | null>(null);
 
   const loadDomains = useCallback(async () => {
@@ -106,10 +106,9 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
 
   const loadDomain = useCallback(async (id: string) => {
     try {
-      const [det, ont, g] = await Promise.all([kg.domain(id), kg.ontology(id), kg.graph(id)]);
+      const [det, ont] = await Promise.all([kg.domain(id), kg.ontology(id)]);
       setDetail(det);
       setOntology(ont.ontology);
-      setGraph(g);
       setVersion(v => v + 1);
       setError(null);
     } catch (e) {
@@ -137,7 +136,6 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
   useEffect(() => {
     setDetail(null);
     setOntology(null);
-    setGraph(EMPTY_GRAPH);
     setHighlight(new Set());
     setSelected(null);
     if (active) void loadDomain(active);
@@ -216,39 +214,36 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
             <DomainHeader detail={detail} me={me} onDelete={() => deleteDomain(active)} onLeft={loadDomains} />
 
             <div className="flex min-h-0 flex-1 max-lg:flex-col max-lg:overflow-y-auto">
-              <section className="relative min-w-0 border-line lg:flex-1 lg:border-r max-lg:h-[48vh] max-lg:min-h-[300px] max-lg:shrink-0 max-lg:border-b">
-                <GraphView
-                  graph={graph}
-                  entityTypes={entityTypes}
-                  highlight={highlight}
-                  selected={selected}
-                  onSelect={setSelected}
-                />
-                {graph.entities.length === 0 && (
-                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 text-center">
-                    <Network className="text-faint" size={32} />
-                    <p className="text-sm text-dim">This knowledge graph is empty.</p>
-                    <p className="text-xs text-faint">Ingest text, or tell the Head Agent something worth keeping.</p>
-                  </div>
-                )}
-                {highlight.size > 0 && (
-                  <button
-                    onClick={() => setHighlight(new Set())}
-                    className="absolute top-3 left-3 rounded border border-line-2 bg-panel px-2.5 py-1 text-[11px] text-dim hover:text-ink"
-                  >
-                    Clear highlight ({highlight.size})
-                  </button>
-                )}
-                {selected && (
-                  <EntityPanel
-                    domain={active}
-                    uid={selected}
-                    entityTypes={entityTypes}
-                    version={version}
-                    onClose={() => setSelected(null)}
-                    onSelect={setSelected}
-                  />
-                )}
+              <section className="relative flex min-w-0 flex-col border-line lg:flex-1 lg:border-r max-lg:h-[56vh] max-lg:min-h-[320px] max-lg:shrink-0 max-lg:border-b">
+                <nav className="flex gap-1 border-b border-line px-3 py-1.5">
+                  {([['agents', 'Agents', Workflow], ['graph', `Knowledge graph · ${detail.stats.entity_count}`, Network]] as const).map(([id, label, Icon]) => (
+                    <button key={id} onClick={() => setView(id)}
+                      className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-xs ${view === id ? 'bg-gold/10 text-gold' : 'text-dim hover:text-ink'}`}>
+                      <Icon size={13} /> {label}
+                    </button>
+                  ))}
+                  {view === 'agents' && highlight.size > 0 && (
+                    <button onClick={() => setView('graph')} className="ml-auto rounded border border-gold/40 px-2 py-0.5 text-[11px] text-gold hover:bg-gold/10">
+                      See the {highlight.size} entities the Head used in the graph →
+                    </button>
+                  )}
+                </nav>
+                <div className="relative min-h-0 flex-1">
+                  {view === 'agents'
+                    ? <AgentView key={active} domain={active} />
+                    : <GraphPane key={active} domain={active} entityTypes={entityTypes} highlight={highlight} selected={selected}
+                        version={version} onSelect={setSelected} onClearHighlight={() => setHighlight(new Set())} />}
+                  {selected && (
+                    <EntityPanel
+                      domain={active}
+                      uid={selected}
+                      entityTypes={entityTypes}
+                      version={version}
+                      onClose={() => setSelected(null)}
+                      onSelect={setSelected}
+                    />
+                  )}
+                </div>
               </section>
 
               <aside className="flex w-full flex-col lg:w-[440px] lg:shrink-0 max-lg:min-h-[480px] max-lg:flex-1">
@@ -285,7 +280,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                     <ReportPanel key={active} domain={active} version={version} onHighlight={setHighlight} onSelect={setSelected} />
                   </div>
                   <div className={tab === 'actions' ? 'h-full' : 'hidden'}>
-                    <ActionsPanel key={active} domain={active} version={version} facts={factsById}
+                    <ActionsPanel key={active} domain={active} version={version}
                       onSelect={setSelected} onHighlight={setHighlight} onPending={setPendingActions} />
                   </div>
                   <div className={tab === 'research' ? 'h-full' : 'hidden'}>

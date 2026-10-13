@@ -18,7 +18,7 @@ import httpx
 
 from agents.reporter import write_briefing
 from agents.summarizer import summarize
-from core import auth
+from core import activity, auth
 from core import database as kgdb
 from core.database import ArcadeDB
 from core.tracing import llm_usage, observe
@@ -43,6 +43,13 @@ async def refresh_summaries(db: ArcadeDB, domain: str, since: str) -> dict:
     """Rewrite the summaries of entities whose facts changed since `since`."""
     uids = await kgdb.changed_entities(db, domain, since, SUMMARY_LIMIT)
     refreshed = 0
+    with activity.working(domain, "summarizer", f"{len(uids)} entity summaries"):
+        refreshed = await _refresh(db, domain, uids)
+    return {"candidates": len(uids), "refreshed": refreshed}
+
+
+async def _refresh(db: ArcadeDB, domain: str, uids: list[str]) -> int:
+    refreshed = 0
     with observe("refresh_summaries", input={"entities": len(uids)}):
         for i in range(0, len(uids), SUMMARY_BATCH):
             details = [d for u in uids[i:i + SUMMARY_BATCH] if (d := await kgdb.entity_detail(db, domain, u))]
@@ -51,7 +58,7 @@ async def refresh_summaries(db: ArcadeDB, domain: str, since: str) -> dict:
             for j, summary in (await summarize(items)).items():
                 await kgdb.set_entity_summary(db, domain, items[j]["uid"], summary)
                 refreshed += 1
-    return {"candidates": len(uids), "refreshed": refreshed}
+    return refreshed
 
 
 async def _research_runs(domain: str, since: str) -> list[dict] | None:
@@ -152,8 +159,9 @@ async def build_report(db: ArcadeDB, domain: str, hours: int = 24, refresh: bool
     _running.add(domain)
     started = time.monotonic()
     try:
-        with observe("daily_report", input={"hours": hours}, metadata={"domain": domain},
-                     tags=[domain, "report"]) as obs:
+        with activity.working(domain, "reporter", "the daily report"), \
+                observe("daily_report", input={"hours": hours}, metadata={"domain": domain},
+                        tags=[domain, "report"]) as obs:
             end_dt = datetime.now(timezone.utc)
             start, end = _iso(end_dt - timedelta(hours=hours)), _iso(end_dt)
             repaired = await kgdb.repair_name_keys(db, domain)  # names that leaked onto other entities

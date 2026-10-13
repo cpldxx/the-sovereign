@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
-from core import auth, crew
+from core import activity, auth, crew
 
 router = APIRouter(tags=["crew"])
 
@@ -37,3 +37,10 @@ async def api_review_sweep(domain_name: str, req: Request, minutes: float = 45):
     before the report)."""
     auth.require(domain_name, "editor")
     return await crew.review_sweep(req.app.state.db, domain_name, min(minutes, 240))
+
+
+@router.get("/domains/{domain_name}/activity")
+async def api_activity(domain_name: str, after: int = 0):
+    """What the agents are doing right now, and the hand-offs since `after` (the live agent view polls this)."""
+    auth.require(domain_name)
+    return activity.snapshot(domain_name, after)

@@ -492,13 +492,27 @@ async def merge_entities(db: ArcadeDB, domain: str, duplicate_uid: str, into_uid
 
 # ── Reads ──────────────────────────────────────────────────────────────────
 
-async def graph(db: ArcadeDB, domain: str) -> dict:
-    """All entities and facts (including superseded ones, marked valid=false)."""
+async def graph(db: ArcadeDB, domain: str, limit: int = 0, include: list[str] | tuple = ()) -> dict:
+    """Entities and the facts between them (superseded ones included, marked valid=false). With `limit`: the
+    `limit` most connected entities (valid facts, then mentions) plus `include` — what a view can draw without lag;
+    the graph itself keeps everything. `total` counts the whole graph."""
     if not await db.exists(domain):
-        return {"entities": [], "facts": []}
-    entities = await db.cypher(domain, f"MATCH (e:Entity) RETURN {_ENTITY_COLUMNS}")
-    facts = await db.cypher(domain, f"MATCH (a:Entity)-[r:Fact]->(b:Entity) RETURN {_FACT_COLUMNS}")
-    return {"entities": entities, "facts": [_fact(f) for f in facts]}
+        return {"entities": [], "facts": [], "total": {"entities": 0, "facts": 0}}
+    total = {"entities": (await db.sql(domain, "SELECT count(*) AS n FROM Entity"))[0]["n"],
+             "facts": (await db.cypher(domain, "MATCH (:Entity)-[r:Fact]->(:Entity) RETURN count(r) AS n"))[0]["n"]}
+    if limit and limit < total["entities"]:
+        ranked = await db.cypher(
+            domain, "MATCH (e:Entity) OPTIONAL MATCH (e)-[r:Fact]-(:Entity) WHERE r.invalid_at IS NULL "
+                    "WITH e, count(r) AS degree RETURN e.uid AS uid ORDER BY degree DESC, e.mentions DESC LIMIT $n",
+            n=limit)
+        uids = list(dict.fromkeys([r["uid"] for r in ranked] + list(include)))
+        entities = await db.cypher(domain, f"MATCH (e:Entity) WHERE e.uid IN $uids RETURN {_ENTITY_COLUMNS}", uids=uids)
+        facts = await db.cypher(domain, f"MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE a.uid IN $uids AND b.uid IN $uids "
+                                        f"RETURN {_FACT_COLUMNS}", uids=uids)
+    else:
+        entities = await db.cypher(domain, f"MATCH (e:Entity) RETURN {_ENTITY_COLUMNS}")
+        facts = await db.cypher(domain, f"MATCH (a:Entity)-[r:Fact]->(b:Entity) RETURN {_FACT_COLUMNS}")
+    return {"entities": entities, "facts": [_fact(f) for f in facts], "total": total}
 
 
 async def entity_detail(db: ArcadeDB, domain: str, uid: str) -> dict | None:

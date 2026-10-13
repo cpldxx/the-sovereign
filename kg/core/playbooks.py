@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 from agents.strategist import MAX_PLAYBOOKS, check_trigger, write_playbooks, write_trigger
 from agents.watcher import judge
-from core import actions, sensors
+from core import activity, actions, sensors
 from core import database as kgdb
 from core.database import ArcadeDB, now
 from core.names import name_key
@@ -187,6 +187,11 @@ async def _context(db: ArcadeDB, domain: str, description: str, catalog: list[di
 
 async def refresh(db: ArcadeDB, domain: str) -> dict:
     """Rewrite the domain's playbooks from the graph. On failure the current ones stay."""
+    with activity.working(domain, "strategist", "rewriting the playbooks"):
+        return await _refresh(db, domain)
+
+
+async def _refresh(db: ArcadeDB, domain: str) -> dict:
     description = load_domain(domain)["config"].get("description") or domain
     catalog = await actions.catalog(db, domain)
     current = {p["uid"]: p for p in await list_playbooks(db, domain)}
@@ -300,6 +305,11 @@ async def _trigger_for(db: ArcadeDB, domain: str, pb: dict, sensor_list: list[di
 
 async def evaluate(db: ArcadeDB, domain: str, since: str) -> dict:
     """Check every active playbook against the facts that changed since `since`; propose the triggered ones."""
+    with activity.working(domain, "watcher", "playbooks vs the day's changes"):
+        return await _evaluate(db, domain, since)
+
+
+async def _evaluate(db: ArcadeDB, domain: str, since: str) -> dict:
     changes = await kgdb.changes_since(db, domain, since)
     changed = ([{**f, "change": "new"} for f in changes["facts_created"]]
                + [{**f, "change": "confirmed by another source"} for f in changes["facts_strengthened"]]

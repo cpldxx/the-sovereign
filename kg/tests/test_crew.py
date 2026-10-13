@@ -254,3 +254,17 @@ async def test_a_review_round_that_decides_nothing_ends_the_sweep(team, monkeypa
     monkeypatch.setattr(crew, "_ask_head", head)
     out = await crew.review_sweep(db, domain, minutes=5)
     assert len(calls) == 1 and out["decided"] == 0 and out["pending"] == 1
+
+
+def test_the_activity_feed_shows_who_works_and_what_moves():
+    from core import activity
+    d = "activity_test"
+    start = activity.snapshot(d)["seq"]
+    with activity.working(d, "extractor", "page one"), activity.working(d, "extractor", "page two"):
+        activity.event(d, "head", "scout", "task", "find_sources: stock price")
+        snap = activity.snapshot(d, start)
+        assert snap["working"] == [{"agent": "extractor", "since": snap["working"][0]["since"],
+                                    "doing": ["page one", "page two"]}]
+        assert [(e["source"], e["target"], e["kind"]) for e in snap["events"]] == [("head", "scout", "task")]
+    after = activity.snapshot(d, snap["seq"])
+    assert after["working"] == [] and after["events"] == []

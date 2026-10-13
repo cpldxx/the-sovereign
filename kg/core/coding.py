@@ -20,7 +20,7 @@ import time
 import uuid
 
 from agents import coder
-from core import accounts, scout, sensors
+from core import accounts, activity, scout, sensors
 from core.database import ArcadeDB, now
 from domains.registry import load_domain
 from integrations import openhands
@@ -86,27 +86,32 @@ async def _attempt(j: dict, backend: str, description: str) -> tuple[str, dict]:
 
 async def _run(db: ArcadeDB, j: dict) -> None:
     async with _lock:
-        started = time.monotonic()
-        j["status"] = "coding"
-        try:
-            description = load_domain(j["domain"])["config"].get("description") or j["domain"]
-            if j["backend"] == "scout":
-                await scout.discover(db, j, description)
-                j["status"] = "done"
-            else:
-                try:
-                    code, sample = await _attempt(j, j["backend"], description)
-                except Exception as e:
-                    if j["backend"] != "openhands":
-                        raise
-                    # OpenHands is heavier (Docker-in-Docker, a 10 GB runtime): when it fails, the built-in Coder tries.
-                    j["log"].append(f"openhands failed ({type(e).__name__}: {str(e)[:200]}) — trying the built-in Coder")
-                    j.update(backend="openhands→builtin", status="coding")
-                    code, sample = await _attempt(j, "builtin", description)
-                j["result"] = sensors.clip(sample)[:3000]
-                author = "coder:" + ("builtin" if j["backend"].endswith("builtin") else j["backend"])
-                stored = await sensors.save(db, j["domain"], code, j["need"], author, sample)
-                j.update(status="done", sensor=stored["name"])
-        except Exception as e:
-            j.update(status="failed", error=f"{type(e).__name__}: {e}"[:1000])
-        j.update(finished_at=now(), seconds=round(time.monotonic() - started))
+        with activity.working(j["domain"], "scout" if j["backend"] == "scout" else "coder", j["need"]):
+            await _work(db, j)
+
+
+async def _work(db: ArcadeDB, j: dict) -> None:
+    started = time.monotonic()
+    j["status"] = "coding"
+    try:
+        description = load_domain(j["domain"])["config"].get("description") or j["domain"]
+        if j["backend"] == "scout":
+            await scout.discover(db, j, description)
+            j["status"] = "done"
+        else:
+            try:
+                code, sample = await _attempt(j, j["backend"], description)
+            except Exception as e:
+                if j["backend"] != "openhands":
+                    raise
+                # OpenHands is heavier (Docker-in-Docker, a 10 GB runtime): when it fails, the built-in Coder tries.
+                j["log"].append(f"openhands failed ({type(e).__name__}: {str(e)[:200]}) — trying the built-in Coder")
+                j.update(backend="openhands→builtin", status="coding")
+                code, sample = await _attempt(j, "builtin", description)
+            j["result"] = sensors.clip(sample)[:3000]
+            author = "coder:" + ("builtin" if j["backend"].endswith("builtin") else j["backend"])
+            stored = await sensors.save(db, j["domain"], code, j["need"], author, sample)
+            j.update(status="done", sensor=stored["name"])
+    except Exception as e:
+        j.update(status="failed", error=f"{type(e).__name__}: {e}"[:1000])
+    j.update(finished_at=now(), seconds=round(time.monotonic() - started))

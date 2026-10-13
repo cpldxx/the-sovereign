@@ -17,12 +17,14 @@ import os
 import re
 import time
 from collections import Counter, defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from agents.extractor import STATE, extract, relate
 from agents.linker import link
 from agents.resolver import resolve
 from agents.validator import validate
+from core import activity
 from core import database as kgdb
 from core.database import ArcadeDB, new_uid, now
 from core.embeddings import embed
@@ -136,6 +138,7 @@ class Report:
         self.facts: list[dict] = []
         self.reviews: list[str] = []
         self.timings = Timings()  # seconds per pipeline stage
+        self.label = ""           # what is being read, for the agent view
         self.chunks = 0
         self.gaps: Counter[str] = Counter()  # "relation:uses" / "type:person" → items the ontology could not hold
 
@@ -192,6 +195,7 @@ async def ingest(
         "content_status": content_status, "content_hash": digest, "created_at": now(),
     })
     report = Report(episode_uid)
+    report.label = (title or source)[:100]
     cap = PARTIAL_CAP if content_status == "partial" else 1.0
     start = time.perf_counter()
     with observe("ingest", input={"source": source, "title": title, "chars": len(text)},
@@ -214,6 +218,22 @@ async def ingest(
         if obs:
             obs.update(output={k: v for k, v in result.items() if isinstance(v, (int, dict)) and k != "entities"})
     return result
+
+
+# The agent each model stage is, for the live agent view.
+_STAGE_AGENT = {"extract": "extractor", "relate": "linker", "validate": "validator", "resolve_llm": "resolver",
+                "link_llm": "linker"}
+
+
+@contextmanager
+def _doing(report: "Report", domain: str, stage: str):
+    """A pipeline stage: timed, and — for a model stage — its agent shown as working on this source."""
+    with report.timings.stage(stage):
+        if agent := _STAGE_AGENT.get(stage):
+            with activity.working(domain, agent, report.label):
+                yield
+        else:
+            yield
 
 
 def _with_link(f: dict, kept: dict) -> str:
@@ -270,8 +290,7 @@ class _Read:
 
 async def _read_chunk(domain, description, grammar: Ontology, text, source, cap, report: Report) -> _Read | None:
     """Extract → code gates → relate → validate → embed: model calls only, so chunks are read side by side."""
-    stage = report.timings.stage
-    with stage("extract"):
+    with _doing(report, domain, "extract"):
         ex = await extract(text, domain, description, grammar, source)
 
     # ── Code gates: entities ───────────────────────────────────────────────
@@ -340,11 +359,11 @@ async def _read_chunk(domain, description, grammar: Ontology, text, source, cap,
     if not kept:
         return None
 
-    with stage("relate"):
+    with _doing(report, domain, "relate"):
         facts = await _restate(facts, kept, by_name, grammar.relation_types)
 
     # ── Validate facts against the text ────────────────────────────────────
-    with stage("validate"):
+    with _doing(report, domain, "validate"):
         # A fact is checked as the edge it becomes, not only as its sentence: "HBM is made by Samsung, SK hynix and
         # Micron" is true, yet ⟨Samsung —supplies→ Micron⟩ is not (seen 2026-10-12). A relation found in a statement
         # is checked as that relation ("Samsung manufactures HBM3E").
@@ -375,7 +394,7 @@ async def _read_chunk(domain, description, grammar: Ontology, text, source, cap,
     entity_keys = list(kept)
     texts = [f"{kept[k]['name']} ({kept[k]['type']}): {kept[k]['description']}" for k in entity_keys]
     texts += [f["fact"] for f in commit + weak]
-    with stage("embed"):
+    with _doing(report, domain, "embed"):
         try:
             vectors = await embed(texts)
         except Exception as e:
@@ -391,13 +410,12 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
     """Resolve → write entities → reviews → link → write facts. Run one chunk at a time per domain (_writing): a
     chunk must see the entities and facts the previous one wrote, or two chunks naming the same new thing would
     both create it."""
-    stage = report.timings.stage
     kept, commit, weak, entity_vec = r.kept, r.commit, r.weak, r.entity_vec
 
     # ── Resolve entities: name keys → candidates → LLM for the ambiguous ───
     uid_of: dict[str, str] = {}
     ambiguous = []
-    with stage("resolve_lookup"):
+    with _doing(report, domain, "resolve_lookup"):
         for key, e in kept.items():
             e["keys"] = sorted({key, *(name_key(a) for a in e["aliases"])} - {""})
             e["matches"] = await kgdb.entities_by_keys(db, domain, e["keys"])
@@ -416,7 +434,7 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
                           if c["similarity"] >= CANDIDATE_SIMILARITY and c["uid"] not in seen]
             if cands:
                 ambiguous.append((key, cands))
-    with stage("resolve_llm"):
+    with _doing(report, domain, "resolve_llm"):
         resolutions = await resolve([
             {"name": kept[k]["name"], "type": kept[k]["type"], "description": kept[k]["description"], "candidates": c}
             for k, c in ambiguous
@@ -428,7 +446,7 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
         elif r.duplicate_of:
             unsure_merge[key] = next(c for c in cands if c["uid"] == r.duplicate_of)
 
-    with stage("write_entities"):
+    with _doing(report, domain, "write_entities"):
         ts = now()
         for key, e in kept.items():
             # Names another entity already owns stay with it: they never move onto this one.
@@ -471,7 +489,7 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
     # Candidates: facts on the same entities (structural) + facts saying something similar (semantic) —
     # the latter catches an update stated about a different entity ("HBM3E is sold out" vs
     # "SK hynix says its HBM3E is no longer sold out").
-    with stage("link_lookup"):
+    with _doing(report, domain, "link_lookup"):
         candidates = []
         for f in commit:
             f["source_uid"], f["target_uid"] = uid_of[f["source"]], uid_of[f["target"]]
@@ -481,13 +499,13 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
                 cands += [c for c in await kgdb.search_facts(db, domain, f["embedding"], 5)
                           if c["similarity"] >= FACT_SIMILARITY and c["uid"] not in seen]
             candidates.append(cands)
-    with stage("link_llm"):
+    with _doing(report, domain, "link_llm"):
         to_link = [(i, c) for i, c in enumerate(candidates) if c]
         links = dict(zip(
             (i for i, _ in to_link),
             await link([{"fact": commit[i]["fact"], "candidates": c} for i, c in to_link]),
         ))
-    with stage("write_facts"):
+    with _doing(report, domain, "write_facts"):
         for i, f in enumerate(commit):
             names = {"source": kept[f["source"]]["name"], "target": kept[f["target"]]["name"]}
             by_uid = {c["uid"]: c for c in candidates[i]}
@@ -513,6 +531,8 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
                 ))
             report.fact(fact=f["fact"], relation=f["relation"], **names, uid=uid, status="created",
                         weight=f["reliability"], invalidated=invalidated)
+    if commit:
+        activity.event(domain, "linker", "graph", "write", f"{len(commit)} facts from {report.label}")
 
 
 # ── Head review decisions ──────────────────────────────────────────────────

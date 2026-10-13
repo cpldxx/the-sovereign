@@ -237,10 +237,9 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
   );
 }
 
-export function ActionsPanel({ domain, version, facts, onSelect, onHighlight, onPending }: {
+export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending }: {
   domain: string;
   version: number;
-  facts: Map<string, Fact>;
   onSelect: (uid: string) => void;
   onHighlight: (uids: Set<string>) => void;
   onPending: (count: number) => void;
@@ -251,10 +250,17 @@ export function ActionsPanel({ domain, version, facts, onSelect, onHighlight, on
   const [running, setRunning] = useState(false);
   const [catalog, setCatalog] = useState<ActionDef[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // The facts behind proposals and playbooks, fetched by uid (the app no longer loads the whole graph).
+  const [facts, setFacts] = useState<Map<string, Fact>>(new Map());
 
   const load = useCallback(async () => {
     try {
       const [ps, pb, cat] = await Promise.all([kg.proposals(domain), kg.playbooks(domain), kg.actions(domain)]);
+      const uids = [...new Set([...ps.flatMap(p => p.evidence ?? []), ...pb.playbooks.flatMap(b => b.evidence ?? [])])];
+      if (uids.length) {
+        const found = await kg.facts(domain, uids.slice(0, 200)).catch(() => []);
+        setFacts(new Map(found.map(f => [f.uid, f])));
+      }
       setProposals(ps);
       setPlaybooks(pb.playbooks);
       setRunning(pb.running);
