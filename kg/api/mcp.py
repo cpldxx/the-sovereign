@@ -18,6 +18,7 @@ import contextvars
 import functools
 import inspect
 import os
+import re
 from collections.abc import Callable
 from typing import Literal
 
@@ -275,6 +276,20 @@ async def list_playbooks(domain: str) -> list[dict]:
     return await playbooks.list_playbooks(db, domain)
 
 
+_INTERNALS = (
+    re.compile(r"\s*[(（][^()（）]*\b(?:weight|evidence|uid)\b[^()（）]*[)）]", re.I),
+    re.compile(r",?\s*\b(?:weight|evidence)\s*[=:]\s*[0-9.]+", re.I),
+    re.compile(r"\s*`?\b(?:f|e|ep|thre|prop|chat)_[0-9a-f]{8,}\b`?"),
+)
+
+
+def _scrub(text: str) -> str:
+    """Uids and weights a model copied into text a person reads (the same rule as Hermes' answers)."""
+    for pattern in _INTERNALS:
+        text = pattern.sub("", text)
+    return text
+
+
 @tool()
 async def propose_action(domain: str, action: str, params: dict | None = None, rationale: str = "",
                          evidence: list[str] | None = None) -> dict:
@@ -296,6 +311,8 @@ async def propose_action(domain: str, action: str, params: dict | None = None, r
             else:
                 rationale = rationale or str(value)
     rationale = rationale.strip() or str(params.get("message") or params.get("body") or "(no rationale given)")
+    if action in ("alert", "draft"):   # what the user reads carries no uids or weights (they go in `evidence`)
+        params = {k: _scrub(v) if isinstance(v, str) else v for k, v in params.items()}
     try:
         with activity.working(domain, "operator", action):
             p = await actions.propose(db, domain, action, params, rationale, evidence, source="head")

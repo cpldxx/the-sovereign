@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 import auth
 import voice
-from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, warm_up
+from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, scrub, warm_up
 
 
 @asynccontextmanager
@@ -105,7 +105,7 @@ class _Steps:
         elif e["type"] == "tool_start":
             if self.said.strip():
                 self.steps.append({"id": f"said-{len(self.steps)}", "name": "", "args": None, "done": True,
-                                   "said": self.said.strip()})
+                                   "said": scrub(self.said).strip()})
             self.said = ""
             args = e["args"] if isinstance(e["args"], dict) else {}
             self.steps.append({"id": e["id"], "name": e["name"], "done": False,

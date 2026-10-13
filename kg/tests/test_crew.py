@@ -385,3 +385,14 @@ def test_anyone_in_a_domain_may_keep_a_conversation_with_its_head():
     assert auth.needed("PATCH", "/domains/d/chat/chat_1") == ("d", "viewer")
     assert auth.needed("DELETE", "/domains/d/chat") == ("d", "viewer")
     assert auth.needed("POST", "/domains/d/ingest") == ("d", "editor")
+
+
+@pytest.mark.db
+async def test_an_alert_reads_without_uids_or_weights(db, team, monkeypatch):
+    from api import mcp
+    _, domain, _ = team
+    monkeypatch.setattr(mcp, "db", db)
+    monkeypatch.setattr(mcp, "_require", lambda d: None)
+    p = await mcp.propose_action(domain, "alert", {"title": "HBM 부족", "message":
+                                 "Micron 확인(f_fad13044abd5, weight=1.0), 2028년까지 지속, weight=0.9"}, "why", ["f_fad13044abd5"])
+    assert p["params"]["message"] == "Micron 확인, 2028년까지 지속" and p["evidence"] == ["f_fad13044abd5"]

@@ -96,11 +96,23 @@ function Outcome({ o, onOpen }: { o: NonNullable<Step['outcome']>; onOpen?: () =
   );
 }
 
+/** What the Head said before a tool: a line or two, the rest on demand (a model sometimes drafts its whole answer). */
+function Said({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 160;
+  return (
+    <div className="text-[12px] leading-snug text-dim [&_p]:my-0">
+      <div className={long && !open ? 'line-clamp-2' : ''}><Markdown>{text}</Markdown></div>
+      {long && <button onClick={() => setOpen(o => !o)} className="text-[10.5px] text-faint underline hover:text-ink">{open ? 'less' : 'more'}</button>}
+    </div>
+  );
+}
+
 function Steps({ steps, onOpenBriefing }: { steps: Step[]; onOpenBriefing?: () => void }) {
   return (
     <div className="mb-2 space-y-1">
       {steps.map(s => s.said ? (
-        <p key={s.id} className="text-[12px] leading-snug text-dim">{s.said}</p>
+        <Said key={s.id} text={s.said} />
       ) : s.outcome ? (
         <Outcome key={s.id} o={s.outcome} onOpen={onOpenBriefing} />
       ) : (

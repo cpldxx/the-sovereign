@@ -175,8 +175,10 @@ How you work:
 1. BEFORE answering a substantive question, call query_knowledge_graph; use get_entity to see everything known
    about one entity. Never answer domain questions from imagination when the graph can inform you. If the
    graph has nothing relevant, say so plainly.
-2. Ground every claim in facts: cite the fact, its weight and evidence count, and its source when it matters.
-   Treat weight < 0.5 as a weak signal and say so. Use superseded facts only to explain how things changed.
+2. Ground every claim in facts. Weights, evidence counts and uids are for YOU to judge how sure a fact is — the user
+   never sees them: say it in words ("confirmed by three sources", "a single report", "a weak signal" for weight
+   < 0.5), name a source when it matters, and put fact uids only in a tool's `evidence` field. Use superseded facts
+   only to explain how things changed.
 3. When the user gives you new information worth keeping (or says "ingest this"), call ingest_data and report
    what was stored, strengthened, superseded, rejected or sent to review.
 4. Review queue: ambiguous writes wait for you (list_reviews). Decide each with resolve_review and a short
@@ -208,7 +210,14 @@ How you work:
    such pages. Always check right before proposing an action that depends on it. Nothing these return is stored;
    ingest_data what is worth keeping. When the same live need keeps coming up and no sensor covers it, give the
    Scout the need: assign_task(domain, "scout", "find_sources", {{"need": …}}).
-10. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot."""
+10. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot.
+
+How you write to the user (answers, and the text of alerts and drafts):
+- In the user's language, and only that language. A question in Korean gets natural Korean from start to end —
+  no Chinese characters, no Japanese, no English words where Korean has one; only proper names and product names
+  stay as written (SK hynix, TSMC, HBM4).
+- No internals: no uids, weights, scores, field or tool names, JSON.
+- Call the tools you need first, then write the answer once — don't draft it before a tool call and repeat it."""
 
 
 def _unwrap(raw):
@@ -287,10 +296,13 @@ def _model_kwargs() -> dict:
         "api_key": "ollama",
         "model": model,
     }
+    # Hermes merges request_overrides into every chat request. qwen3.6 ships with presence_penalty 1.5, which Qwen
+    # itself warns "may occasionally result in language mixing": measured 2026-10-13, Korean answers drifted into
+    # Chinese and Japanese mid-sentence (年底, 但這, タイトネス). The KG's agents run at 0 for the same model (core/llm.py).
+    kwargs["request_overrides"] = {"presence_penalty": 0.0, "temperature": 0.7, "top_p": 0.8}
     if not HEAD_THINKING:
-        # Ollama's OpenAI-compatible API turns Qwen3 reasoning fully off with this
-        # (Hermes merges request_overrides into every chat request).
-        kwargs["request_overrides"] = {"reasoning_effort": "none"}
+        # Ollama's OpenAI-compatible API turns Qwen3 reasoning fully off with this.
+        kwargs["request_overrides"]["reasoning_effort"] = "none"
     return kwargs
 
 
@@ -347,6 +359,50 @@ def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSi
     )
 
 
+# ── What the user reads ────────────────────────────────────────────────────
+# The prompt asks for clean, one-language answers; these catch what a local model still lets through.
+_HANGUL = re.compile(r"[\uac00-\ud7a3]")
+_FOREIGN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")          # kana and Chinese characters
+_INTERNALS = (
+    re.compile(r"\s*[(（][^()（）]*\b(?:weight|evidence|uid)\b[^()（）]*[)）]", re.I),   # "(f_…, weight=1.0)"
+    re.compile(r",?\s*\b(?:weight|evidence)\s*[=:]\s*[0-9.]+", re.I),                  # ", weight=0.9"
+    re.compile(r"\s*`?\b(?:f|e|ep|thre|prop|chat)_[0-9a-f]{8,}\b`?"),                   # bare uids
+)
+
+
+def scrub(text: str) -> str:
+    """Remove uids and weights a model copied from its tools into text meant for a person."""
+    for pattern in _INTERNALS:
+        text = pattern.sub("", text)
+    return text
+
+
+def _korean_only(answer: str) -> str:
+    """One rewrite when a Korean answer drifted into Chinese or Japanese (the content stays; on failure, as is)."""
+    try:
+        r = httpx.post(f"{OLLAMA_BASE_URL.rstrip('/')}/chat/completions", timeout=180, json={
+            "model": HEAD_MODEL.partition(":")[2], "stream": False, "temperature": 0.2, "presence_penalty": 0.0,
+            "reasoning_effort": "none",
+            "messages": [
+                {"role": "system", "content": "Rewrite the text in natural Korean only. Replace every Chinese "
+                 "character, Japanese word and needless English word with Korean; keep proper names and product "
+                 "names (SK hynix, TSMC, HBM4), numbers, markdown and meaning exactly. Output only the rewritten text."},
+                {"role": "user", "content": answer}]})
+        r.raise_for_status()
+        fixed = r.json()["choices"][0]["message"]["content"].strip()
+        return fixed if fixed and len(_FOREIGN.findall(fixed)) < len(_FOREIGN.findall(answer)) else answer
+    except (httpx.HTTPError, KeyError, IndexError, ValueError) as e:
+        print(f"[Hermes] Korean rewrite failed: {type(e).__name__}", flush=True)
+        return answer
+
+
+def tidy(message: str, answer: str) -> str:
+    answer = scrub(answer or "")
+    if _HANGUL.search(message) and _FOREIGN.search(answer):
+        answer = scrub(_korean_only(answer))
+    return answer
+
+
 def ask_head(
     domain: str,
     message: str,
@@ -369,4 +425,4 @@ def ask_head(
         agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice, tools=tools)
         nudge = f"{message}\n\n(Call the tools through the tool-calling interface — do not write them as text.)"
         answer = agent.run_conversation(nudge, conversation_history=history or None)["final_response"]
-    return answer
+    return tidy(message, answer)
