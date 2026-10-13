@@ -519,7 +519,8 @@ ROSTER: dict[str, Member] = {m.name: m for m in [
     _member("ontologist", "Ontologist", "designs the domain's grammar: its entity types and relations",
             _desk_ontologist, Task("propose", "Propose an ontology from recent sources (not applied)", Propose,
                                    _propose)),
-    _member("strategist", "Strategist", "turns what the graph knows into playbooks: if this happens, do that",
+    _member("strategist", "Strategist", "turns what the graph knows into playbooks (if this happens, do that) and "
+            "decides what the graph should learn next from what it is unsure or silent about",
             _desk_strategist, Task("refresh_playbooks", "Rewrite the playbooks from the graph now", Nothing,
                                    _refresh_playbooks)),
     _member("watcher", "Watcher", "checks new knowledge and live triggers against the playbooks and reports what fired "

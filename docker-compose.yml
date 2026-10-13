@@ -195,6 +195,7 @@ services:
       SOVEREIGN_KG_URL: http://kg:8080
       SOVEREIGN_RESEARCH_URL: http://research:8070
       SOVEREIGN_HERMES_URL: http://hermes:8090     # the crew wakes the Head when a teammate reports
+      SOVEREIGN_TIMEZONE: ${SOVEREIGN_TIMEZONE:-}       # learning cycles run in this timezone until set in the UI
       SOVEREIGN_DOMAINS_DIR: /data/domains
       SCOUT_CATALOG: /data/scout-catalog.json
       LANGFUSE_BASE_URL: http://langfuse-web:3000

@@ -396,3 +396,28 @@ async def test_an_alert_reads_without_uids_or_weights(db, team, monkeypatch):
     p = await mcp.propose_action(domain, "alert", {"title": "HBM 부족", "message":
                                  "Micron 확인(f_fad13044abd5, weight=1.0), 2028년까지 지속, weight=0.9"}, "why", ["f_fad13044abd5"])
     assert p["params"]["message"] == "Micron 확인, 2028년까지 지속" and p["evidence"] == ["f_fad13044abd5"]
+
+
+@pytest.mark.db
+async def test_forgetting_retires_unconfirmed_weak_facts_and_what_only_they_held(team):
+    from core import learning
+    db, domain, _ = team
+    await db.cypher(domain, "CREATE (:Entity {uid: 'e_a', name: 'A'}), (:Entity {uid: 'e_b', name: 'B'}), "
+                            "(:Entity {uid: 'e_c', name: 'C'})")
+    from core.database import edge_type
+    old, rel = "2026-01-01T00:00:00+00:00", edge_type("supplies")
+    await db.sql(domain, f"CREATE EDGE TYPE `{rel}` IF NOT EXISTS EXTENDS Fact")
+    for uid, a, b, ev, dis, fact in [("f_weak", "e_a", "e_b", 1, 0.7, "A may supply B (one blog)"),
+                                     ("f_strong", "e_a", "e_c", 3, 0.1, "A supplies C"),
+                                     ("f_fresh", "e_c", "e_b", 1, 0.7, "C may supply B")]:
+        created = old if uid != "f_fresh" else "2099-01-01T00:00:00+00:00"
+        await db.cypher(domain, f"MATCH (a:Entity {{uid: $a}}), (b:Entity {{uid: $b}}) CREATE (a)-[:`{rel}` "
+                                "{uid: $uid, fact: $fact, evidence: $ev, disbelief: $dis, created_at: datetime($c)}]->(b)",
+                        a=a, b=b, uid=uid, fact=fact, ev=ev, dis=dis, c=created)
+    dry = await learning.forget(db, domain, 30, dry_run=True)
+    assert dry["facts"] == 1 and dry["entities"] == 0          # B still has the fresh fact, A the strong one
+    out = await learning.forget(db, domain, 30)
+    assert out == dry
+    rows = await db.cypher(domain, "MATCH ()-[r:Fact]->() RETURN r.uid AS uid, r.invalid_reason AS why")
+    assert {r["uid"]: (r["why"] or "") for r in rows}["f_weak"].startswith("forgotten")
+    assert learning.FORGOTTEN not in ({r["uid"]: (r["why"] or "") for r in rows}["f_strong"])

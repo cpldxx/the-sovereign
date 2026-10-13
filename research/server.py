@@ -8,6 +8,7 @@ research_status / list_research show the jobs.
 """
 
 import asyncio
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -30,83 +31,121 @@ from pydantic import BaseModel  # noqa: E402
 from sovereign_research import auth, fetch, runner, search  # noqa: E402
 from sovereign_research.jobs import KG_URL, Jobs  # noqa: E402
 
-NIGHTLY = os.getenv("RESEARCH_NIGHTLY", "on").lower() in ("1", "on", "true", "yes")
-NIGHTLY_HOUR = int(os.getenv("RESEARCH_NIGHTLY_HOUR", "3"))  # local time
-REVIEW_MINUTES = int(os.getenv("NIGHTLY_REVIEW_MINUTES", "45"))   # the Head's review budget per domain
+# Each domain learns on its own schedule (Settings › Learning: times in the user's timezone, kept by the KG —
+# kg/core/learning.py). RESEARCH_SCHEDULE=off stops every cycle; runs can still be started by hand.
+SCHEDULE = os.getenv("RESEARCH_SCHEDULE", os.getenv("RESEARCH_NIGHTLY", "on")).lower() in ("1", "on", "true", "yes")
+REVIEW_MINUTES = int(os.getenv("NIGHTLY_REVIEW_MINUTES", "45"))   # the Head's review budget per domain and cycle
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8088").rstrip("/")
-REPORT_WAIT = 18 * 3600  # seconds the nightly report waits for a domain's research runs
+REPORT_WAIT = 18 * 3600  # seconds a cycle waits for its research runs before the rest of it goes ahead
+SLOTS_FILE = Path(os.getenv("RESEARCH_DATA") or HERE / ".data") / "cycles.json"
 
 jobs = Jobs()
+_cycling: set[str] = set()
 
 
-async def nightly() -> None:
-    """Once a day at NIGHTLY_HOUR: a 'what's new' run per domain (a bootstrap for never-researched ones),
-    then — once a domain's runs are finished — its daily report (the KG refreshes stale summaries first)."""
-    ran_on: str | None = None
+def _slots() -> dict[str, list[str]]:
+    try:
+        return json.loads(SLOTS_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _ran(domain: str, slot: str) -> None:
+    done = _slots()
+    done[domain] = (done.get(domain, []) + [slot])[-30:]   # a restart doesn't run a slot twice
+    SLOTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SLOTS_FILE.write_text(json.dumps(done))
+
+
+async def scheduler() -> None:
+    """Every minute: start a domain's learning cycle when one of its times comes."""
+    checked_on: str | None = None
     while True:
-        await asyncio.sleep(600)
-        today = datetime.now().date().isoformat()
-        if datetime.now().hour != NIGHTLY_HOUR or ran_on == today:
-            continue
-        ran_on = today
+        await asyncio.sleep(60)
         try:
-            async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=300) as kg:
-                # The safeguards first: a failure becomes a critical alert in every domain.
-                check = (await kg.post("/system/selfcheck")).json()
-                print(f"[Research] nightly: security self-check {'ok' if check.get('ok') else 'FAILED'}: "
-                      f"{ {k: v['status'] for k, v in check.get('checks', {}).items()} }", flush=True)
+            async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=60) as kg:
                 domains = [d["id"] for d in (await kg.get("/domains")).json()["domains"]]
+                due = {}
+                for d in domains:
+                    r = await kg.get(f"/domains/{d}/learning")
+                    slot = r.json().get("due") if r.is_success else None
+                    if slot and slot not in _slots().get(d, []) and d not in _cycling:
+                        due[d] = slot
+                if due and checked_on != datetime.now().date().isoformat():
+                    # The safeguards first, once a day: a failure becomes a critical alert in every domain.
+                    checked_on = datetime.now().date().isoformat()
+                    check = (await kg.post("/system/selfcheck")).json()
+                    print(f"[Research] security self-check {'ok' if check.get('ok') else 'FAILED'}: "
+                          f"{ {k: v['status'] for k, v in check.get('checks', {}).items()} }", flush=True)
         except httpx.HTTPError as e:
-            print(f"[Research] nightly: KG unreachable ({type(e).__name__})", flush=True)
+            print(f"[Research] schedule: KG unreachable ({type(e).__name__})", flush=True)
             continue
-        for d in domains:
-            if jobs.active(d):
-                continue
+        for d, slot in due.items():
+            _ran(d, slot)
+            start_cycle(d, slot)
+
+
+def start_cycle(domain: str, slot: str) -> None:
+    _cycling.add(domain)
+    task = asyncio.get_running_loop().create_task(cycle(domain, slot))
+    task.add_done_callback(lambda _t: _cycling.discard(domain))
+
+
+async def cycle(d: str, slot: str) -> None:
+    """One learning cycle (kg/core/learning.py): learn what's new and what the graph is unsure of, then keep what
+    holds, forget what never did, and brief."""
+    started, summary = time.monotonic(), {"slot": slot, "started_at": jobs_now(), "questions": [], "runs": []}
+    print(f"[Research] {d}: learning cycle {slot}", flush=True)
+    async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=httpx.Timeout(3600, connect=10)) as kg:
+        async def step(label: str, method: str, path: str, show=lambda b: b, **kw):
+            try:
+                r = await kg.request(method, path, **kw)
+                body = r.json() if r.is_success else None
+                print(f"[Research] {d}: {label}: {show(body) if body is not None else f'failed ({r.status_code})'}",
+                      flush=True)
+                return body
+            except (httpx.HTTPError, ValueError) as e:
+                print(f"[Research] {d}: {label} failed ({type(e).__name__})", flush=True)
+                return None
+
+        # Learn: what's new (a first bootstrap for a new domain), then the questions for the graph's gaps.
+        if not jobs.active(d):
             mode = "update" if jobs.last(d, "bootstrap") else "bootstrap"
-            jobs.submit(d, mode)
-            print(f"[Research] nightly: queued {mode} for {d}", flush=True)
-        await daily_reports(domains)
-
-
-async def daily_reports(domains: list[str]) -> None:
-    """Each domain's sensor check, daily report and playbook cycle, as soon as its research runs are finished (runs are
-    sequential). A run still going after REPORT_WAIT doesn't hold them back — nor the next night, which waits
-    on this loop."""
-    pending = list(domains)
-    deadline = time.monotonic() + REPORT_WAIT
-    while pending:
-        idle = [d for d in pending if not jobs.active(d) or time.monotonic() > deadline]
-        for d in idle:
-            pending.remove(d)
-            # Summary refresh + report is LLM work on the KG side: minutes with a local model. Each step on its
-            # own: one that fails (the KG busy or briefly unreachable) doesn't skip the ones after it.
-            async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(), timeout=httpx.Timeout(3600, connect=10)) as kg:
-                async def step(label: str, path: str, show, **kw) -> None:
-                    try:
-                        r = await kg.post(path, **kw)
-                        print(f"[Research] nightly: {label} for {d}: "
-                              f"{show(r.json()) if r.is_success else f'failed ({r.status_code})'}", flush=True)
-                    except httpx.HTTPError as e:
-                        print(f"[Research] nightly: {label} for {d} failed ({type(e).__name__})", flush=True)
-
-                # Every sensor source read once: broken ones sink, thin sensors get scouted again.
-                await step("sensors", f"/domains/{d}/sensors/check", lambda b: b.get("sensors"))
-                # The Head decides the day's ambiguous writes (weak facts, merges, links) before the report, so the
-                # report shows what it kept (the KG also has it do so every half hour).
-                await step("Head reviews", f"/domains/{d}/head-review", lambda b: b, params={"minutes": REVIEW_MINUTES})
-                await step("report", f"/domains/{d}/reports", lambda b: b.get("headline", ""), json={"hours": 24, "wait": True})
-                # Then the playbooks: today's changes checked against them (what fires is reported to the Head),
-                # and the set rewritten from the graph.
-                await step("playbooks", f"/domains/{d}/playbooks/cycle", lambda b: b, json={"hours": 24, "wait": True})
-        if pending:
+            summary["runs"].append(jobs.submit(d, mode)["id"])
+            if mode == "update":
+                asked = await step("questions", "POST", f"/domains/{d}/learning/questions",
+                                   lambda b: [q["question"] for q in b.get("questions", [])])
+                for q in (asked or {}).get("questions", []):
+                    summary["questions"].append(q)
+                    summary["runs"].append(jobs.submit(d, "mission", q["question"])["id"])
+        while jobs.active(d) and time.monotonic() - started < REPORT_WAIT:
             await asyncio.sleep(60)
+        # Keep and forget: live sources checked, unconfirmed weak facts retired, the Head decides the review
+        # queue — so the report shows what the graph now holds — then the briefing and the playbooks.
+        await step("sensors", "POST", f"/domains/{d}/sensors/check", lambda b: b.get("sensors"))
+        forgot = await step("forget", "POST", f"/domains/{d}/learning/forget", json={"dry_run": False})
+        await step("Head reviews", "POST", f"/domains/{d}/head-review", params={"minutes": REVIEW_MINUTES})
+        await step("report", "POST", f"/domains/{d}/reports", lambda b: b.get("headline", ""),
+                   json={"hours": 24, "wait": True})
+        await step("playbooks", "POST", f"/domains/{d}/playbooks/cycle", json={"hours": 24, "wait": True})
+        ran = [jobs.get(j) for j in summary["runs"]]
+        summary.update(
+            finished_at=jobs_now(),
+            runs=[{"id": j["id"], "mode": j["mode"], "question": j.get("question", ""), "status": j["status"],
+                   "error": (j.get("error") or "")[:200], "summary": j.get("summary") or {}} for j in ran if j],
+            forgotten={k: (forgot or {}).get(k, 0) for k in ("facts", "entities")})
+        await step("record", "PUT", f"/domains/{d}/learning/last", lambda b: "ok", json=summary)
+
+
+def jobs_now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tasks = [asyncio.create_task(jobs.worker())]
-    if NIGHTLY:
-        tasks.append(asyncio.create_task(nightly()))
+    if SCHEDULE:
+        tasks.append(asyncio.create_task(scheduler()))
     yield
     for t in tasks:
         t.cancel()
@@ -122,6 +161,19 @@ app.add_middleware(CORSMiddleware, allow_origins=auth.ORIGINS, allow_credentials
 class ResearchRequest(BaseModel):
     mode: Literal["bootstrap", "update", "mission"] = "update"
     question: str = ""
+
+
+@app.post("/domains/{domain}/cycle")
+async def run_cycle(domain: str):
+    """Run a learning cycle now: what's new, the graph's open questions, then keep, forget and brief."""
+    if domain in _cycling:
+        raise HTTPException(status_code=409, detail="A learning cycle is already running for this domain")
+    async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain), timeout=10) as kg:
+        if (await kg.get(f"/domains/{domain}")).status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Domain '{domain}' does not exist")
+    slot = f"manual {jobs_now()[:16]}"
+    start_cycle(domain, slot)
+    return {"started": slot}
 
 
 @app.post("/domains/{domain}/research")
@@ -217,10 +269,11 @@ async def health():
         "model": runner.model_name(),
         "search": runner.search_provider(),
         # An API search provider doesn't need the local SearXNG.
-        "searxng": runner.search_provider() != "searxng"
-        or await up(f"{SEARXNG_URL}/search", params={"q": "ping", "format": "json"}),
+        # SearXNG's own health check: a real search waits on its slowest engine (DuckDuckGo timing out made it
+        # look down while results came back).
+        "searxng": runner.search_provider() != "searxng" or await up(f"{SEARXNG_URL}/healthz"),
         "crawler": await up(f"{fetch.CRAWL4AI_URL}/health"),
-        "nightly": f"{NIGHTLY_HOUR:02d}:00" if NIGHTLY else "off",
+        "schedule": "per domain (Settings › Learning)" if SCHEDULE else "off",
         "tracing": runner.tracing(),
     }
 

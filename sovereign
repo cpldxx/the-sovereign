@@ -22,6 +22,9 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The Mac's timezone, for the learning cycles' schedule (the containers run on UTC).
+SOVEREIGN_TIMEZONE="${SOVEREIGN_TIMEZONE:-$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')}"
+export SOVEREIGN_TIMEZONE
 LOGS="$ROOT/.logs"
 RUN="$ROOT/.run"
 AGENT="$HOME/Library/LaunchAgents/com.sovereign.start.plist"

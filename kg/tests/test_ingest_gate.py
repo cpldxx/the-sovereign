@@ -200,3 +200,21 @@ def test_an_english_name_for_a_thing_a_korean_text_names_passes_the_mention_gate
     assert _translated(["Fair Trade Commission"], korean)                 # no alias: English name, Korean text
     assert not _translated(["Fair Trade Commission"], "The FTC imposed sanctions for collusion.")   # English text
     assert not _translated(["공정위"], korean)                             # a Korean name must be in the text
+
+
+def test_a_learning_cycle_is_due_once_per_slot_in_the_users_timezone():
+    from datetime import datetime, timezone
+    from core.learning import check, due, LearningError
+    s = {"enabled": True, "times": ["03:00", "15:00"], "timezone": "America/New_York"}
+    at = datetime(2026, 10, 13, 7, 10, tzinfo=timezone.utc)          # 03:10 in New York
+    assert due(s, at, set()) == "2026-10-13 03:00"
+    assert due(s, at, {"2026-10-13 03:00"}) is None                     # ran already
+    assert due(s, datetime(2026, 10, 13, 8, 0, tzinfo=timezone.utc), set()) is None   # 04:00: window closed
+    assert due({**s, "enabled": False}, at, set()) is None
+    for bad in ({"times": ["9:00"]}, {"times": ["25:00"]}, {"timezone": "Mars/Base"}, {"curiosity": 9}):
+        try:
+            check(bad)
+            raise AssertionError(bad)
+        except LearningError:
+            pass
+    assert check({"times": ["15:00", "03:00", "03:00"]}) == {"times": ["03:00", "15:00"]}

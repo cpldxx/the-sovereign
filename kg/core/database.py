@@ -16,6 +16,7 @@ One ArcadeDB database per domain:
     Playbook   (document) a pre-computed "if this happens, do that" rule derived from the graph
     Sensor     (document) a live-data tool: name, description, params, code, last run…
     ChatTurn   (document) one side of a person's conversation with the Head (core/chat.py)
+    Setting    (document) a domain setting by key, e.g. "learning" (core/learning.py)
 
 A synapse's strength is a noisy-OR over its independent sources:
     weight = 1 - disbelief,  disbelief = Π (1 - reliability of each distinct source)
@@ -90,6 +91,9 @@ CREATE PROPERTY Message.thread IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Message (thread) NOTUNIQUE;
 CREATE PROPERTY Message.status IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Message (status) NOTUNIQUE;
+CREATE DOCUMENT TYPE Setting IF NOT EXISTS;
+CREATE PROPERTY Setting.uid IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON Setting (uid) UNIQUE;
 CREATE DOCUMENT TYPE ChatTurn IF NOT EXISTS;
 CREATE PROPERTY ChatTurn.uid IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON ChatTurn (uid) UNIQUE;

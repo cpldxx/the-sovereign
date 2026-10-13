@@ -144,3 +144,31 @@ _check_agent = Agent(MODEL, name="trigger_check", model_settings=model_settings(
 async def check_trigger(situation: str, trigger: str) -> TriggerCheck:
     """Raises on failure (the caller treats it as not checked)."""
     return (await _check_agent.run(f"SITUATION: {situation}\n\nTRIGGER: {trigger}")).output
+
+
+# ── What to learn next ─────────────────────────────────────────────────────
+# The learning cycle's curiosity: from what the graph is unsure or silent about, the questions worth researching.
+
+class ResearchQuestion(BaseModel):
+    question: str = Field(description="One research question a web search can answer, specific and self-contained")
+    why: str = Field(description="Which gap it closes, in one short sentence")
+
+
+class ResearchQuestions(BaseModel):
+    questions: list[ResearchQuestion] = Field(default_factory=list)
+
+
+CURIOUS = """You decide what the "{domain}" knowledge graph should learn next. Domain: {description}
+Below is what the graph is unsure or silent about. Write at most {n} research questions that would close the most
+important gaps for this domain: confirm what rests on one weak source, refresh what may be stale, answer what users
+asked and the graph could not, and find what the ontology lacked words for. Each question is specific (names, the
+period), self-contained and answerable from public web pages. Skip anything off-domain or trivial. Fewer good
+questions beat many vague ones; none is fine if nothing matters."""
+
+
+async def research_questions(domain: str, description: str, gaps: str, n: int) -> ResearchQuestions:
+    agent = Agent(MODEL, name="strategist", model_settings=model_settings(), output_type=ResearchQuestions, retries=2,
+                  system_prompt=CURIOUS.format(domain=domain, description=description, n=n))
+    out = (await agent.run(gaps)).output
+    out.questions = out.questions[:n]
+    return out
