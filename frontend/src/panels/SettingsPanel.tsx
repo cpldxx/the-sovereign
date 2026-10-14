@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import type { DomainDetail, Ontology } from '../lib/api';
 import { ActionsPanel } from './ActionsPanel';
+import { LearningPanel } from './LearningPanel';
 import { SubNav } from './BriefingPanel';
 import { OntologyPanel } from './OntologyPanel';
 import { ReviewPanel } from './ReviewPanel';
 
-type View = 'playbooks' | 'sensors' | 'apis' | 'ontology' | 'review';
+type View = 'learning' | 'playbooks' | 'sensors' | 'apis' | 'ontology' | 'review';
 
-/** What you set up once and look at now and then: the playbooks, live-data sensors, connected APIs, the grammar
+/** What you set up once and look at now and then: how the graph learns by itself, the playbooks, live-data sensors, connected APIs, the grammar
  * of the graph, and the Head's review decisions (to overrule one). Day to day, the Head runs all of it. */
 export function SettingsPanel({ domain, detail, ontology, version, onSelect, onHighlight, onPending, onChanged, onOntologyChanged }: {
   domain: string;
@@ -20,12 +21,12 @@ export function SettingsPanel({ domain, detail, ontology, version, onSelect, onH
   onChanged: () => Promise<void>;
   onOntologyChanged: () => Promise<void>;
 }) {
-  const [view, setView] = useState<View>('playbooks');
+  const [view, setView] = useState<View>('learning');
   const reviews = detail.stats.pending_reviews;
   return (
     <div className="flex h-full flex-col">
       <SubNav value={view} onChange={setView} items={[
-        ['playbooks', 'Playbooks'], ['sensors', 'Sensors'], ['apis', 'APIs'], ['ontology', 'Ontology'],
+        ['learning', 'Learning'], ['playbooks', 'Playbooks'], ['sensors', 'Sensors'], ['apis', 'APIs'], ['ontology', 'Ontology'],
         ['review', reviews ? `Review · ${reviews}` : 'Review'],
       ]} />
       <div className="min-h-0 flex-1">
@@ -33,6 +34,7 @@ export function SettingsPanel({ domain, detail, ontology, version, onSelect, onH
           <ActionsPanel key={view} domain={domain} version={version} view={view === 'apis' ? 'catalog' : view}
             onSelect={onSelect} onHighlight={onHighlight} onPending={onPending} />
         )}
+        {view === 'learning' && <LearningPanel domain={domain} editable={detail.role !== 'viewer'} />}
         {view === 'ontology' && ontology && (
           <OntologyPanel domain={domain} ontology={ontology} generated={detail.ontology_generated}
             counts={detail.stats.categories} onChanged={onOntologyChanged} />

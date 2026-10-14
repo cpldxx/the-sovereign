@@ -409,7 +409,16 @@ Every endpoint but `/health` and the sign-in ones needs a session cookie or `Aut
 | `POST` | `/fetch` | Read one page now `{url}` — robots.txt, SSRF guard, pacing, crawl4ai |
 | `GET` | `/health` | Model, SearXNG, crawler, nightly schedule |
 
-Every night (03:00, `RESEARCH_NIGHTLY_HOUR`) each domain gets a "what's new" run — or a bootstrap if it never had one — and, once its runs are finished, its sensor check, Head review, daily report and playbook cycle (each step on its own: one that fails doesn't skip the rest). A run that can't reach the KG before its research is done (a timeout — e.g. the Mac swapping) is tried once more 10 min later (`RESEARCH_RETRY_MINUTES`).
+**Learning cycles** — each domain grows by itself on the schedule you set in Settings › Learning (times in your
+timezone, several a day if you like; default 03:00 in the Mac's timezone). A cycle: a "what's new" run (a bootstrap
+for a new domain), plus research questions the Strategist picks from what the graph is unsure or silent about —
+facts resting on one weak source, well-connected entities nothing new was heard about for a month, questions you
+asked that the Head had to take to the web, words the ontology lacked (`curiosity`, 0–5 a cycle). Once its runs are
+done: sensor check, **forgetting** (a fact from one weak source nobody confirmed in `forget_after_days`, default 30, is
+retired — kept as history, never used as an answer; an entity left with nothing else goes; nothing a pending review
+or playbook relies on), Head review, daily report and playbook cycle, each step on its own (one that fails doesn't
+skip the rest). Settings › Learning shows the last cycle (questions, facts learned / confirmed / forgotten), what the
+graph is unsure about now, and runs one on demand (`POST research /domains/{d}/cycle`). A run that can't reach the KG before its research is done (a timeout — e.g. the Mac swapping) is tried once more 10 min later (`RESEARCH_RETRY_MINUTES`).
 
 Search uses the local SearXNG by default. Its free engines throttle heavy use (searches are paced, and Sovereign never works around a block); for reliable daily research set `TAVILY_API_KEY` or `BRAVE_API_KEY` in `research/.env` (both have free tiers).
 

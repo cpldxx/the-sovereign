@@ -90,6 +90,32 @@ export interface TeamAgent {
   queued: number;
 }
 
+/** How a domain learns by itself (kg/core/learning.py). */
+export interface LearningSettings {
+  enabled: boolean;
+  times: string[];          // HH:MM in `timezone`
+  timezone: string;
+  curiosity: number;        // research questions it pursues per cycle
+  forget_after_days: number; // 0: never
+}
+
+export interface LearningCycle {
+  slot: string;
+  started_at: string;
+  finished_at?: string;
+  questions: { question: string; why: string }[];
+  runs: { id: string; mode: string; question: string; status: string; error: string;
+          summary: { pages_read?: number; facts_created?: number; facts_strengthened?: number; facts_invalidated?: number } }[];
+  forgotten?: { facts: number; entities: number };
+}
+
+export interface LearningGaps {
+  weak: { entity: string; weak_facts: number }[];
+  stale: { entity: string; facts: number; last: string }[];
+  unanswered: string[];
+  ontology: string[];
+}
+
 export interface ChatTurn {
   uid: string;
   role: 'user' | 'assistant';
@@ -710,6 +736,15 @@ export const kg = {
   thread: (id: string, uid: string) =>
     request<CrewThread & { messages: CrewMessage[] }>(KG_API, `${d(id)}/threads/${encodeURIComponent(uid)}`),
 
+  learning: (id: string) =>
+    request<{ settings: LearningSettings; last: LearningCycle | null; due: string | null }>(KG_API, `${d(id)}/learning`),
+
+  saveLearning: (id: string, changes: Partial<LearningSettings>) =>
+    request<{ settings: LearningSettings }>(KG_API, `${d(id)}/learning`, { method: 'PUT', body: JSON.stringify(changes) })
+      .then(r => r.settings),
+
+  learningGaps: (id: string) => request<LearningGaps>(KG_API, `${d(id)}/learning/gaps`),
+
   /** Your conversation with the Head, kept in the KG (Hermes writes each question and answer as it happens). */
   chat: (id: string) => request<{ turns: ChatTurn[] }>(KG_API, `${d(id)}/chat`).then(r => r.turns),
 
@@ -730,8 +765,11 @@ export const kg = {
 // ── Research (DeerFlow) ─────────────────────────────────────────────────────
 
 export const research = {
-  health: () => request<{ research: boolean; config?: boolean; last_failed?: string | null; model: string; searxng: boolean; crawler: boolean; nightly: string; tracing: boolean }>(
+  health: () => request<{ research: boolean; config?: boolean; last_failed?: string | null; model: string; searxng: boolean; crawler: boolean; schedule: string; tracing: boolean }>(
     RESEARCH_API, '/health'),
+
+  /** A learning cycle now: what's new, the graph's open questions, then keep, forget and brief. */
+  cycle: (id: string) => request<{ started: string }>(RESEARCH_API, `${d(id)}/cycle`, { method: 'POST' }),
 
   start: (id: string, mode: ResearchMode, question = '') =>
     request<ResearchJob>(RESEARCH_API, `${d(id)}/research`, json({ mode, question })),
