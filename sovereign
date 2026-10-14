@@ -191,6 +191,10 @@ up() {
     pull() { (cd "$ROOT" && docker compose exec -T ollama ollama pull "$1"); }
     have() { (cd "$ROOT" && docker compose exec -T ollama ollama list) 2>/dev/null | awk '{print $1}' | grep -qx "$1"; }
   else
+    # Back to the host's Ollama: an earlier `up --ollama` left the container's addresses in .env (only those — an
+    # address set by hand, e.g. Ollama on another machine, stays).
+    [[ "$(env_get OLLAMA_BASE_URL)" == http://ollama:11434* ]] && env_set OLLAMA_BASE_URL http://host.docker.internal:11434/v1
+    [[ "$(env_get OLLAMA_HOST)" == http://ollama:11434* ]] && env_set OLLAMA_HOST http://host.docker.internal:11434
     curl -fsS -m 5 http://localhost:11434/api/tags >/dev/null 2>&1 || {
       echo "Ollama isn't running on this machine. Install it (https://ollama.com) and start it — or use: ./sovereign up --ollama"
       exit 1; }
@@ -201,13 +205,21 @@ up() {
     have "$m" || { echo "pulling model $m (once; large models take a while)…"; pull "$m"; }
   done
   echo "building the sensor sandbox image…"
-  docker build -q -t sovereign-sandbox:4 "$ROOT/docker/sandbox" >/dev/null
+  docker build -q -t sovereign-sandbox:5 "$ROOT/docker/sandbox" >/dev/null   # the tag in kg/core/sensors.py
   echo "building and starting the containers (the first build takes several minutes)…"
   (cd "$ROOT" && docker compose "${profiles[@]}" ${observability[@]+"${observability[@]}"} up -d --build)
   local port; port=$(env_get SOVEREIGN_PORT); port=${port:-8000}
   printf "waiting for the services"
   for _ in $(seq 1 90); do
-    curl -fsS -m 3 "http://localhost:$port/api/kg/health" >/dev/null 2>&1 && { echo; echo "The Sovereign is up: http://localhost:$port — create the first account there."; return; }
+    if curl -fsS -m 3 "http://localhost:$port/api/kg/health" >/dev/null 2>&1; then
+      echo
+      if curl -fsS -m 3 "http://localhost:$port/api/kg/auth/config" 2>/dev/null | grep -q '"first_account":true'; then
+        echo "The Sovereign is up: http://localhost:$port — create the first account there."
+      else
+        echo "The Sovereign is up: http://localhost:$port"
+      fi
+      return
+    fi
     printf "."; sleep 2
   done
   echo; echo "not answering yet — see: docker compose --profile app logs -f kg"
