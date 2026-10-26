@@ -4,8 +4,18 @@ import { kg, type ScoutCandidate, type SensorGroup, type SensorReading, type Sen
 
 const ACTIVE = new Set(['queued', 'planning', 'collecting', 'probing', 'coding', 'testing']);
 
-function SourceRow({ domain, source, onChanged }: { domain: string; source: SensorSource; onChanged: () => Promise<void> }) {
+function SourceRow({ domain, source, editable, onChanged }: {
+  domain: string;
+  source: SensorSource;
+  editable: boolean;
+  onChanged: () => Promise<void>;
+}) {
   const [code, setCode] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function attempt(work: () => Promise<void>) {
+    setError(null);
+    try { await work(); } catch (e) { setError((e as Error).message); }
+  }
   const Icon = source.kind === 'page' ? Globe : source.kind === 'extract' ? Eye : source.kind === 'search' ? Search : Server;
   const how = { api: 'API, parsed by code', page: 'web page, parsed by code', extract: 'web page, read by the model (no parser yet)',
     search: 'live web search each time — no stable source yet' }[source.kind];
@@ -23,19 +33,32 @@ function SourceRow({ domain, source, onChanged }: { domain: string; source: Sens
         <span className="shrink-0 font-mono text-[10px] text-faint" title="recent success rate · average seconds">
           {Math.round(source.score * 100)}%{source.avg_seconds != null ? ` · ${source.avg_seconds}s` : ''}
         </span>
-        <button onClick={async () => setCode(code ? null : (await kg.sensor(domain, source.name)).code ?? '')}
+        <button onClick={() => attempt(async () => setCode(code ? null : (await kg.sensor(domain, source.name)).code ?? ''))}
           className="rounded p-0.5 text-faint hover:text-ink" title="Code"><Code2 size={11} /></button>
-        <button onClick={async () => { await kg.removeSensor(domain, source.name); await onChanged(); }}
-          className="rounded p-0.5 text-faint hover:text-bad" title="Remove this source"><Trash2 size={11} /></button>
+        {editable && (
+          <button onClick={() => attempt(async () => { await kg.removeSensor(domain, source.name); await onChanged(); })}
+            className="rounded p-0.5 text-faint hover:text-bad" title="Remove this source"><Trash2 size={11} /></button>
+        )}
       </div>
       {source.last_ok === false && source.last_error && <p className="truncate pl-5 text-[10px] text-bad/80">{source.last_error}</p>}
+      {error && <p className="pl-5 text-[10px] text-bad">{error}</p>}
       {code && <pre className="mt-1 max-h-60 overflow-auto rounded bg-bg p-2 font-mono text-[10.5px] text-dim">{code}</pre>}
     </li>
   );
 }
 
-function SensorCard({ domain, group, onChanged }: { domain: string; group: SensorGroup; onChanged: () => Promise<void> }) {
+function SensorCard({ domain, group, editable, onChanged }: {
+  domain: string;
+  group: SensorGroup;
+  editable: boolean;   // editors find and remove sources; anyone reads
+  onChanged: () => Promise<void>;
+}) {
   const [open, setOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  async function attempt(work: () => Promise<void>) {
+    setError(null);
+    try { await work(); } catch (e) { setError((e as Error).message); }
+  }
   const [params, setParams] = useState<Record<string, string>>(
     () => Object.fromEntries(Object.entries(group.params).map(([k, v]) => [k, String(v.example ?? '')])));
   const [reading, setReading] = useState<SensorReading | null>(null);
@@ -98,20 +121,21 @@ function SensorCard({ domain, group, onChanged }: { domain: string; group: Senso
           )}
           <div>
             <h5 className="mb-1 font-mono text-[9.5px] tracking-widest text-faint uppercase">Sources — read best first, next on failure</h5>
-            <ul className="space-y-1">{group.sources.map(s => <SourceRow key={s.name} domain={domain} source={s} onChanged={onChanged} />)}</ul>
+            <ul className="space-y-1">{group.sources.map(s => <SourceRow key={s.name} domain={domain} source={s} editable={editable} onChanged={onChanged} />)}</ul>
           </div>
-          <div className="flex gap-2">
+          {editable && <div className="flex gap-2">
             <button
-              onClick={async () => { await kg.requestSensor(domain, group.need, 'scout', group.name); await onChanged(); }}
+              onClick={() => attempt(async () => { await kg.requestSensor(domain, group.need, 'scout', group.name); await onChanged(); })}
               className="flex items-center gap-1 rounded border border-line-2 px-2 py-0.5 text-[10.5px] text-dim hover:text-ink"
               title="The Scout tries 20-30 more sites and adds every one that works and agrees">
               <Search size={10} /> Find more sources
             </button>
-            <button onClick={async () => { await kg.removeSensor(domain, group.name); await onChanged(); }}
+            <button onClick={() => attempt(async () => { await kg.removeSensor(domain, group.name); await onChanged(); })}
               className="ml-auto flex items-center gap-1 rounded border border-line-2 px-2 py-0.5 text-[10.5px] text-dim hover:text-bad">
               <Trash2 size={10} /> Remove sensor
             </button>
-          </div>
+          </div>}
+          {error && <p className="text-[10.5px] text-bad">{error}</p>}
           <p className="text-[10px] text-faint">for: {group.need}</p>
         </div>
       )}
@@ -158,7 +182,7 @@ function RequestRow({ r }: { r: SensorRequest }) {
   );
 }
 
-export function SensorsView({ domain, version }: { domain: string; version: number }) {
+export function SensorsView({ domain, version, editable }: { domain: string; version: number; editable: boolean }) {
   const [groups, setGroups] = useState<SensorGroup[]>([]);
   const [requests, setRequests] = useState<SensorRequest[]>([]);
   const [need, setNeed] = useState('');
@@ -201,16 +225,16 @@ export function SensorsView({ domain, version }: { domain: string; version: numb
         sources (APIs, and web pages opened in a browser) and falls back to the next one when a source fails. The Scout
         finds them; every one runs in a locked sandbox (public internet only).
       </p>
-      <form onSubmit={submit} className="flex gap-2">
+      {editable && <form onSubmit={submit} className="flex gap-2">
         <input value={need} onChange={e => setNeed(e.target.value)} placeholder="New sensor, e.g. latest stock price for a ticker"
           className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-3 py-1.5 text-[12px] outline-none focus:border-accent/60" />
         <button type="submit" disabled={need.trim().length < 5} className="flex items-center gap-1 rounded-md bg-accent px-2.5 text-[11.5px] text-black disabled:opacity-40">
           <Plus size={12} /> Find sources
         </button>
-      </form>
+      </form>}
       {error && <p className="text-xs text-bad">{error}</p>}
       {groups.length === 0 && <p className="text-center text-xs text-faint">No sensors yet.</p>}
-      <ul className="space-y-2">{groups.map(g => <SensorCard key={g.name} domain={domain} group={g} onChanged={load} />)}</ul>
+      <ul className="space-y-2">{groups.map(g => <SensorCard key={g.name} domain={domain} group={g} editable={editable} onChanged={load} />)}</ul>
       {requests.length > 0 && (
         <section>
           <h4 className="mb-1 font-mono text-[10px] tracking-widest text-faint uppercase">Sensor requests</h4>

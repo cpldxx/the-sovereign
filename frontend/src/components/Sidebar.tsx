@@ -119,7 +119,7 @@ export function Sidebar({ domains, active, onSelect, onCreate, me, onSignOut }: 
         <Status label="Research" ok={health.research} hint={health.researchIssue ?? 'research/ — http://localhost:8070'}
           note={health.researchLastFailed && `last run failed — ${health.researchLastFailed.replace(/: ?$/, '')}`} />
         <Status label="Search · Crawler" ok={health.search === null ? null : !!(health.search && health.crawler)} hint="docker compose up -d (searxng, crawl4ai)" />
-        {health.tracing && me.admin && (
+        {health.tracing && me.admin && LANGFUSE_URL && (
           <a href={LANGFUSE_URL} target="_blank" rel="noreferrer" className="block text-[11px] text-faint hover:text-ink" title="Agent traces — docker compose --profile observability up -d">
             LangFuse traces ↗
           </a>

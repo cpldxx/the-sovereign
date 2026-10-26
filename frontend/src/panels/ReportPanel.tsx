@@ -132,7 +132,7 @@ function ReportView({ domain, summary, onHighlight, onSelect }: {
         {s.llm && s.llm.length > 0 && (
           <>
             <br />
-            LLM, all domains: {s.llm.map(u => `${u.activity} ${u.calls} calls · ${(u.tokens / 1000).toFixed(0)}k tokens`).join(' | ')}
+            LLM, this domain: {s.llm.map(u => `${u.activity} ${u.calls} calls · ${(u.tokens / 1000).toFixed(0)}k tokens`).join(' | ')}
           </>
         )}
       </p>
@@ -176,9 +176,10 @@ function ReportView({ domain, summary, onHighlight, onSelect }: {
   );
 }
 
-export function ReportPanel({ domain, version, onHighlight, onSelect }: {
+export function ReportPanel({ domain, version, editable, onHighlight, onSelect }: {
   domain: string;
   version: number;
+  editable: boolean;   // editors write a report now; anyone reads them
   onHighlight: (uids: Set<string>) => void;
   onSelect: (uid: string) => void;
 }) {
@@ -227,12 +228,12 @@ export function ReportPanel({ domain, version, onHighlight, onSelect }: {
         <p className="flex-1 text-[11px] leading-snug text-faint">
           Written every night after research: what the graph learned, what changed, what needs you.
         </p>
-        {tracing && (
+        {tracing && LANGFUSE_URL && (
           <a href={LANGFUSE_URL} target="_blank" rel="noreferrer" className="shrink-0 text-[10.5px] text-faint hover:text-ink" title="Agent traces (LangFuse)">
             traces ↗
           </a>
         )}
-        <button
+        {editable && <button
           onClick={generate}
           disabled={generating}
           className="flex shrink-0 items-center gap-1.5 rounded-md border border-line-2 px-2.5 py-1.5 text-[11.5px] text-dim hover:text-ink disabled:opacity-50"
@@ -240,7 +241,7 @@ export function ReportPanel({ domain, version, onHighlight, onSelect }: {
         >
           {generating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
           {generating ? 'Writing…' : 'Report now'}
-        </button>
+        </button>}
       </div>
       {error && <p className="px-3 pt-2 text-xs text-bad">{error}</p>}
 

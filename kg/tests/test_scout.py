@@ -86,3 +86,36 @@ def test_vote_drops_a_unit_mixup_even_when_values_spread():
     works = [_works(14.0), _works(9.0), _works(12.0), _works(58.0)]     # °C pages and one °F page
     scout._agreement(works, [], ["price"])
     assert [w["outcome"] == "works" for w in works] == [True, True, True, False]
+
+
+# ── 2026-10-14 review fixes ──────────────────────────────────────────────────────────────────────────────────────
+
+def test_member_names_of_similar_hosts_do_not_collide():
+    group = "current_weather_conditions_for_a_city"
+    a, b = scout._member_name(group, "weather.com"), scout._member_name(group, "weatherapi.com")
+    assert a != b and len(a) <= 41 and len(b) <= 41
+    assert scout._member_name("quote", "cnbc.com") == "quote_cnbc_com"     # short names stay as they were
+
+
+def test_only_parsers_are_run_for_the_reference():
+    members = [{"name": "p", "code": "x"}, {"name": "e", "kind": "extract", "code": None},
+               {"name": "s", "kind": "search", "code": None}, {"name": "site", "kind": "site"}]
+    assert [m["name"] for m in scout._with_code(members)] == ["p"]
+
+
+def test_catalog_key_of_a_site_source():
+    assert scout._catalog_url({"kind": "site", "host": "weather.com", "url": "https://weather.com/"}) == \
+        "site:weather.com"
+    assert scout._catalog_url({"kind": "page", "url": "https://a.com/q/{symbol}"}) == "https://a.com/q/{symbol}"
+    assert scout._catalog_url({"kind": "search", "url": ""}) == ""
+
+
+async def test_catalog_does_not_debit_what_was_not_tried(fresh_catalog):
+    c = fresh_catalog
+    good = {"host": "a.com", "kind": "page", "url": "https://a.com/q/{symbol}", "outcome": "works"}
+    await c.record("latest stock price for a ticker", ["symbol"], [good])
+    for outcome in ("not tried: enough sources or out of time", "reachable (not tried: enough sources or out of time)",
+                    "skipped: refused within 7 days (robots.txt)"):
+        learned = await c.record("latest stock price for a ticker", ["symbol"], [{**good, "outcome": outcome}])
+        assert learned["debited"] == 0, outcome
+    assert await c.suggest("latest stock price for a ticker", ["symbol"], set())   # still known

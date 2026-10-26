@@ -131,6 +131,12 @@ def _prune(data: dict) -> None:
     data["entries"] = [e for e in data["entries"] if e.get("recent") != "000"]
 
 
+def _untried(outcome: str) -> bool:
+    """A candidate the scout never read (enough sources, out of time, skipped for a refusal): nothing learned about
+    its template (2026-10-14: "not tried: enough sources or out of time" was debited, and three of those forgot it)."""
+    return outcome.startswith(("reachable (", "skipped")) or "not tried" in outcome
+
+
 async def record(need: str, params: list[str], candidates: list[dict]) -> dict:
     """After a scout: learn from every candidate's outcome. Returns what changed."""
     async with _lock:
@@ -157,7 +163,7 @@ async def record(need: str, params: list[str], candidates: list[dict]) -> dict:
                 else:
                     changed["credited"] += 1
                 _credit(e, True)
-            elif e and outcome not in ("queued", "reachable") and not outcome.startswith("reachable ("):
+            elif e and outcome not in ("queued", "reachable") and not _untried(outcome):
                 _credit(e, False)
                 changed["debited"] += 1
         _prune(data)

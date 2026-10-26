@@ -3,7 +3,10 @@ import { Loader2 } from 'lucide-react';
 
 /** Display name → the id the server will derive (mirrors kg/domains/registry.py:domain_id). */
 export function previewId(name: string): string {
-  return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  if (!name.trim()) return '';
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  // No Latin letter first ("반도체", "2026 plan"): the server names it "domain"; the title stays as typed.
+  return /^[a-z]/.test(slug) ? slug : 'domain';
 }
 
 export function DomainForm({ onCreate, onBusy }: {

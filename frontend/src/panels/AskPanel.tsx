@@ -64,6 +64,15 @@ function cacheChat(domain: string, messages: Message[]) {
   try { localStorage.setItem(`sovereign.chat.${domain}`, JSON.stringify(messages.slice(-60))); } catch { /* full: the KG has it */ }
 }
 
+// A browser moves its old local chat to the KG at most once per domain (2026-10-14: a chat cleared in one browser came
+// back from another browser's copy, which saw an empty KG and imported it again).
+const importedKey = (domain: string) => `sovereign.chatImported.${domain}`;
+function markImported(domain: string) {
+  try { localStorage.setItem(importedKey(domain), '1'); } catch { /* the next load asks again */ }
+}
+
+const HISTORY_TURNS = 12;   // the recent turns go to the Head as history (Hermes caps it too)
+
 function fromTurns(turns: ChatTurn[]): Message[] {
   return turns.map(t => ({ role: t.role, content: t.content, steps: (t.steps ?? []) as Step[],
                            error: t.status === 'error', pending: t.status === 'pending' }));
@@ -127,8 +136,9 @@ function Steps({ steps, onOpenBriefing }: { steps: Step[]; onOpenBriefing?: () =
   );
 }
 
-export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyReady, onOpenBriefing }: {
+export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, ontologyReady, onOpenBriefing }: {
   domain: string;
+  canIngest: boolean;   // editors add sources; any member asks
   onKnowledgeChanged: () => Promise<void>;
   onHighlight: (uids: Set<string>) => void;
   ontologyReady: boolean;
@@ -149,6 +159,8 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   const session = useRef<VoiceSession | null>(null);
+  const audio = useRef<{ el: HTMLAudioElement; url: string } | null>(null);   // a typed answer read aloud
+  const audioSeq = useRef(0);   // bumped by every stop: a read-aloud still waiting for its audio sees it
   const lastAnswerAt = useRef(0);
   const heardRef = useRef('');
   const wakeRef = useRef(wakeWord);
@@ -167,7 +179,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
       try {
         let turns = await kg.chat(domain);
         const local = loadChat(domain).filter(m => !m.pending);
-        if (!turns.length && local.length) {
+        if (!turns.length && local.length && !localStorage.getItem(importedKey(domain))) {
           // Light enough to send: the words and what was done, not each tool call's arguments.
           await kg.importChat(domain, local.slice(-400).map(m => ({
             role: m.role, content: m.content, error: m.error,
@@ -175,6 +187,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
           })));
           turns = await kg.chat(domain);
         }
+        markImported(domain);   // from now on the KG is the conversation, even when it is empty
         if (alive && !abort.current) setMessages(fromTurns(turns));
       } catch { /* the KG is unreachable: the local copy stays */ }
     })();
@@ -202,12 +215,13 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
     return () => clearInterval(t);
   }, [busy]);
 
-  useEffect(() => () => { abort.current?.abort(); session.current?.stop(); stopSpeaking(); }, []);
+  useEffect(() => () => { abort.current?.abort(); session.current?.stop(); stopSpeaking(); stopAudio(); }, []);
 
   async function send(text: string, spoken = false, onFirstTool?: () => void): Promise<Message | null> {
     text = text.trim();
     if (!text || abort.current) return null;
-    const history: Turn[] = messagesRef.current.filter(m => !m.error && !m.pending).map(m => ({ role: m.role, content: m.content }));
+    const history: Turn[] = messagesRef.current.filter(m => !m.error && !m.pending).slice(-HISTORY_TURNS)
+      .map(m => ({ role: m.role, content: m.content }));
     setMessages(m => [...m, { role: 'user', content: text }]);
     setInput('');
     setBusy(true);
@@ -277,12 +291,37 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
 
   /** Local voice first (Hermes); the browser's own voice if Hermes can't speak. */
   async function readAloud(text: string) {
+    stopAudio();
+    const seq = audioSeq.current;
+    let blob: Blob;
     try {
-      const audio = new Audio(URL.createObjectURL(await hermes.speak(text)));
-      await audio.play();
+      blob = await hermes.speak(text);
     } catch {
-      speak(text);
+      if (seq === audioSeq.current) speak(text);
+      return;
     }
+    // Stopped while it was being synthesized (voice off, a voice session, another domain): it must not start now.
+    if (seq !== audioSeq.current) return;
+    const url = URL.createObjectURL(blob);
+    const el = new Audio(url);
+    audio.current = { el, url };
+    el.onended = () => { if (audio.current?.el === el) stopAudio(); };
+    try {
+      await el.play();
+    } catch {
+      if (audio.current?.el === el) { stopAudio(); speak(text); }
+    }
+  }
+
+  /** Stop a typed answer being read aloud and free its audio (stopSpeaking() only reaches the browser's voice); one
+   * still being synthesized is dropped when it arrives. */
+  function stopAudio() {
+    audioSeq.current += 1;
+    const a = audio.current;
+    if (!a) return;
+    audio.current = null;
+    a.el.pause();
+    URL.revokeObjectURL(a.url);
   }
 
   // ── Voice conversation ────────────────────────────────────────────────
@@ -341,6 +380,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
     }
     setVoiceError(null);
     stopSpeaking();
+    stopAudio();
     const s = new VoiceSession({ onState: setVoice, onLevel: setLevel, onUtterance });
     try {
       await s.start();
@@ -382,7 +422,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
     const next = !voiceOut;
     setVoiceOut(next);
     localStorage.setItem('sovereign.voiceOut', next ? '1' : '0');
-    if (!next) stopSpeaking();
+    if (!next) { stopSpeaking(); stopAudio(); }
   }
 
   return (
@@ -396,7 +436,13 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
             </button>
           )}
           <button
-            onClick={() => { setMessages([]); void kg.clearChat(domain).catch(() => undefined); }}
+            onClick={() => {
+              // The local copy goes with the KG's, so nothing brings the conversation back.
+              setMessages([]);
+              try { localStorage.removeItem(`sovereign.chat.${domain}`); } catch { /* nothing kept */ }
+              markImported(domain);
+              void kg.clearChat(domain).catch(() => undefined);
+            }}
             disabled={busy || messages.length === 0}
             className="rounded p-1 text-faint hover:text-ink disabled:opacity-30"
             title="Clear conversation"
@@ -422,7 +468,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
           <div className="mt-10 space-y-2 text-center text-xs text-faint">
             <p className="font-mono tracking-widest text-dim">HEAD AGENT</p>
             <p>"What do we know about …?"</p>
-            <p>📎 paste an article to learn it</p>
+            {canIngest && <p>📎 paste an article to learn it</p>}
             <p>"What's the biggest risk right now?"</p>
           </div>
         )}
@@ -482,11 +528,13 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
         onSubmit={e => { e.preventDefault(); void send(input); }}
         className="flex items-end gap-2 border-t border-line p-3"
       >
-        <button type="button" onClick={() => setAttaching(a => !a)}
-          className={`rounded-md border p-2.5 ${attaching ? 'border-accent text-accent' : 'border-line-2 text-dim hover:text-ink'}`}
-          title="Add a source: paste an article, notes or a report — its facts are learned into the graph">
-          <Paperclip size={15} />
-        </button>
+        {canIngest && (
+          <button type="button" onClick={() => setAttaching(a => !a)}
+            className={`rounded-md border p-2.5 ${attaching ? 'border-accent text-accent' : 'border-line-2 text-dim hover:text-ink'}`}
+            title="Add a source: paste an article, notes or a report — its facts are learned into the graph">
+            <Paperclip size={15} />
+          </button>
+        )}
         <textarea
           value={input}
           onChange={e => setInput(e.target.value)}
@@ -504,7 +552,7 @@ export function AskPanel({ domain, onKnowledgeChanged, onHighlight, ontologyRead
           {voice !== 'off' ? <MicOff size={15} /> : <Mic size={15} />}
         </button>
         {busy ? (
-          <button type="button" onClick={() => abort.current?.abort()} className="rounded-md border border-line-2 p-2.5 text-dim hover:text-bad" title="Stop">
+          <button type="button" onClick={() => { void hermes.stopAsk(domain).catch(() => {}); abort.current?.abort(); }} className="rounded-md border border-line-2 p-2.5 text-dim hover:text-bad" title="Stop">
             <Square size={15} />
           </button>
         ) : (

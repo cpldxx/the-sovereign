@@ -10,6 +10,8 @@ another domain's graph. Editors get the full tool set (/mcp), viewers the read-o
 import json
 import os
 import re
+import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -90,6 +92,32 @@ class DomainNotFound(LookupError):
     pass
 
 
+class KGUnavailable(RuntimeError):
+    """The KG's MCP tools could not be registered: the Head would answer from imagination."""
+
+
+class Stop:
+    """A person's way to stop a turn (the Stop button: POST …/ask/stop). Hermes' own interrupt: no tool call starts
+    after it, and the loop ends at its next check. A tool call already running (an ingest on the KG side) finishes."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._agent: AIAgent | None = None
+        self.stopped = False
+
+    def bind(self, agent: AIAgent) -> None:
+        with self._lock:
+            self._agent = agent
+            if self.stopped:
+                agent.interrupt()
+
+    def __call__(self) -> None:
+        with self._lock:
+            self.stopped = True
+            if self._agent is not None:
+                self._agent.interrupt()
+
+
 def connect_kg(domain: str, tools: str = "head") -> str:
     """Connect a domain's Head to the KG's MCP server and register its tools → the toolset name. The connection
     is the service's, limited to this one domain (X-Sovereign-Domain). Idempotent; retries a failed connect."""
@@ -104,7 +132,21 @@ def connect_kg(domain: str, tools: str = "head") -> str:
             "tools": {"resources": False, "prompts": False},
         }
     })
-    return f"mcp-{name}"
+    toolset = f"mcp-{name}"
+    # A failed connect is only logged by Hermes, and the Head then ran with no tools at all — answering from
+    # imagination. A cached connection that dropped reconnects in the background: give it a few seconds.
+    for _ in range(10):
+        if _toolset_tools(toolset):
+            return toolset
+        time.sleep(0.5)
+    raise KGUnavailable(f"The knowledge graph's tools are unavailable ({KG_URL}{MCP_PATHS[tools]} did not answer). "
+                        "Try again in a moment.")
+
+
+def _toolset_tools(toolset: str) -> list[str]:
+    from tools.registry import registry  # noqa: PLC0415
+
+    return registry.get_tool_names_for_toolset(toolset)
 
 
 def _domain_context(domain: str) -> tuple[str, dict, list[dict], dict]:
@@ -363,18 +405,24 @@ def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSi
 # The prompt asks for clean, one-language answers; these catch what a local model still lets through.
 _HANGUL = re.compile(r"[\uac00-\ud7a3]")
 _FOREIGN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")          # kana and Chinese characters
-_INTERNALS = (
-    re.compile(r"\s*[(（][^()（）]*\b(?:weight|evidence|uid)\b[^()（）]*[)）]", re.I),   # "(f_…, weight=1.0)"
-    re.compile(r",?\s*\b(?:weight|evidence)\s*[=:]\s*[0-9.]+", re.I),                  # ", weight=0.9"
-    re.compile(r"\s*`?\b(?:f|e|ep|thre|prop|chat)_[0-9a-f]{8,}\b`?"),                   # bare uids
-)
+# Uids and weights a model copied from its tools — a copy of kg/core/actions.scrub (Hermes never imports kg/; change
+# both together). Until 2026-10-14 only uids starting f_ / e_ / ep_ / thre_ / prop_ / chat_ were caught (r_, rep_,
+# play_, sens_ … leaked) and any parenthetical naming a weight went, prose too. Uids have the KG's shape (new_uid:
+# 1-4 letters, 12 hex); a parenthetical goes only when it holds nothing but such internals.
+_UID = r"`?\b[a-z]{1,4}_[0-9a-f]{12}\b`?"
+_PAIR = r"\b(?:weight|evidence)\s*[=:]\s*\d+(?:\.\d+)?"
+_PAREN = re.compile(r"\s*[(（]([^()（）]*)[)）]")
+_LEFT_OVER = re.compile(r"(?:[\s,;/|]|\b(?:uids?|ids?|facts?)\b[:=]?)*", re.I)
 
 
 def scrub(text: str) -> str:
     """Remove uids and weights a model copied from its tools into text meant for a person."""
-    for pattern in _INTERNALS:
-        text = pattern.sub("", text)
-    return text
+    def paren(m: re.Match) -> str:
+        inner = re.sub(_PAIR, "", re.sub(_UID, "", m[1]), flags=re.I)
+        return "" if inner != m[1] and _LEFT_OVER.fullmatch(inner) else m[0]
+    text = _PAREN.sub(paren, text)
+    text = re.sub(r",?\s*" + _PAIR, "", text, flags=re.I)
+    return re.sub(r"\s*" + _UID, "", text)
 
 
 def _korean_only(answer: str) -> str:
@@ -398,9 +446,36 @@ def _korean_only(answer: str) -> str:
 
 def tidy(message: str, answer: str) -> str:
     answer = scrub(answer or "")
-    if _HANGUL.search(message) and _FOREIGN.search(answer):
+    # The rewrite asks Ollama for HEAD_MODEL by name: only when the Head runs there (an anthropic: Head has no
+    # such model on Ollama — the call only failed after a wait).
+    if HEAD_MODEL.startswith("ollama:") and _HANGUL.search(message) and _FOREIGN.search(answer):
         answer = scrub(_korean_only(answer))
     return answer
+
+
+# What of a conversation goes to the Head: the page sends all of it (up to 400 turns), and every turn the Head read
+# it all again — a long chat made each answer slower. The newest turns, each cut, within a total.
+HISTORY_TURNS = 12
+HISTORY_CHARS = 8000
+TURN_CHARS = 2000
+
+
+def recent(history: list[dict] | None) -> list[dict]:
+    """The newest turns of `history` (oldest first, as given) within HISTORY_TURNS / HISTORY_CHARS, each cut to
+    TURN_CHARS; it starts with a question, not an answer."""
+    kept, total = [], 0
+    for turn in reversed(history or []):
+        content = str(turn.get("content") or "")
+        if len(content) > TURN_CHARS:
+            content = content[:TURN_CHARS] + " …"
+        if len(kept) >= HISTORY_TURNS or total + len(content) > HISTORY_CHARS:
+            break
+        kept.append({"role": turn["role"], "content": content})
+        total += len(content)
+    kept.reverse()
+    while kept and kept[0]["role"] != "user":
+        kept.pop(0)
+    return kept
 
 
 def ask_head(
@@ -412,17 +487,28 @@ def ask_head(
     on_event: EventSink | None = None,
     voice: bool = False,
     tools: str = "head",
+    stop: Stop | None = None,
 ) -> str:
-    """One turn with the Head Agent. `history` is prior [{role, content}] turns, oldest first.
+    """One turn with the Head Agent. `history` is prior [{role, content}] turns, oldest first (only the newest are
+    used, see recent()).
 
-    `on_event` (optional) receives live progress events while the agent works.
+    `on_event` (optional) receives live progress events while the agent works. `stop` (optional) interrupts it.
     """
+    history = recent(history) or None
     agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice, tools=tools)
-    answer = agent.run_conversation(message, conversation_history=history or None)["final_response"]
+    if stop:
+        stop.bind(agent)
+    answer = agent.run_conversation(message, conversation_history=history)["final_response"]
+    if stop and stop.stopped:
+        return scrub(answer or "")
     if _TEXT_TOOL_CALL.match(answer or ""):
         # With reasoning off, local models occasionally write a tool call as plain text instead of
         # calling it. Retry once on a fresh agent with a nudge.
         agent = create_head_agent(domain, max_iterations=max_iterations, on_event=on_event, voice=voice, tools=tools)
+        if stop:
+            stop.bind(agent)
         nudge = f"{message}\n\n(Call the tools through the tool-calling interface — do not write them as text.)"
-        answer = agent.run_conversation(nudge, conversation_history=history or None)["final_response"]
+        answer = agent.run_conversation(nudge, conversation_history=history)["final_response"]
+        if stop and stop.stopped:
+            return scrub(answer or "")
     return tidy(message, answer)

@@ -2,8 +2,9 @@
 
 A playbook can also carry a live TRIGGER — a condition on a sensor reading (NVDA change_percent < -5, checked
 every 60 min). check_triggers() runs around the clock in the KG process: the comparison is code; when it holds, a
-second source of the sensor must agree before the playbook fires (one source can misread or lag); the Watcher only
-fills in the action's parameters.
+second source of the sensor must answer and agree before the playbook fires (one source can misread or lag) — only a
+sensor with a single source fires on it alone, and one page of a live search never does; the Watcher only fills in
+the action's parameters.
 
 A playbook that fires doesn't act: the Watcher reports it to the Head with the action it calls for, and the Head
 decides — the Operator runs what the Head says (core.crew). Without a Head (HEAD_WAKE=off) it is proposed directly.
@@ -148,7 +149,8 @@ async def recheck_triggers(db: ArcadeDB, domain: str) -> int:
     removed = 0
     for pb in await list_playbooks(db, domain):
         t = pb.get("trigger")
-        if not t or t.get("meaning_checked"):
+        # Without a live reading the check was asked "FIELD is None now" — it waits for the first reading.
+        if not t or t.get("meaning_checked") or not isinstance(pb.get("trigger_value"), (int, float)):
             continue
         group = groups.get(t["sensor"])
         problem = await _meaning(pb["situation"], t["sensor"], t["params"], t["field"], t["op"], t["value"],
@@ -210,12 +212,13 @@ async def _refresh(db: ArcadeDB, domain: str) -> dict:
     # behind it moved since it was written. A local model rewrites freely from night to night otherwise.
     movable = {uid for uid, pb in current.items() if await _moved(db, domain, pb)}
     # Retire only what the Strategist names: one terse answer from a local model must not wipe the set.
+    retired: dict[str, dict] = {}
     for uid in answer.retire:
         if uid in current and uid not in movable:
             counts["held"] += 1
         elif uid in current:
             await set_status(db, domain, uid, "retired")
-            current.pop(uid)
+            retired[uid] = current.pop(uid)
             counts["retired"] += 1
     room = MAX_PLAYBOOKS - len(current)
     for d in answer.playbooks:
@@ -225,21 +228,34 @@ async def _refresh(db: ArcadeDB, domain: str) -> dict:
                 watch.append({"uid": match[0]["uid"], "name": match[0]["name"]})
         if not watch:
             continue  # nothing to watch: it could never trigger
+        # A draft without a known uid that has an active playbook's name or watch set IS that playbook (a local
+        # model re-adds what exists under no uid), and one that brings back a playbook retired just now is dropped.
+        if d.uid not in current and (d.uid in retired or _same(d.name, watch, retired.values())):
+            continue
+        uid = d.uid if d.uid in current else next((p["uid"] for p in current.values() if _same(d.name, watch, [p])),
+                                                   None)
+        if uid in kept:
+            continue   # a second draft for the same playbook
+        if uid and uid not in movable:
+            counts["held"] += 1
+            kept.add(uid)
+            continue
+        if not uid and room <= 0:
+            continue
+        # Decided first, checked after: a trigger check is a live sensor read and a model call — only for drafts
+        # that will be written (it ran for held and roomless ones too, 2026-10-14).
         evidence = [f["uid"] for f in await kgdb.get_facts(db, domain, d.evidence[:20])]
         doc = {"name": d.name.strip(), "situation": d.situation.strip(), "watch": watch, "response": d.response.strip(),
                "action": d.action if d.action in names else "alert", "evidence": evidence, "updated_at": now(),
                "trigger": (await _check_trigger(db, domain, d.trigger, sensor_index, d.situation))[0]
                if d.trigger else None}
-        if d.uid in current and d.uid not in movable:
-            counts["held"] += 1
-            kept.add(d.uid)
-        elif d.uid in current and d.uid not in kept:
-            if current[d.uid].get("trigger") and not doc["trigger"]:
-                doc["trigger"] = current[d.uid]["trigger"]  # a revision doesn't silently drop a working trigger
-            await kgdb.update_doc(db, domain, "Playbook", d.uid, doc, PLAYBOOK_JSON)
-            kept.add(d.uid)
+        if uid:
+            if current[uid].get("trigger") and not doc["trigger"]:
+                doc["trigger"] = current[uid]["trigger"]  # a revision doesn't silently drop a working trigger
+            await kgdb.update_doc(db, domain, "Playbook", uid, doc, PLAYBOOK_JSON)
+            kept.add(uid)
             counts["revised"] += 1
-        elif room > 0:
+        else:
             await kgdb.insert_doc(db, domain, "Playbook", {**doc, "status": "active", "fired": 0, "last_fired_at": None},
                                   PLAYBOOK_JSON)
             room -= 1
@@ -248,6 +264,13 @@ async def _refresh(db: ArcadeDB, domain: str) -> dict:
     counts["triggers_removed"] = await recheck_triggers(db, domain)
     counts["triggers"] = await _add_triggers(db, domain, sensor_list)
     return counts
+
+
+def _same(name: str, watch: list[dict], playbooks) -> bool:
+    """Is a draft (its name, its resolved watch list) one of these playbooks — the same name, or the same watch set?"""
+    key, uids = name_key(name), {w["uid"] for w in watch}
+    return any((key and key == name_key(p.get("name") or "")) or uids == {w["uid"] for w in p.get("watch") or []}
+               for p in playbooks)
 
 
 async def _moved(db: ArcadeDB, domain: str, pb: dict) -> bool:
@@ -307,7 +330,8 @@ async def _trigger_for(db: ArcadeDB, domain: str, pb: dict, sensor_list: list[di
 # ── Evaluate (Watcher) ─────────────────────────────────────────────────────
 
 async def evaluate(db: ArcadeDB, domain: str, since: str) -> dict:
-    """Check every active playbook against the facts that changed since `since`; propose the triggered ones."""
+    """Check every active playbook against the facts that changed since `since`; the ones that fired are reported to
+    the Head (proposed directly without one — _escalate)."""
     with activity.working(domain, "watcher", "playbooks vs the day's changes"):
         return await _evaluate(db, domain, since)
 
@@ -364,6 +388,20 @@ async def _escalate(db: ArcadeDB, domain: str, pb: dict, action: dict, params: d
             "status": proposal["status"]}
 
 
+async def check_now(db: ArcadeDB, domain: str, since: str) -> tuple[list[dict], dict]:
+    """The Watcher's check_now task: the live triggers, then the changes since `since` — (fired, evaluated). Raises
+    RuntimeError while the nightly cycle runs: both evaluating the same changes reported each firing twice."""
+    load_domain(domain)
+    if domain in _running:
+        raise RuntimeError(f"A playbook cycle for {domain} is running now")
+    _running.add(domain)
+    try:
+        fired = await check_triggers(db, domain)
+        return fired, await evaluate(db, domain, since)
+    finally:
+        _running.discard(domain)
+
+
 async def cycle(db: ArcadeDB, domain: str, hours: int = 24, refresh_after: bool = True) -> dict:
     """Nightly: evaluate the playbooks against the last `hours`, then refresh them. Raises ValueError for unknown
     domains and RuntimeError when a cycle for the domain is already running."""
@@ -394,8 +432,23 @@ async def _fire(db: ArcadeDB, domain: str, pb: dict, reading: str, why: str) -> 
                            f"{why}. {pb['response']}")
 
 
+_trigger_locks: dict[str, asyncio.Lock] = {}
+
+
 async def check_triggers(db: ArcadeDB, domain: str) -> list[dict]:
-    """Read the sensors of the playbooks whose live trigger is due; propose those whose condition holds."""
+    """Read the sensors of the playbooks whose live trigger is due; report those whose condition holds. One check
+    per domain at a time (watch_loop and the Watcher's check_now would both fire the same playbook)."""
+    lock = _trigger_locks.setdefault(domain, asyncio.Lock())
+    async with lock:
+        return await _check_triggers(db, domain)
+
+
+async def _independent_sources(db: ArcadeDB, domain: str, sensor: str) -> int:
+    """Active sources of a sensor that read something themselves (not a live web search each time)."""
+    return sum(1 for m in await sensors.members(db, domain, sensor, with_code=False) if m.get("kind") != "search")
+
+
+async def _check_triggers(db: ArcadeDB, domain: str) -> list[dict]:
     fired = []
     for pb in await list_playbooks(db, domain):
         t = pb.get("trigger")
@@ -409,24 +462,36 @@ async def check_triggers(db: ArcadeDB, domain: str) -> list[dict]:
         except sensors.SensorError as e:
             out = {"ok": False, "error": str(e)}
         value = value_at(out.get("result"), t["field"]) if out.get("ok") else None
-        check = {"trigger_checked_at": now(), "trigger_value": value, "trigger_source": out.get("source"),
-                 "trigger_note": None}
         holds = isinstance(value, (int, float)) and OPS[t["op"]](value, t["value"])
-        other = (out.get("agreement") or {}).get("other_value")
-        if holds and isinstance(other, (int, float)) and not OPS[t["op"]](other, t["value"]):
-            # One source says yes, the next says no: a misread or a stale page — don't act on it.
-            check["trigger_note"] = (f"{out['source']} read {value} but {out['agreement']['other_source']} read "
-                                     f"{other} — not fired")
-            holds = False
-        await kgdb.update_doc(db, domain, "Playbook", pb["uid"], check)
+        agreement = out.get("agreement") or {}
+        other = agreement.get("other_value")
+        other = other if isinstance(other, (int, float)) and not isinstance(other, bool) else None
+        # A failed read used to leave no trace (the note was cleared): now it says why.
+        note = None if out.get("ok") else f"read failed: {out.get('error') or 'no answer'}"[:400]
+        if holds:
+            # One source can misread or lag: CLAUDE.md promises a second source agrees before a playbook fires.
+            if out.get("tier") == "search" and out.get("confidence") == "one page only":
+                note, holds = f"unconfirmed: {t['field']} = {value} on one page of a live search only — not fired", False
+            elif other is not None and not OPS[t["op"]](other, t["value"]):
+                note, holds = (f"{out.get('source')} read {value} but {agreement.get('other_source')} read {other} — "
+                               f"not fired"), False
+            elif other is None and await _independent_sources(db, domain, t["sensor"]) >= 2:
+                note, holds = (f"unconfirmed: {out.get('source')} read {value}, no second source answered — "
+                               f"not fired"), False
+            elif other is None:
+                note = "single source" + (f" ({out['confidence']})" if out.get("confidence") else "")
+        await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {
+            "trigger_checked_at": now(), "trigger_value": value, "trigger_source": out.get("source"),
+            "trigger_note": note})
         if not holds:
             continue
         quiet = datetime.now(timezone.utc) - timedelta(hours=REFIRE_HOURS)
         if (pb.get("last_fired_at") or "") > quiet.isoformat(timespec="seconds"):
             continue
         args = ", ".join(f"{k}={v}" for k, v in t["params"].items())
-        confirmed = f", confirmed by {out['agreement']['other_source']} ({other})" if isinstance(other, (int, float)) else ""
-        why = f"live {t['sensor']}({args}) {t['field']} = {value} from {out['source']} ({t['op']} {t['value']}){confirmed}"
+        confirmed = (f", confirmed by {agreement.get('other_source')} ({other})" if other is not None
+                     else f" ({note})")
+        why = f"live {t['sensor']}({args}) {t['field']} = {value} from {out.get('source')} ({t['op']} {t['value']}){confirmed}"
         fired.append(await _fire(db, domain, pb, f"{why}, read {now()}", why))
         await kgdb.update_doc(db, domain, "Playbook", pb["uid"], {"last_fired_at": now(),
                                                                   "fired": (pb.get("fired") or 0) + 1})

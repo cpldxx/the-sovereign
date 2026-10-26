@@ -193,10 +193,21 @@ export function GraphView({ graph, entityTypes, highlight, selected, onSelect }:
       }
       next.set(e.uid, node);
     }
+    const links = new Map(g.graphData().links.map(l => [l.id, l]));
+    const end = (n: string | Node) => (typeof n === 'string' ? n : n.id);
+    // Compared as sets (a uid listed twice must not re-heat the layout on every poll) and by endpoints (a merge
+    // re-homes a fact under its old uid).
     const changed = next.size !== known.size || [...next.keys()].some(id => !known.has(id))
-      || drawn.length !== g.graphData().links.length;
+      || new Set(drawn.map(f => f.uid)).size !== links.size
+      || drawn.some(f => { const l = links.get(f.uid); return !l || end(l.source) !== f.source_uid || end(l.target) !== f.target_uid; });
     nodes.current = next;
-    if (!changed) { repaint(); return; }
+    if (!changed) {
+      // Same links: a strengthened or superseded fact keeps its link object, so update it in place (its width and
+      // dash stayed stale when only the count was compared).
+      for (const f of drawn) Object.assign(links.get(f.uid)!, { weight: f.weight, valid: f.valid });
+      repaint();
+      return;
+    }
     if (known.size === 0) fitted.current = false;
     g.graphData({
       nodes: [...next.values()],

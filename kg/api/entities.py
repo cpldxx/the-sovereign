@@ -1,8 +1,10 @@
 """Entity and episode routes — what the graph knows about one thing, and where it came from."""
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 
 from core import database as kgdb
+from core import kg
 from domains.registry import load_domain
 
 router = APIRouter(prefix="/domains", tags=["entities"])
@@ -38,3 +40,14 @@ async def api_facts(domain_name: str, req: Request, uids: str = ""):
     _require(domain_name)
     wanted = [u for u in uids.split(",") if u][:200]
     return {"facts": await kgdb.get_facts(req.app.state.db, domain_name, wanted)}
+
+
+class SourcesRequest(BaseModel):
+    urls: list[str] = Field(default_factory=list, max_length=500)
+
+
+@router.post("/{domain_name}/sources")
+async def known_sources(domain_name: str, request: SourcesRequest, req: Request):
+    """Which of these URLs the graph has already read in full — research skips them. A failed read is not known."""
+    _require(domain_name)
+    return {"known": await kg.known_sources(req.app.state.db, domain_name, request.urls)}

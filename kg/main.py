@@ -2,6 +2,8 @@
 
 import asyncio
 import os
+import time
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from urllib.parse import urlsplit
 
@@ -43,6 +45,23 @@ mcp_routes = [route for role, server in kg_mcp.servers.items()
                                                       transport_security=MCP_SECURITY).routes]
 
 
+async def supervised(name: str, loop: Callable[[], Awaitable[None]], first: float = 5, most: float = 300) -> None:
+    """Keep a background loop running: if it dies, log why and start it again — after 5 s, doubling to 5 min while it
+    keeps dying. 2026-10-14: nothing restarted them, and the one crew worker died on two database errors in a row."""
+    delay = first
+    while True:
+        started = time.monotonic()
+        try:
+            await loop()
+            return
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[KG] {name} stopped: {type(e).__name__}: {e} — restarting in {delay:.0f} s", flush=True)
+        await asyncio.sleep(delay)
+        delay = first if time.monotonic() - started > most else min(delay * 2, most)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if tracing.setup():
@@ -50,11 +69,13 @@ async def lifespan(app: FastAPI):
     app.state.db = kg_mcp.db = await get_db()
     await accounts.setup(app.state.db)
     # Live playbook triggers: sensors checked around the clock (SENSOR_WATCH=off disables it).
-    watch = asyncio.create_task(playbooks.watch_loop(app.state.db)) if playbooks.WATCH else None
+    db = app.state.db
+    watch = (asyncio.create_task(supervised("trigger watch", lambda: playbooks.watch_loop(db)))
+             if playbooks.WATCH else None)
     # The Head's team: tasks and questions queued for the agents, reports back on threads.
-    team = asyncio.create_task(crew.work_loop(app.state.db))
+    team = asyncio.create_task(supervised("crew worker", lambda: crew.work_loop(db)))
     # The review queue is the Head's: it decides what waits there every HEAD_REVIEW_EVERY_MINUTES (0: nightly only).
-    reviews = (asyncio.create_task(crew.review_loop(app.state.db))
+    reviews = (asyncio.create_task(supervised("review loop", lambda: crew.review_loop(db)))
                if crew.HEAD_WAKE and crew.REVIEW_EVERY > 0 else None)
     # The MCP apps' own lifespans never run (only their routes are served), so the host enters their
     # session managers.

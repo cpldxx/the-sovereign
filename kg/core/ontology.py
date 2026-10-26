@@ -6,7 +6,9 @@ outside `relation_types`, never reaches the database.
 """
 
 import json
+import os
 import re
+import threading
 
 from pydantic import BaseModel, field_validator
 
@@ -34,4 +36,11 @@ class Ontology(BaseModel):
 
 
 def save_ontology(domain: str, ontology: Ontology) -> None:
-    ontology_path(domain).write_text(json.dumps(ontology.model_dump(), indent=2))
+    """Written beside the file and swapped in whole: a concurrent read never sees half a file."""
+    path = ontology_path(domain)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        tmp.write_text(json.dumps(ontology.model_dump(), indent=2))
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)

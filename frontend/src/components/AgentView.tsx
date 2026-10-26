@@ -142,8 +142,9 @@ const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour12: fa
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s);
 
 /** One agent up close: who it is, what it is doing, its conversations — and the Researcher's runs. */
-function AgentDrawer({ domain, name, agent, doing, onClose, onIngesting }: {
+function AgentDrawer({ domain, name, agent, doing, canResearch, onClose, onIngesting }: {
   domain: string;
+  canResearch: boolean;
   name: string;
   agent?: TeamAgent;
   doing?: string;
@@ -172,15 +173,16 @@ function AgentDrawer({ domain, name, agent, doing, onClose, onIngesting }: {
       {name === 'research' && <SubNav items={[['runs', 'Runs'], ['talk', 'Conversations']]} value={view} onChange={setView} />}
       <div className="min-h-0 flex-1">
         {name === 'research' && view === 'runs'
-          ? <ResearchPanel domain={domain} onIngesting={onIngesting} />
+          ? <ResearchPanel domain={domain} editable={canResearch} onIngesting={onIngesting} />
           : <TeamPanel key={name} domain={domain} agent={head ? undefined : name} />}
       </div>
     </div>
   );
 }
 
-export function AgentView({ domain, stats, onIngesting }: {
+export function AgentView({ domain, stats, canResearch, onIngesting }: {
   domain: string;
+  canResearch: boolean;   // editors start research runs; anyone follows them
   stats?: { entities: number; facts: number };
   onIngesting: () => Promise<void>;
 }) {
@@ -203,7 +205,7 @@ export function AgentView({ domain, stats, onIngesting }: {
         if (!alive) return;
         const busy: Record<string, string[]> = {};
         for (const w of a.working) busy[w.agent] = w.doing;
-        const run = jobs.find(j => ['queued', 'researching', 'ontology'].includes(j.status));
+        const run = jobs.find(j => ['queued', 'researching', 'ontology', 'ingesting'].includes(j.status));
         if (run) busy.research = [run.question || `${run.mode} — ${run.status}`];
         setWorking(busy);
         const fresh = after.current === 0 ? [] : a.events;   // the first poll only sets the cursor
@@ -421,7 +423,7 @@ export function AgentView({ domain, stats, onIngesting }: {
 
         {open && (
           <AgentDrawer domain={domain} name={open} agent={agents.find(a => a.name === open)} doing={working[open]?.[0]}
-            onClose={() => setOpen(null)} onIngesting={onIngesting} />
+            canResearch={canResearch} onClose={() => setOpen(null)} onIngesting={onIngesting} />
         )}
         <div className="pointer-events-none absolute bottom-3 left-4 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9.5px] tracking-wider text-faint uppercase">
           {LEGEND.map(([g, l]) => <span key={g} className="flex items-center gap-1.5"><GlyphIcon glyph={g} />{l}</span>)}

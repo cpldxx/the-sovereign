@@ -37,12 +37,23 @@ def _task(need: str, domain: str, description: str) -> str:
 
 
 async def write_sensor(need: str, domain: str, description: str) -> tuple[str | None, list[str]]:
-    """(the module OpenHands wrote, or None; a log tail)."""
+    """(the module OpenHands wrote, or None; a log tail). Raises at once where it can't work (the caller falls back
+    to the built-in Coder)."""
+    if Path("/.dockerenv").exists():
+        # The workspace would be a temp dir inside this container; the host's Docker daemon can't bind-mount it, and
+        # the run used to sit out the whole TASK_TIMEOUT (30 min) for nothing.
+        raise RuntimeError("OpenHands can't run from inside the KG container (the host's Docker can't mount its "
+                           "workspace) — the built-in Coder writes the sensor")
     return await asyncio.get_running_loop().run_in_executor(None, _run, need, domain, description)
+
+
+def _runtimes(client) -> set[str]:
+    return {c.id for c in client.containers.list(all=True, filters={"name": "openhands-runtime"})}
 
 
 def _run(need: str, domain: str, description: str) -> tuple[str | None, list[str]]:
     client = docker.from_env()
+    before = _runtimes(client)   # runtime containers that aren't this run's (requests run one at a time)
     with tempfile.TemporaryDirectory(prefix=f"sovereign_{domain}_") as root:
         workspace, state = Path(root) / "workspace", Path(root) / "state"
         workspace.mkdir()
@@ -83,5 +94,9 @@ def _run(need: str, domain: str, description: str) -> tuple[str | None, list[str
             return code or None, logs[-40:]
         finally:
             container.remove(force=True)
-            for c in client.containers.list(all=True, filters={"name": "openhands-runtime"}):
-                c.remove(force=True)
+            # Only the runtime this run started — not every OpenHands runtime on the host (2026-10-14).
+            for cid in _runtimes(client) - before:
+                try:
+                    client.containers.get(cid).remove(force=True)
+                except docker.errors.APIError:
+                    pass

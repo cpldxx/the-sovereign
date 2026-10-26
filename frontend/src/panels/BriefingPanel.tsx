@@ -1,3 +1,4 @@
+import { can, type Role } from '../lib/api';
 import { ActionsPanel } from './ActionsPanel';
 import { MacNotifySwitch } from '../components/AlertToasts';
 import { ReportPanel } from './ReportPanel';
@@ -5,8 +6,9 @@ import { ReportPanel } from './ReportPanel';
 export type BriefingView = 'report' | 'activity';
 
 /** What happened: the daily report, and what was done (alerts, drafts, the APIs run and what they returned). */
-export function BriefingPanel({ domain, version, view, onView, onHighlight, onSelect, onPending }: {
+export function BriefingPanel({ domain, role, version, view, onView, onHighlight, onSelect, onPending }: {
   domain: string;
+  role: Role;
   version: number;
   view: BriefingView;
   onView: (v: BriefingView) => void;
@@ -26,8 +28,8 @@ export function BriefingPanel({ domain, version, view, onView, onHighlight, onSe
       )}
       <div className="min-h-0 flex-1">
         {view === 'report'
-          ? <ReportPanel domain={domain} version={version} onHighlight={onHighlight} onSelect={onSelect} />
-          : <ActionsPanel domain={domain} version={version} view="inbox" onSelect={onSelect} onHighlight={onHighlight} onPending={onPending} />}
+          ? <ReportPanel domain={domain} version={version} editable={can(role, 'editor')} onHighlight={onHighlight} onSelect={onSelect} />
+          : <ActionsPanel domain={domain} role={role} version={version} view="inbox" onSelect={onSelect} onHighlight={onHighlight} onPending={onPending} />}
       </div>
     </div>
   );

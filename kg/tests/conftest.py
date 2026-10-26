@@ -6,6 +6,7 @@
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import httpx
@@ -66,3 +67,20 @@ async def db():
     client = ArcadeDB()
     yield client
     await client.close()
+
+
+def unique(label: str) -> str:
+    """A throwaway domain id no other run uses: tests (several fixers, two terminals) share one ArcadeDB, and a fixed
+    id let one run drop another's database mid-test."""
+    return f"zz_{label}_{uuid.uuid4().hex[:8]}"
+
+
+@pytest.fixture
+async def scratch(db):
+    """An empty domain database under a unique id, dropped afterwards. Yields (db, domain)."""
+    from core import database as kgdb
+
+    domain = unique("t")
+    await kgdb.ensure_domain_db(db, domain)
+    yield db, domain
+    await kgdb.drop_domain_db(db, domain)

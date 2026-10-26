@@ -3,7 +3,8 @@
 # tests pass when KG code changed. Installed by `./sovereign hooks`.
 set -uo pipefail
 root="$(git rev-parse --show-toplevel)"
-staged="$(git diff --cached --name-only --diff-filter=ACM)"
+# R too: a file renamed to .env is a new path all the same.
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
 fail() { echo "✗ pre-commit: $1" >&2; exit 1; }
 
 if bad="$(grep -E '(^|/)\.env$|\.env\.local$|\.pem$|(^|/)id_[a-z0-9]+$|\.scout-catalog\.json$|research/\.deer-flow/|\.tsbuildinfo$|(^|/)\.hermes-home/' <<<"$staged")"; then
@@ -16,10 +17,13 @@ $bad"
 fi
 
 diff="$(git diff --cached -U0)"
-token="$(grep -h '^SOVEREIGN_TOKEN=' "$root/kg/.env" 2>/dev/null | cut -d= -f2- || true)"
-if [ -n "$token" ] && grep -qF -- "$token" <<<"$diff"; then
-  fail "the SOVEREIGN_TOKEN value is in the staged changes"
-fi
+# The token lives in the root .env in Docker mode and in each service's .env in development (never printed).
+for env in "$root/.env" "$root/kg/.env" "$root/hermes/.env" "$root/research/.env"; do
+  token="$(grep -h '^SOVEREIGN_TOKEN=' "$env" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+  if [ -n "$token" ] && grep -qF -- "$token" <<<"$diff"; then
+    fail "the SOVEREIGN_TOKEN value (from ${env#"$root"/}) is in the staged changes"
+  fi
+done
 if bad="$(grep -nE '^\+.*(sk-ant-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY|tvly-[A-Za-z0-9]{20,}|xox[bp]-[A-Za-z0-9-]{20,})' <<<"$diff")"; then
   fail "something that looks like a secret key is in the staged changes:
 $bad"

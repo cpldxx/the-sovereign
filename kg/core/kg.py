@@ -19,14 +19,16 @@ import time
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 
 from agents.extractor import STATE, extract, relate
 from agents.linker import link
 from agents.resolver import resolve
-from agents.validator import validate
+from agents.validator import judge
 from core import activity
 from core import database as kgdb
-from core.database import ArcadeDB, new_uid, now
+from core.database import ArcadeDB, ArcadeDBError, new_uid, now
 from core.embeddings import embed
 from core.names import name_key
 from core.ontology import Ontology, normalize_type
@@ -48,7 +50,9 @@ FACT_SIMILARITY = 0.75      # existing facts this similar to a new one are compa
 # Pages come as markdown with every link's URL, image tags, menus, "related" lists and share buttons — tokens the
 # model reads and junk it extracts. Measured on three research pages (2026-10-12): 38k → 27k characters, the
 # newsletter page −65%, article text untouched. The episode keeps the original; only what the model reads is cleaned.
-_LINK = re.compile(r"!?\[([^\]]*)\]\((?:[^()\s]+(?:\([^()\s]*\))?)*(?:\s+\"[^\"]*\")?\)")
+# One character or one (…) group per step: a nested "(x+)*" here froze the KG for 6 days on a link that never closed
+# (2026-10-15 — each extra character doubled the time, and the regex runs on the event loop).
+_LINK = re.compile(r"!?\[([^\]]*)\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+\"[^\"]*\")?\)")
 _SHARE = re.compile(r"^(?:share (?:on|via|to) \w+[\s|·•,]*)+$", re.I)
 
 
@@ -126,9 +130,20 @@ def _conform(relation: str, allowed: set[str]) -> tuple[str, bool] | None:
     return None
 
 
+@lru_cache(maxsize=4096)
+def _mention(name: str) -> re.Pattern:
+    """A name as a word: an end in Latin letters or digits must not run on into another word — "AI" was found in
+    "said", "Arm" in "pharmaceutical" (2026-10-14). Scripts written without spaces (삼성전자는) match as they stand.
+    A plural or possessive ending still counts (GPU → GPUs, Nvidia's)."""
+    edge = re.compile(r"[a-z0-9]")
+    head = r"(?<![a-z0-9])" if edge.match(name[0]) else ""
+    tail = r"(?:'?s|es)?(?![a-z0-9])" if edge.match(name[-1]) else ""
+    return re.compile(head + re.escape(name) + tail)
+
+
 def _in_text(names: list[str], text: str) -> bool:
     lowered = " ".join(text.lower().split())
-    return any(" ".join(n.lower().split()) in lowered for n in names if n.strip())
+    return any(_mention(n).search(lowered) for n in (" ".join(n.lower().split()) for n in names) if n)
 
 
 def _latin_share(text: str) -> float:
@@ -153,6 +168,7 @@ class Report:
         self.label = ""           # what is being read, for the agent view
         self.chunks = 0
         self.gaps: Counter[str] = Counter()  # "relation:uses" / "type:person" → items the ontology could not hold
+        self.failure = ""         # why reading or writing this source failed (the episode is then "failed")
 
     def entity(self, **kw) -> None:
         self.entities.append(kw)
@@ -190,6 +206,8 @@ async def ingest(
     """Store a source as an Episode and grow the graph from it. Raises ValueError for unknown domains.
 
     content_status: "full" | "partial" (paywalled/truncated: facts get capped reliability).
+    The result says duplicate (this text was read already, or is being read: pending) or, when a model call or a
+    write failed, failed + reason — the episode is then "failed" and the same text is read again next time.
     """
     dom = load_domain(domain)
     grammar = Ontology.model_validate(dom["ontology"])
@@ -198,14 +216,59 @@ async def ingest(
 
     text = raw_text.strip()
     digest = hashlib.sha256(" ".join(text.split()).encode()).hexdigest()
-    if existing := await kgdb.find_episode(db, domain, digest):
-        return {**Report(existing["uid"]).as_dict(), "duplicate": True}
+    existing = await kgdb.find_episode(db, domain, digest)
+    if existing and not _retry(existing):
+        return {**Report(existing["uid"]).as_dict(), "duplicate": True,
+                **({"pending": True} if existing.get("status") == "pending" else {})}
+    episode_uid = existing["uid"] if existing else new_uid("ep")
+    _active.add(episode_uid)   # before any await: a second call with the same text sees it taken
+    try:
+        if existing:
+            # A failed (or abandoned) read is read again under the same episode: what it wrote before is matched,
+            # and strengthening counts an episode once.
+            await kgdb.set_episode_status(db, domain, episode_uid, "pending")
+        else:
+            try:
+                await kgdb.create_episode(db, domain, {
+                    "uid": episode_uid, "source": source, "title": title or "", "content": text,
+                    "content_status": content_status, "content_hash": digest, "created_at": now(),
+                }, status="pending")
+            except ArcadeDBError:
+                # The same text arriving twice at once: the content_hash index lets one in.
+                if again := await kgdb.find_episode(db, domain, digest):
+                    return {**Report(again["uid"]).as_dict(), "duplicate": True,
+                            **({"pending": True} if again.get("status") == "pending" else {})}
+                raise
+        return await _ingest(db, domain, grammar, description, text, source, title, content_status, episode_uid)
+    finally:
+        _active.discard(episode_uid)
 
-    episode_uid = new_uid("ep")
-    await kgdb.create_episode(db, domain, {
-        "uid": episode_uid, "source": source, "title": title or "", "content": text,
-        "content_status": content_status, "content_hash": digest, "created_at": now(),
-    })
+
+# An episode is created before any model call (its content_hash is what makes a text a duplicate). Until
+# 2026-10-14 one whose read failed blocked that text for good: re-ingesting it answered duplicate=True and research
+# skipped the URL. Now it carries a status: pending → done | failed; failed or long-pending ones are read again.
+PENDING_STALE = timedelta(hours=1)
+_active: set[str] = set()   # episodes being read in this process
+
+
+def _retry(episode: dict) -> bool:
+    """Whether an existing episode with this text should be read again: it failed, or it has been pending so long
+    that its reader is gone (a restart). None = an episode from before statuses: done."""
+    status = episode.get("status")
+    if status == "failed":
+        return episode["uid"] not in _active
+    if status != "pending" or episode["uid"] in _active:
+        return False
+    try:
+        started = datetime.fromisoformat(str(episode.get("created_at")))
+    except ValueError:
+        return True
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - started > PENDING_STALE
+
+
+async def _ingest(db, domain, grammar, description, text, source, title, content_status, episode_uid) -> dict:
     report = Report(episode_uid)
     report.label = (title or source)[:100]
     cap = PARTIAL_CAP if content_status == "partial" else 1.0
@@ -218,15 +281,26 @@ async def ingest(
         async def read(chunk):
             async with _reading:
                 return await _read_chunk(domain, description, grammar, chunk, source, cap, report)
-        reads = await asyncio.gather(*(read(c) for c in chunks))
-        async with _writing[domain]:
-            for r in reads:
-                if r:
-                    await _write_chunk(db, domain, r, source, episode_uid, report)
+        try:
+            reads = await asyncio.gather(*(read(c) for c in chunks))
+            # A chunk the model couldn't read fails the whole source before anything is written: the next try
+            # starts clean instead of re-reading chunks already written.
+            if not report.failure:
+                async with _writing[domain]:
+                    for r in reads:
+                        if r:
+                            await _write_chunk(db, domain, r, source, episode_uid, report)
+        except Exception as e:
+            report.failure = f"{type(e).__name__}: {e}"[:500]
+            print(f"[KG] ingest of {source} failed: {report.failure}", flush=True)
         report.timings["total"] = round(time.perf_counter() - start, 2)
         if report.gaps:
             await kgdb.set_episode_gaps(db, domain, episode_uid, dict(report.gaps))
-        result = {**report.as_dict(), "duplicate": False}
+        await kgdb.set_episode_status(db, domain, episode_uid, "failed" if report.failure else "done",
+                                      error=report.failure or None)
+        result = {**report.as_dict(), "duplicate": False, "failed": bool(report.failure)}
+        if report.failure:
+            result["reason"] = report.failure
         if obs:
             obs.update(output={k: v for k, v in result.items() if isinstance(v, (int, dict)) and k != "entities"})
     return result
@@ -304,6 +378,9 @@ async def _read_chunk(domain, description, grammar: Ontology, text, source, cap,
     """Extract → code gates → relate → validate → embed: model calls only, so chunks are read side by side."""
     with _doing(report, domain, "extract"):
         ex = await extract(text, domain, description, grammar, source)
+    if ex is None:
+        report.failure = report.failure or "the Extractor's model call failed"
+        return None
 
     # ── Code gates: entities ───────────────────────────────────────────────
     kept: dict[str, dict] = {}   # name key → entity
@@ -379,7 +456,10 @@ async def _read_chunk(domain, description, grammar: Ontology, text, source, cap,
         # A fact is checked as the edge it becomes, not only as its sentence: "HBM is made by Samsung, SK hynix and
         # Micron" is true, yet ⟨Samsung —supplies→ Micron⟩ is not (seen 2026-10-12). A relation found in a statement
         # is checked as that relation ("Samsung manufactures HBM3E").
-        verdicts = await validate(text, source, [f.get("check") or _with_link(f, kept) for f in facts])
+        verdicts = await judge(text, source, [f.get("check") or _with_link(f, kept) for f in facts])
+    if verdicts is None:
+        report.failure = report.failure or "the Validator's model call failed"
+        return None
     commit, weak = [], []
     for f, v in zip(facts, verdicts):
         f["reliability"] = round(min(v.reliability, cap), 3)
@@ -523,12 +603,21 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
             by_uid = {c["uid"]: c for c in candidates[i]}
             lk = links.get(i)
             if lk and lk.same_as and lk.confident:
+                if await _counted(db, domain, by_uid[lk.same_as], source, episode_uid):
+                    report.fact(fact=f["fact"], relation=f["relation"], **names, uid=lk.same_as, status="known",
+                                reason="already counted from this source")
+                    continue
                 r = await kgdb.strengthen_fact(db, domain, by_uid[lk.same_as]["relation"], lk.same_as, episode_uid,
                                                f["reliability"])
                 report.fact(fact=f["fact"], relation=f["relation"], **names, uid=lk.same_as, status="strengthened", **r)
                 continue
             uid = await kgdb.create_fact(db, domain, f["source_uid"], f["relation"], f["target_uid"], f["fact"],
                                          f["embedding"], episode_uid, f["reliability"])
+            if uid is None:
+                # An endpoint was deleted (pruned, merged away) between reading and writing.
+                report.fact(fact=f["fact"], relation=f["relation"], **names, status="rejected",
+                            reason="endpoint vanished")
+                continue
             invalidated = []
             if lk and lk.confident:
                 for old in lk.supersedes:
@@ -545,6 +634,27 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
                         weight=f["reliability"], invalidated=invalidated)
     if commit:
         activity.event(domain, "linker", "graph", "write", f"{len(commit)} facts from {report.label}")
+
+
+async def known_sources(db: ArcadeDB, domain: str, urls: list[str]) -> list[str]:
+    """The URLs among `urls` the graph has read: an episode from them is done (or older than episode statuses).
+    A failed or unfinished read doesn't count — research fetches those pages again."""
+    wanted = sorted({u for u in urls if u})
+    if not wanted or not await db.exists(domain):
+        return []
+    rows = await db.cypher(domain, "MATCH (ep:Episode) WHERE ep.source IN $u RETURN ep.source AS source, "
+                                   "ep.status AS status", u=wanted)
+    done = {r["source"] for r in rows if r.get("status") in (None, "done")}
+    return [u for u in dict.fromkeys(urls) if u in done]
+
+
+async def _counted(db, domain, fact: dict, source: str, episode_uid: str) -> bool:
+    """Whether this fact already counts a reading of this web page. A page read again (it changed a little, so it is
+    a new episode) restates its facts: that is the same source, not another one — it must not add evidence."""
+    if not source.startswith(("http://", "https://")):
+        return False
+    others = [u for u in fact.get("sources") or [] if u != episode_uid]
+    return any(ep.get("source") == source for ep in await kgdb.get_episodes(db, domain, others))
 
 
 # ── Head review decisions ──────────────────────────────────────────────────
@@ -581,6 +691,7 @@ async def relink_states(db: ArcadeDB, domain: str, dry_run: bool = False, batch:
         found = await relate([{"fact": st["fact"], "entities": [names[u] for u in uids]} for st, uids in part],
                              relations)
         per: dict[int, list[tuple[str, str, str]]] = {}
+        unread = set()   # statements whose check never ran: asked again next time
         for r in found:
             if not 0 <= r.index < len(part):
                 continue
@@ -596,8 +707,12 @@ async def relink_states(db: ArcadeDB, domain: str, dry_run: bool = False, batch:
         for j, triples in per.items():
             st, _ = part[j]
             proposed += len(triples)
-            verdicts = await validate(st["fact"], "a stored statement",
-                                      [f"{names[s]} {rel.replace('_', ' ')} {names[tg]}." for s, rel, tg in triples])
+            verdicts = await judge(st["fact"], "a stored statement",
+                                   [f"{names[s]} {rel.replace('_', ' ')} {names[tg]}." for s, rel, tg in triples])
+            if verdicts is None:
+                unread.add(st["uid"])
+                skipped["not checked (model failed)"] += len(triples)
+                continue
             for (s, rel, tg), v in zip(triples, verdicts):
                 trust = round(min(v.reliability, 1.0 - (st.get("disbelief") or 0.0)), 3)
                 if not v.supported or trust < COMMIT_RELIABILITY:
@@ -615,13 +730,17 @@ async def relink_states(db: ArcadeDB, domain: str, dry_run: bool = False, batch:
                 vec = (await embed([st["fact"]]) or [None])[0]
                 uid = await kgdb.create_fact(db, domain, s, rel, tg, st["fact"], vec,
                                              sources[0] if sources else "", trust)
+                if uid is None:   # an endpoint was deleted meanwhile
+                    added.pop()
+                    skipped["entity gone"] += 1
+                    continue
                 await db.cypher(domain, "MATCH ()-[r:Fact {uid: $u}]->() SET r.sources = $src, r.evidence = $n",
                                 u=uid, src=sources, n=max(len(sources), 1))
                 for ep in sources:
                     await kgdb.link_mentions(db, domain, ep, [s, tg])
         if not dry_run:
             await db.cypher(domain, "MATCH ()-[r:has_state]->() WHERE r.uid IN $u SET r.relinked = true",
-                            u=[st["uid"] for st, _ in part])
+                            u=[st["uid"] for st, _ in part if st["uid"] not in unread])
     return {"dry_run": dry_run, "statements": len(asks), "proposed": proposed, "added": len(added),
             "skipped": dict(skipped), "facts": added}
 
@@ -634,13 +753,20 @@ async def resolve_review(db: ArcadeDB, domain: str, review_uid: str, approve: bo
     if item["status"] != "pending":
         raise ValueError(f"Review item {review_uid} is already {item['status']}")
     p = item["payload"]
-    outcome = "dismissed"
+    outcome, created = "dismissed", None
     if approve and item["kind"] == "fact":
         [vector] = await embed([p["fact"]])
-        uid = await kgdb.create_fact(db, domain, p["source_uid"], p["relation"], p["target_uid"], p["fact"],
-                                     vector, p["episode_uid"], p["reliability"])
-        outcome = f"fact {uid} added"
+        created = await kgdb.create_fact(db, domain, p["source_uid"], p["relation"], p["target_uid"], p["fact"],
+                                         vector, p["episode_uid"], p["reliability"])
+        if created is None:
+            # Its entity was merged away or pruned since: approving can't place the fact. The review stays pending.
+            raise ValueError(f"An entity of review item {review_uid} no longer exists — reject this review")
+        outcome = f"fact {created} added"
     elif approve and item["kind"] == "merge":
+        found = {e["uid"] for e in await kgdb.get_entities(db, domain, [p["entity_uid"], p["candidate_uid"]])}
+        if len(found) < 2:
+            # Merging into a deleted entity would delete the other one with all its facts.
+            raise ValueError(f"An entity of review item {review_uid} no longer exists — reject this review")
         await kgdb.merge_entities(db, domain, p["entity_uid"], p["candidate_uid"])
         outcome = f"{p['entity_name']} merged into {p['candidate_name']}"
     elif approve and item["kind"] == "link":
@@ -657,7 +783,11 @@ async def resolve_review(db: ArcadeDB, domain: str, review_uid: str, approve: bo
         if superseded:
             outcome = f"superseded {len(superseded)} fact(s)"
     resolution = f"{outcome}{' — ' + note if note else ''}"
-    await kgdb.close_review(db, domain, review_uid, "approved" if approve else "rejected", resolution)
+    if not await kgdb.close_review(db, domain, review_uid, "approved" if approve else "rejected", resolution):
+        # Someone decided it meanwhile (the Head's sweep and a person at once): theirs stands, not a second copy.
+        if created:
+            await kgdb.invalidate_fact(db, domain, p["relation"], created, f"review {review_uid} decided twice")
+        raise ValueError(f"Review item {review_uid} was already decided")
     return {"uid": review_uid, "status": "approved" if approve else "rejected", "resolution": resolution}
 
 
@@ -693,6 +823,8 @@ async def _query(db: ArcadeDB, domain: str, question: str, k: int, empty: dict) 
     known = {e["uid"] for e in entities}
     endpoints = {u for f in facts for u in (f["source_uid"], f["target_uid"])} - known
     entities += await kgdb.get_entities(db, domain, sorted(endpoints))
-    sources = sorted({s for f in facts[:20] for s in (f.get("sources") or [])})
-    return {**empty, "entities": entities, "facts": facts,
-            "episodes": await kgdb.get_episodes(db, domain, sources[:30])}
+    # The sources of the first (closest, then strongest) facts first — sorting the uids picked 30 at random.
+    sources = list(dict.fromkeys(s for f in facts[:20] for s in (f.get("sources") or [])))[:30]
+    rank = {u: i for i, u in enumerate(sources)}
+    episodes = sorted(await kgdb.get_episodes(db, domain, sources), key=lambda ep: rank.get(ep["uid"], len(rank)))
+    return {**empty, "entities": entities, "facts": facts, "episodes": episodes}

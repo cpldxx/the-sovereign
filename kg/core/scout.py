@@ -35,6 +35,7 @@ The nightly health check reads every source once; a group with fewer than MIN_WO
 """
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -66,8 +67,32 @@ def _slug(text: str, limit: int = 41) -> str:
     return slug[:limit].rstrip("_")
 
 
+def _member_name(group: str, host: str, limit: int = 41) -> str:
+    """A source's name in its group. Cut to `limit`, it ends in a short hash of the host (2026-10-14: weather.com and
+    weatherapi.com both became "…_wea" and the second overwrote the first)."""
+    name = _slug(f"{group}_{host}", 10_000)
+    if len(name) <= limit:
+        return name
+    tag = hashlib.sha1(host.encode()).hexdigest()[:6]
+    return f"{_slug(name, limit - len(tag) - 1)}_{tag}"
+
+
 def _host(url: str) -> str:
     return urlsplit(url).netloc.lower().removeprefix("www.")
+
+
+def _with_code(members: list[dict]) -> list[dict]:
+    """The sources a scout can run as they are (sandbox): parsers. Pages read by the model, site searches and the
+    live-search stopgap have no code (2026-10-14: running those crashed every rescout of a dead sensor)."""
+    return [m for m in members if m.get("code")]
+
+
+def _catalog_url(member: dict) -> str:
+    """The catalog's key for a stored source: its URL template — "site:<host>" for a site found by site search (it is
+    stored with https://<host>/, which the catalog never knew)."""
+    if member.get("kind") == "site" and member.get("host"):
+        return f"site:{member['host']}"
+    return member.get("url") or ""
 
 
 def _shape_text(name: str, description: str, params: dict, fields: list[dict]) -> str:
@@ -355,7 +380,7 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
         name = _slug(plan.name)
         params = {p.name: {"type": p.type, "description": p.description, "example": p.example} for p in plan.params}
         if await sensors.members(db, domain, name):
-            name = _slug(f"{name}_{int(time.time()) % 10000}")
+            name = f"{_slug(name, 36)}_{int(time.time()) % 10000}"   # cut first: a 41-char name lost the suffix
     # A parameter echoed back is not what the need is about.
     fields = [{**f.model_dump(), "required": f.name in watched} for f in plan.fields if f.name not in params]
     if fields and not any(f["key"] for f in fields):
@@ -380,7 +405,7 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
 
     # What the group's current sources read now: the reference a candidate page must show, and votes later.
     current = []
-    for m in existing:
+    for m in _with_code(existing):
         out = await sensors.run_code(m["code"], args, domain)
         if out["ok"] and isinstance(out["result"], dict):
             current.append(out["result"])
@@ -490,7 +515,7 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
         c.pop("full", None)
         if c["outcome"] != "works":
             continue
-        member = c.get("repair") or _slug(f"{name}_{c['host']}")
+        member = c.get("repair") or _member_name(name, c["host"])
         try:
             if c.get("mode") in ("extract", "site"):
                 await sensors.save_extract(db, domain, f"https://{c['host']}/" if c["mode"] == "site" else c["url"],
@@ -504,8 +529,11 @@ async def discover(db: ArcadeDB, j: dict, description: str) -> None:
             c["outcome"] = f"not saved: {e}"[:120]
         for k in ("code", "result"):
             c.pop(k, None)
-    for m in await sensors.members(db, domain, name):
-        await kgdb.update_doc(db, domain, "Sensor", m["uid"], {"scouted_at": now()})
+    for m in await sensors.members(db, domain, name, with_code=False):
+        changes = {"scouted_at": now()}
+        if kept and m.get("kind") == "search":   # real sources now: the live-search stopgap goes
+            changes["status"] = "retired"
+        await kgdb.update_doc(db, domain, "Sensor", m["uid"], changes)
     learned = await catalog.record(need, list(params), cands)
     log.append(f"catalog: {learned}")
     j.update(sensor=name if kept or existing else None, sources=len(kept))
@@ -540,7 +568,7 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
                 continue
             out = await sensors._run_member(db, domain, m, args, schema)
             working += out["ok"] and m.get("kind") != "search"   # a live search is a stopgap, not a source
-            await catalog.record_source(m.get("url") or "", list(group["params"]), out["ok"])
+            await catalog.record_source(_catalog_url(m), list(group["params"]), out["ok"])
             if out["ok"] and key and isinstance(v := (out["result"] or {}).get(key), (int, float)):
                 values.append(v)
                 read_values.append((m, v))
@@ -557,7 +585,7 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
                                 "last_error": f"disagreed with the other sources ({key} {v})"}
                     if outvoted >= 3:
                         changes["status"] = "retired"
-                    await catalog.record_source(m.get("url") or "", list(group["params"]), False)
+                    await catalog.record_source(_catalog_url(m), list(group["params"]), False)
                     report[group["name"]].setdefault("outvoted", []).append(sensors.host_of(m))
                 await kgdb.update_doc(db, domain, "Sensor", m["uid"], changes)
         # How far this group's sources usually differ: the tolerance its readings are compared with.
@@ -589,9 +617,11 @@ async def health_check(db: ArcadeDB, domain: str) -> dict:
                 await kgdb.update_doc(db, domain, "Sensor", m["uid"], {"status": "retired"})
                 report[group["name"]].setdefault("retired", []).append(m["name"])
             else:
-                await kgdb.update_doc(db, domain, "Sensor", m["uid"], {"repairs": (m.get("repairs") or 0) + 1})
-                broken.append(m["name"])
+                broken.append(m)
         if broken and group.get("need") and not busy:
             report[group["name"]]["repair"] = coding.submit(db, domain, group["need"], "scout", group=group["name"],
-                                                            repair=broken)["id"]
+                                                            repair=[m["name"] for m in broken])["id"]
+            # Counted only for a repair actually tried (2026-10-14: a busy group's parsers were retired untried).
+            for m in broken:
+                await kgdb.update_doc(db, domain, "Sensor", m["uid"], {"repairs": (m.get("repairs") or 0) + 1})
     return report

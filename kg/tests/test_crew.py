@@ -4,6 +4,7 @@ Runs on a throwaway domain in a temporary domains directory (the real domains ar
 stand-ins, so no model is needed — the real roster is checked for shape only."""
 
 import asyncio
+import secrets
 
 import pytest
 from pydantic import BaseModel, Field
@@ -38,7 +39,8 @@ async def _desk(db, domain) -> str:
 async def team(db, tmp_path, monkeypatch):
     """A temporary domain with a stand-in team; the Head's wake is captured instead of calling Hermes."""
     monkeypatch.setattr(registry, "DOMAINS_DIR", tmp_path)
-    domain = registry.create_domain("Crew test", "A throwaway domain for the crew tests")
+    # unique per run: two runs at once (or a run beside a leftover database) must not share one
+    domain = registry.create_domain(f"Crew test {secrets.token_hex(4)}", "A throwaway domain for the crew tests")
     await kgdb.ensure_domain_db(db, domain)
     monkeypatch.setattr(crew, "ROSTER", {"echo": crew.Member("echo", "Echo", "repeats things", _desk, {
         "say": crew.Task("say", "Echo a text", Echo, _echo),
@@ -421,3 +423,238 @@ async def test_forgetting_retires_unconfirmed_weak_facts_and_what_only_they_held
     rows = await db.cypher(domain, "MATCH ()-[r:Fact]->() RETURN r.uid AS uid, r.invalid_reason AS why")
     assert {r["uid"]: (r["why"] or "") for r in rows}["f_weak"].startswith("forgotten")
     assert learning.FORGOTTEN not in ({r["uid"]: (r["why"] or "") for r in rows}["f_strong"])
+
+
+# ── Regressions (2026-10-14 review) ────────────────────────────────────────
+
+@pytest.mark.db
+async def test_a_report_that_lost_the_race_for_the_wake_is_woken_after(team):
+    """A Watcher / Operator report on a thread the Head didn't open, refused while the Head was busy, gets its turn
+    once the Head is free (only Head-opened threads counted before)."""
+    db, domain, woken = team
+    crew._waking.add(domain)                                    # the Head is busy with another domain's turn
+    try:
+        await crew.report(db, domain, "echo", "playbook fired — X", "X happened; it calls for alert(…)")
+        await asyncio.sleep(0.3)
+    finally:
+        crew._waking.discard(domain)
+    assert not woken and await crew._waiting_report(db, domain)
+    await crew.assign(db, domain, "echo", "say", {"text": "hello"})
+    assert await _until(lambda: _async(len(woken) == 2))
+    assert any("X happened" in w for w in woken) and await crew.unread(db, domain) == 0
+
+
+@pytest.mark.db
+async def test_a_failed_wake_spends_nothing_and_leaves_the_report_unread(team, monkeypatch):
+    db, domain, woken = team
+
+    async def broken(domain_, message):
+        raise ValueError("Expecting value: line 1 column 1")      # Hermes answered something that isn't JSON
+    monkeypatch.setattr(crew, "_ask_head", broken)
+    await crew.report(db, domain, "echo", "fired", "something to decide")
+    assert await _until(lambda: _async(not crew._waking))
+    await asyncio.sleep(0.3)
+    thread = await crew._waiting_report(db, domain)
+    assert thread and (await kgdb.get_doc(db, domain, "Thread", thread))["wakes"] == 0
+    assert await crew.unread(db, domain) == 1 and not crew._wakes[domain]
+
+
+@pytest.mark.db
+async def test_a_message_claimed_elsewhere_is_not_run_twice(team):
+    db, domain, woken = team
+    uid = await crew._open(db, domain, "echo", "claimed", "head", None)
+    msg = await crew._post(db, domain, uid, "head", "echo", "task", "say: x", {"inputs": {"text": "xx"}},
+                           task="say", status=crew.WORKING)            # another KG process took it
+    await crew._work(db, domain, {**msg, "status": crew.QUEUED})
+    t = await crew.thread(db, domain, uid)
+    assert len(t["messages"]) == 1 and t["messages"][0]["status"] == crew.WORKING
+
+
+@pytest.mark.db
+async def test_a_consulted_agent_sees_the_latest_messages_of_its_thread(team):
+    db, domain, _ = team
+    uid = await crew._open(db, domain, "echo", "long", "head", None)
+    for i in range(12):
+        await crew._post(db, domain, uid, "head", "user", "note", f"line {i}", status=crew.READ)
+        await asyncio.sleep(1.01) if i in (3, 10) else None        # created_at has seconds: keep the order clear
+    history = await crew._history(db, domain, {"thread": uid, "uid": ""})
+    assert "line 11" in history and "line 0" not in history and history.index("line 10") < history.index("line 11")
+
+
+async def test_the_activity_feed_does_not_repeat_the_task_name(monkeypatch):
+    seen = []
+    monkeypatch.setattr(crew.activity, "event", lambda d, s, r, k, text="": seen.append(text))
+
+    async def insert(db, domain, type_, doc, json_fields=()):
+        return {**doc, "uid": "mess_0123456789ab", "created_at": "now"}
+
+    async def update(*a, **kw):
+        return True
+    monkeypatch.setattr(kgdb, "insert_doc", insert)
+    monkeypatch.setattr(kgdb, "update_doc", update)
+    await crew._post(None, "d", "t", "head", "nobody", "task", "check: two claims", task="check", status="read")
+    await crew._post(None, "d", "t", "head", "nobody", "task", "two claims", task="check", status="read")
+    assert seen == ["check: two claims", "check: two claims"]
+
+
+def test_a_review_queue_the_head_cannot_decide_waits_until_it_changes(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(crew.time, "monotonic", lambda: clock[0])
+    crew._fruitless.pop("rv", None)
+    mark = (3, "a", "b")
+    assert not crew._skip_review("rv", mark)
+    crew._after_review("rv", {"decided": 0, "rounds": 1}, mark, every=30)
+    assert crew._skip_review("rv", mark)                        # same queue: wait
+    clock[0] += 31 * 60
+    assert not crew._skip_review("rv", (4, "a", "c"))          # it changed: sweep again
+    crew._after_review("rv", {"decided": 0, "rounds": 1}, (4, "a", "c"), every=30)
+    clock[0] += 31 * 60
+    assert crew._skip_review("rv", (5, "a", "d"))              # second fruitless sweep: 60 min back-off
+    clock[0] += 7 * 3600
+    assert not crew._skip_review("rv", (4, "a", "c"))          # never more than 6 h
+    crew._after_review("rv", {"decided": 2, "rounds": 1}, (2, "a", "c"), every=30)
+    assert "rv" not in crew._fruitless
+    crew._after_review("rv", {"decided": 0, "unreachable": True}, mark, every=30)
+    assert "rv" not in crew._fruitless                          # Hermes down is not the Head failing to decide
+
+
+async def test_a_background_review_sweep_runs_one_at_a_time(monkeypatch):
+    monkeypatch.setattr(crew.registry, "load_domain", lambda d: {})
+    ran = asyncio.Event()
+
+    async def sweep(db, domain, minutes):
+        ran.set()
+        return {"decided": 0}
+    monkeypatch.setattr(crew, "_sweep", sweep)
+    assert crew.start_review_sweep(None, "rv2", 1) is True
+    assert crew.start_review_sweep(None, "rv2", 1) is False    # the first still holds the domain
+    await asyncio.wait_for(ran.wait(), 2)
+    await asyncio.sleep(0)
+    assert "rv2" not in crew._reviewing
+
+
+# ── Playbooks: live triggers, the nightly rewrite ──────────────────────────
+
+class Playbooks:
+    """Stand-ins for what check_triggers reads and writes."""
+
+    def __init__(self, monkeypatch, reading: dict, kinds: list[str]):
+        from core import playbooks, sensors
+        self.notes, self.fired = [], []
+        pb = {"uid": "play_0123456789ab", "name": "NVDA drop", "action": "alert", "evidence": [], "response": "warn",
+              "trigger": {"sensor": "quote", "params": {"symbol": "NVDA"}, "field": "change_percent", "op": "<=",
+                          "value": -5, "every_minutes": 60}}
+
+        async def list_playbooks(db, domain, status="active"):
+            return [dict(pb)]
+
+        async def read(db, domain, name, params=None, verify_field=None):
+            return reading
+
+        async def members(db, domain, name, with_code=True):
+            return [{"kind": k} for k in kinds]
+
+        async def update(db, domain, type_, uid, changes, json_fields=(), if_status=None):
+            if "trigger_checked_at" in changes:
+                self.notes.append(changes["trigger_note"])
+            return True
+
+        async def fire(db, domain, pb_, reading_, why):
+            self.fired.append(why)
+            return {"playbook": pb_["name"]}
+        monkeypatch.setattr(playbooks, "list_playbooks", list_playbooks)
+        monkeypatch.setattr(sensors, "read", read)
+        monkeypatch.setattr(sensors, "members", members)
+        monkeypatch.setattr(kgdb, "update_doc", update)
+        monkeypatch.setattr(playbooks, "_fire", fire)
+
+
+def _reading(value, **kw):
+    return {"ok": True, "result": {"change_percent": value}, "source": "a.example", **kw}
+
+
+@pytest.mark.parametrize("reading,kinds,fires,note", [
+    (_reading(-6, tier="search", confidence="one page only"), ["search"], False, "unconfirmed"),
+    (_reading(-6), ["api", "page"], False, "no second source"),
+    (_reading(-6, agreement={"other_source": "b.example", "other_value": -1.0}), ["api", "page"], False, "but"),
+    (_reading(-6, agreement={"other_source": "b.example", "other_value": -5.8}), ["api", "page"], True, None),
+    (_reading(-6), ["api"], True, "single source"),
+    (_reading(-6, tier="search", confidence="agreed by several pages"), ["search"], True, "single source"),
+    ({"ok": False, "error": "every source failed"}, ["api"], False, "read failed"),
+])
+async def test_a_live_trigger_fires_only_when_a_second_source_agrees(monkeypatch, reading, kinds, fires, note):
+    from core import playbooks
+    pb = Playbooks(monkeypatch, reading, kinds)
+    await playbooks.check_triggers(None, "d")
+    assert bool(pb.fired) is fires
+    assert (pb.notes[0] is None) if note is None else (note in pb.notes[0])
+
+
+async def test_the_watcher_does_not_evaluate_beside_the_nightly_cycle(monkeypatch):
+    from core import playbooks
+    monkeypatch.setattr(playbooks, "load_domain", lambda d: {})
+    playbooks._running.add("pbx")
+    try:
+        with pytest.raises(RuntimeError, match="running"):
+            await playbooks.check_now(None, "pbx", "2026-01-01T00:00:00+00:00")
+    finally:
+        playbooks._running.discard("pbx")
+
+
+async def test_a_trigger_without_a_live_reading_waits_for_its_meaning_check(monkeypatch):
+    from core import playbooks, sensors
+    asked = []
+
+    async def groups(db, domain):
+        return []
+
+    async def pbs(db, domain, status="active"):
+        return [{"uid": "p1", "situation": "s", "trigger": {"sensor": "q", "params": {}, "field": "price", "op": ">",
+                                                             "value": 1}, "trigger_value": None}]
+
+    async def meaning(*a):
+        asked.append(a)
+        return ""
+    monkeypatch.setattr(sensors, "groups", groups)
+    monkeypatch.setattr(playbooks, "list_playbooks", pbs)
+    monkeypatch.setattr(playbooks, "_meaning", meaning)
+    assert await playbooks.recheck_triggers(None, "d") == 0 and asked == []
+
+
+async def test_the_strategist_cannot_duplicate_or_resurrect_a_playbook(monkeypatch):
+    """A draft with no uid but an active playbook's name is that playbook; one bringing back what it retires in the
+    same answer is dropped; trigger checks (a live read + a model call) only for drafts that are written."""
+    from agents.strategist import PlaybookDraft, Playbooks as Answer, SensorTrigger
+    from core import actions as actions_mod, playbooks, sensors
+    current = [{"uid": "p_keep", "name": "HBM squeeze", "watch": [{"uid": "e_hbm", "name": "HBM"}]},
+               {"uid": "p_old", "name": "Old idea", "watch": [{"uid": "e_old", "name": "Old"}]},
+               {"uid": "p_held", "name": "Held one", "watch": [{"uid": "e_held", "name": "Held"}]}]
+    trigger = SensorTrigger(sensor="q", field="price", op=">", value=1)
+    answer = Answer(retire=["p_old"], playbooks=[
+        PlaybookDraft(name="HBM Squeeze", situation="s", watch=["HBM"], response="r", action="alert", trigger=trigger),
+        PlaybookDraft(name="Old idea again", situation="s", watch=["Old"], response="r", action="alert"),
+        PlaybookDraft(uid="p_held", name="Held one", situation="s", watch=["Held"], response="r", action="alert",
+                      trigger=trigger)])
+    writes, checked = [], []
+
+    async def returns(value):
+        return value
+    monkeypatch.setattr(playbooks, "load_domain", lambda d: {"config": {}})
+    monkeypatch.setattr(actions_mod, "catalog", lambda db, d: returns([{"name": "alert"}]))
+    monkeypatch.setattr(playbooks, "list_playbooks", lambda db, d: returns([dict(p) for p in current]))
+    monkeypatch.setattr(sensors, "groups", lambda db, d: returns([]))
+    monkeypatch.setattr(playbooks, "_context", lambda *a: returns(""))
+    monkeypatch.setattr(playbooks, "write_playbooks", lambda ctx: returns(answer))
+    monkeypatch.setattr(playbooks, "_moved", lambda db, d, pb: returns(pb["uid"] != "p_held"))
+    monkeypatch.setattr(kgdb, "entities_by_keys", lambda db, d, keys: returns(
+        [{"uid": f"e_{keys[0]}", "name": keys[0]}]))
+    monkeypatch.setattr(kgdb, "get_facts", lambda db, d, uids: returns([]))
+    monkeypatch.setattr(playbooks, "set_status", lambda db, d, uid, status: returns(writes.append(("retire", uid))))
+    monkeypatch.setattr(kgdb, "update_doc", lambda db, d, t, uid, doc, *a, **kw: returns(writes.append(("update", uid))))
+    monkeypatch.setattr(kgdb, "insert_doc", lambda db, d, t, doc, *a: returns(writes.append(("insert", doc["name"]))))
+    monkeypatch.setattr(playbooks, "_check_trigger", lambda *a: returns(checked.append(a[-1]) or (None, "no")))
+    monkeypatch.setattr(playbooks, "recheck_triggers", lambda db, d: returns(0))
+    monkeypatch.setattr(playbooks, "_add_triggers", lambda db, d, s: returns(0))
+    counts = await playbooks._refresh(None, "d")
+    assert writes == [("retire", "p_old"), ("update", "p_keep")], writes
+    assert counts["held"] == 1 and counts["created"] == 0 and len(checked) == 1

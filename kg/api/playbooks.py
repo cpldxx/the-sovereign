@@ -39,8 +39,8 @@ async def list_playbooks(domain_name: str, req: Request, status: str | None = "a
 @router.post("/{domain_name}/playbooks/cycle", status_code=202)
 async def run_cycle(domain_name: str, req: Request, background_tasks: BackgroundTasks,
                     request: CycleRequest | None = None):
-    """Evaluate the playbooks against the last `hours` of changes (triggered ones become proposals), then
-    rewrite them from the graph. Minutes with a local model: background unless `wait: true`."""
+    """Evaluate the playbooks against the last `hours` of changes (the ones that fire are reported to the Head, who
+    decides), then rewrite them from the graph. Minutes with a local model: background unless `wait: true`."""
     _require(domain_name)
     request = request or CycleRequest()
     if playbooks.running(domain_name):
@@ -51,10 +51,13 @@ async def run_cycle(domain_name: str, req: Request, background_tasks: Background
     async def run() -> None:
         try:
             done = await playbooks.cycle(req.app.state.db, domain_name, request.hours, request.refresh)
-            if proposals := (done.get("evaluate") or {}).get("proposals"):
+            # Reported ones already woke the Head; only those proposed directly (HEAD_WAKE=off) need a notice.
+            # (It read evaluate()["proposals"], gone since firings are reported: the notice never came.)
+            reported = (done.get("evaluate") or {}).get("reported") or []
+            if proposed := [r for r in reported if r.get("proposal")]:
                 await crew.notify(req.app.state.db, domain_name, "watcher",
-                                  f"{len(proposals)} playbook(s) fired on the last {request.hours} h of knowledge — "
-                                  "proposals wait in Actions", {"proposals": proposals[:20]})
+                                  f"{len(proposed)} playbook(s) fired on the last {request.hours} h of knowledge — "
+                                  "proposals wait in Actions", {"proposals": proposed[:20]})
         except Exception as e:
             print(f"[KG] playbook cycle for {domain_name} failed: {type(e).__name__}: {e}", flush=True)
 

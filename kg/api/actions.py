@@ -100,9 +100,14 @@ async def create_proposal(domain_name: str, request: ProposalRequest, req: Reque
 
 @router.post("/{domain_name}/proposals/{uid}")
 async def decide(domain_name: str, uid: str, decision: Decision, req: Request):
-    """approve → execute exactly as previewed (once); reject → close it."""
+    """approve → execute exactly as previewed (once); reject → close it. A person's call: the service token is owner
+    of every domain, so an agent holding it could otherwise confirm its own proposal."""
     _require(domain_name)
+    principal = auth.current.get()
+    if principal is None or principal.kind != "user" or not principal.user:
+        raise HTTPException(status_code=403, detail="Only a person decides a proposal (sign in to the UI)")
     try:
-        return await actions.decide(req.app.state.db, domain_name, uid, decision.approve, decision.note)
+        return await actions.decide(req.app.state.db, domain_name, uid, decision.approve, decision.note,
+                                    by=principal.user["uid"])
     except actions.ActionError as e:
         raise HTTPException(status_code=409, detail=str(e))

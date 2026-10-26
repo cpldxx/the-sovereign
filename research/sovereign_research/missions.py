@@ -1,5 +1,6 @@
 """What the research agent is asked to do, per mission kind."""
 
+from collections import Counter
 from urllib.parse import urlsplit
 
 BOOTSTRAP_PAGES = 8
@@ -26,7 +27,10 @@ sources to keep monitoring (as URLs)."""
 
 
 def update(name: str, description: str, known_urls: list[str], days: int = 7) -> str:
-    sites = sorted({urlsplit(u).netloc for u in known_urls if u.startswith("http")})[:15]
+    """`known_urls`: the domain's sources, newest first. The lists were alphabetical until 2026-10-14 — the same
+    30 old pages and the first 15 site names of the alphabet every time."""
+    hosts = Counter(urlsplit(u).netloc.removeprefix("www.") for u in known_urls if u.startswith("http"))
+    sites = [h for h, _ in hosts.most_common(15) if h]
     known = "\n".join(f"- {u}" for u in known_urls[:30]) or "- (none yet)"
     return f"""Find what is NEW in this domain over the last {days} days.
 Domain: {name} — {description}

@@ -28,17 +28,39 @@ async def api_create_domain(request: CreateDomainRequest, background_tasks: Back
     principal = auth.current.get()
     if principal.kind != "user":
         raise HTTPException(status_code=403, detail="Domains are created by people (sign in)")
-    try:
-        domain = create_domain(request.name, request.description, request.data_sources, request.keywords,
-                               mine=set(principal.roles))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    db = req.app.state.db
+    avoid: set[str] = set()
+    while True:
+        try:
+            # Only the caller's own domains: one shared with them must not block their own of the same name.
+            domain = create_domain(request.name, request.description, request.data_sources, request.keywords,
+                                   mine={d for d, r in principal.roles.items() if r == "owner"}, avoid=avoid)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        try:
+            if not await db.exists(domain):
+                break
+        except Exception as e:
+            delete_domain(domain)
+            raise HTTPException(status_code=500, detail=f"Domain database creation failed: {e}")
+        # A database under this id without a folder: a leftover (a delete that failed half-way) — or a domain whose
+        # folder is elsewhere (SOVEREIGN_DOMAINS_DIR changed). A new domain must not adopt it, and dropping it could
+        # destroy a real graph: take another id.
+        print(f"[domains] a database '{domain}' exists without a folder — the new domain takes another id", flush=True)
+        delete_domain(domain)
+        avoid.add(domain)
 
     try:
-        await ensure_domain_db(req.app.state.db, domain)
+        # Memberships under this id without a folder or a database are leftovers: a new domain starts with no members.
+        await accounts.forget_domain(domain)
+        await ensure_domain_db(db, domain)
         await accounts.add_member(domain, principal.user["uid"], "owner", added_by=principal.user["uid"])
     except Exception as e:
         delete_domain(domain)
+        try:
+            await drop_domain_db(db, domain)
+        except Exception:
+            pass   # a database left behind makes the next domain under this id take another one
         raise HTTPException(status_code=500, detail=f"Domain database creation failed: {e}")
 
     background_tasks.add_task(bootstrap_domain_ontology, domain, request.description)
@@ -82,14 +104,24 @@ async def api_get_domain(domain_name: str, req: Request):
 
 @router.delete("/{domain_name}")
 async def api_delete_domain(domain_name: str, req: Request):
-    """Delete a domain workspace and drop its ArcadeDB database (owners)."""
+    """Delete a domain workspace and drop its ArcadeDB database (owners). The database goes first, then the
+    memberships, then the folder: a failed drop leaves the domain listed and owned, so deleting it can be tried again
+    (2026-10-14: the folder went first — a failed drop left a database nobody could see or delete)."""
     try:
-        delete_domain(domain_name)
-        await drop_domain_db(req.app.state.db, domain_name)
-        await accounts.forget_domain(domain_name)
-        return {"status": "deleted", "domain": domain_name}
+        ontology_path(domain_name)   # the folder exists (its config may be broken: still deletable)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    for step, run in (("dropping its database", lambda: drop_domain_db(req.app.state.db, domain_name)),
+                      ("forgetting its members", lambda: accounts.forget_domain(domain_name))):
+        try:
+            await run()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Deleting '{domain_name}' failed at {step}: {e}")
+    try:
+        delete_domain(domain_name)
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=500, detail=f"Deleting '{domain_name}' failed at removing its folder: {e}")
+    return {"status": "deleted", "domain": domain_name}
 
 
 # ── Sharing ────────────────────────────────────────────────────────────────

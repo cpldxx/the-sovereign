@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { DomainDetail, Ontology } from '../lib/api';
+import { can, type DomainDetail, type Ontology } from '../lib/api';
 import { ActionsPanel } from './ActionsPanel';
 import { LearningPanel } from './LearningPanel';
 import { SubNav } from './BriefingPanel';
@@ -31,15 +31,15 @@ export function SettingsPanel({ domain, detail, ontology, version, onSelect, onH
       ]} />
       <div className="min-h-0 flex-1">
         {(view === 'playbooks' || view === 'sensors' || view === 'apis') && (
-          <ActionsPanel key={view} domain={domain} version={version} view={view === 'apis' ? 'catalog' : view}
+          <ActionsPanel key={view} domain={domain} role={detail.role} version={version} view={view === 'apis' ? 'catalog' : view}
             onSelect={onSelect} onHighlight={onHighlight} onPending={onPending} />
         )}
         {view === 'learning' && <LearningPanel domain={domain} editable={detail.role !== 'viewer'} />}
         {view === 'ontology' && ontology && (
           <OntologyPanel domain={domain} ontology={ontology} generated={detail.ontology_generated}
-            counts={detail.stats.categories} onChanged={onOntologyChanged} />
+            counts={detail.stats.categories} editable={can(detail.role, 'editor')} onChanged={onOntologyChanged} />
         )}
-        {view === 'review' && <ReviewPanel domain={domain} version={version} onChanged={onChanged} />}
+        {view === 'review' && <ReviewPanel domain={domain} version={version} editable={can(detail.role, 'editor')} onChanged={onChanged} />}
       </div>
     </div>
   );

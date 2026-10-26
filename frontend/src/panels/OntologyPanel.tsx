@@ -5,11 +5,12 @@ import { categoryColor } from '../lib/colors';
 
 const parse = (s: string) => s.split(/[\n,]/).map(t => t.trim()).filter(Boolean);
 
-export function OntologyPanel({ domain, ontology, generated, counts, onChanged }: {
+export function OntologyPanel({ domain, ontology, generated, counts, editable, onChanged }: {
   domain: string;
   ontology: Ontology;
   generated: boolean;
   counts: Record<string, number>;
+  editable: boolean;   // editors change the grammar; viewers read it
   onChanged: () => Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
@@ -121,7 +122,7 @@ export function OntologyPanel({ domain, ontology, generated, counts, onChanged }
             </div>
           </section>
           {error && <p className="mb-3 text-xs text-bad">{error}</p>}
-          <div className="flex gap-2">
+          {editable && <div className="flex gap-2">
             <button onClick={startEdit} className="flex items-center gap-1.5 rounded-md border border-line-2 px-3 py-1.5 text-xs text-dim hover:text-ink">
               <Pencil size={12} /> Edit
             </button>
@@ -134,7 +135,7 @@ export function OntologyPanel({ domain, ontology, generated, counts, onChanged }
               <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} />
               {regenerating ? 'Regenerating…' : 'Regenerate'}
             </button>
-          </div>
+          </div>}
         </>
       )}
     </div>

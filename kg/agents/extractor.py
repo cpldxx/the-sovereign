@@ -92,8 +92,9 @@ def _agent(domain: str, description: str) -> Agent:
     )
 
 
-async def extract(text: str, domain: str, description: str, ontology: Ontology, source: str) -> Extraction:
-    """One LLM call → all entities and facts of the text. Never raises (empty on failure)."""
+async def extract(text: str, domain: str, description: str, ontology: Ontology, source: str) -> Extraction | None:
+    """One LLM call → all entities and facts of the text. Never raises: None when the model call failed — an
+    empty Extraction would read as "nothing in this text" and the source would count as learned (2026-10-14)."""
     prompt = (
         f"ENTITY TYPES: {', '.join(ontology.entity_types)}\n"
         f"RELATION TYPES: {', '.join(ontology.relation_types)}, {STATE}\n\n"
@@ -103,7 +104,7 @@ async def extract(text: str, domain: str, description: str, ontology: Ontology, 
         return (await _agent(domain, description).run(prompt)).output
     except Exception as e:
         print(f"[Extractor] failed: {type(e).__name__}: {e}", flush=True)
-        return Extraction()
+        return None
 
 
 # ── Relations hidden in facts about one entity ─────────────────────────────

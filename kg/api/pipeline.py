@@ -24,6 +24,8 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
     Store the text as an episode and grow the neuron graph from it:
     extract → ontology/text gates → validate → resolve entities → link facts → commit / Head review.
     Usually 2 LLM calls (+1 per ambiguity kind) and 1 embedding call per ~8k-char chunk.
+    duplicate: the text was read already (pending: being read). failed + reason: a model call or a write failed —
+    the episode is kept as failed and the same text is read again on the next ingest.
     """
     try:
         load_domain(domain_name)

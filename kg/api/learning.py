@@ -38,9 +38,11 @@ async def api_save(domain_name: str, changes: dict, req: Request):
 
 @router.get("/domains/{domain_name}/learning/gaps")
 async def api_gaps(domain_name: str, req: Request):
-    """What the graph is unsure or silent about now — the next cycle's starting point."""
+    """What the graph is unsure or silent about now — the next cycle's starting point. `unanswered` lists only the
+    caller's own questions (each person's chat is theirs alone); unanswered_total counts everyone's."""
     auth.require(domain_name)
-    return await learning.gaps(req.app.state.db, domain_name)
+    me = auth.current.get()
+    return await learning.gaps(req.app.state.db, domain_name, me.user["uid"] if me.kind == "user" else None)
 
 
 @router.post("/domains/{domain_name}/learning/questions")

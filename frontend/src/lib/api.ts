@@ -3,13 +3,18 @@
 export const KG_API: string = import.meta.env.VITE_KG_URL ?? 'http://localhost:8080';
 export const HERMES_API: string = import.meta.env.VITE_HERMES_URL ?? 'http://localhost:8090';
 export const RESEARCH_API: string = import.meta.env.VITE_RESEARCH_URL ?? 'http://localhost:8070';
-export const LANGFUSE_URL: string = import.meta.env.VITE_LANGFUSE_URL ?? 'http://localhost:3000';
+// Unset (dev) → the local LangFuse; '' (the Docker build without one) → no link at all — '' used to open the app itself.
+export const LANGFUSE_URL: string = (import.meta.env.VITE_LANGFUSE_URL ?? 'http://localhost:3000').trim();
 /** Every call carries the session cookie (set by the KG at sign-in, httpOnly — this code never sees it). */
 const SIGNED_OUT = 'sovereign:signed-out';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type Role = 'owner' | 'editor' | 'viewer';
+
+const RANK: Record<Role, number> = { viewer: 1, editor: 2, owner: 3 };
+/** Whether `role` may do what needs `need` (the KG checks it too; the UI only hides what would answer 403). */
+export const can = (role: Role | undefined, need: Role) => !!role && RANK[role] >= RANK[need];
 
 export interface DomainSummary {
   id: string;
@@ -112,7 +117,8 @@ export interface LearningCycle {
 export interface LearningGaps {
   weak: { entity: string; weak_facts: number }[];
   stale: { entity: string; facts: number; last: string }[];
-  unanswered: string[];
+  unanswered: string[];      // the caller's own questions the graph couldn't answer
+  unanswered_total: number;  // everyone's (each person's chat is theirs alone)
   ontology: string[];
 }
 
@@ -662,11 +668,15 @@ export const kg = {
 
   entity: (id: string, uid: string) => request<EntityDetail>(KG_API, `${d(id)}/entities/${encodeURIComponent(uid)}`),
 
-  episodes: (id: string, limit = 50) =>
-    request<{ episodes: Episode[] }>(KG_API, `${d(id)}/episodes?limit=${limit}`).then(r => r.episodes),
+  /** A page of the review queue and how many it holds in all. */
+  reviews: (id: string, status: 'pending' | 'approved' | 'rejected' = 'pending', limit = 100, offset = 0,
+            order: 'oldest' | 'newest' = 'oldest') =>
+    request<{ reviews: Review[]; total: number }>(
+      KG_API, `${d(id)}/reviews?status=${status}&limit=${limit}&offset=${offset}&order=${order}`),
 
-  reviews: (id: string, status: 'pending' | 'approved' | 'rejected' = 'pending') =>
-    request<{ reviews: Review[] }>(KG_API, `${d(id)}/reviews?status=${status}`).then(r => r.reviews),
+  /** The Head decides the pending queue in the background → {started} (202), or {busy} when it already does. */
+  headReview: (id: string, minutes = 10) =>
+    request<{ started?: boolean; busy?: boolean }>(KG_API, `${d(id)}/head-review?minutes=${minutes}&wait=false`, { method: 'POST' }),
 
   decide: (id: string, uid: string, approve: boolean, note = '') =>
     request<{ resolution: string }>(KG_API, `${d(id)}/reviews/${encodeURIComponent(uid)}`, json({ approve, note })),
@@ -722,10 +732,6 @@ export const kg = {
 
   requestSensor: (id: string, need: string, backend?: 'scout' | 'builtin' | 'openhands', group?: string) =>
     request<SensorRequest>(KG_API, `${d(id)}/sensors`, json({ need, backend, group })),
-
-  checkSensors: (id: string) =>
-    request<{ sensors: Record<string, { working: number; sources: number; rescout?: string }> }>(
-      KG_API, `${d(id)}/sensors/check`, { method: 'POST' }),
 
   team: (id: string) => request<{ agents: TeamAgent[]; unread: number }>(KG_API, `${d(id)}/team`),
 
@@ -788,6 +794,9 @@ export const hermes = {
 
   /** Load the speech model and the Head's LLM before the first spoken question. */
   warm: (id: string) => request<unknown>(HERMES_API, `/voice/warm?domain=${encodeURIComponent(id)}`, { method: 'POST' }),
+
+  /** Stop this person's running Head turn (closing the stream alone doesn't: an answer must survive a reload). */
+  stopAsk: (id: string) => request<{ stopped: number }>(HERMES_API, `${d(id)}/ask/stop`, { method: 'POST' }),
 
   /** Speech → text on this machine (local Whisper). */
   async transcribe(audio: Blob, language?: string): Promise<{ text: string; language: string; seconds: number }> {

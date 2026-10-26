@@ -9,7 +9,10 @@ export function speak(text: string) {
     .replace(/```[\s\S]*?```/g, '')
     .replace(/`[^`]*`/g, '')
     .replace(/\|/g, ' ')
-    .replace(/[#*_>~-]+/g, ' ')
+    // A "-" only as a bullet or a rule: "-3.2%" was read as "3.2%" when every dash went (2026-10-14).
+    .replace(/^\s*(?:[-*+]\s+|[-*_]{3,}\s*$)/gm, ' ')
+    .replace(/:?-{2,}:?/g, ' ')   // table separators ("|---|:--:|" — its pipes are spaces by now) and "--"
+    .replace(/[#*_>~]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   const utterance = new SpeechSynthesisUtterance(plain);

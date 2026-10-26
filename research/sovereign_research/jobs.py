@@ -1,8 +1,12 @@
 """Research jobs: a persistent queue processed one at a time.
 
     research   DeerFlow reads the web (runner.run)
-    ontology   bootstrap only: the domain's grammar is regenerated from the pages it read
+    ontology   bootstrap of a domain with no episodes yet: the grammar is derived from the pages it read
     ingesting  every readable page → KG episode (raw page, never the LLM report); failures recorded
+
+The text of the pages read is kept on disk (pages/<job id>.json) until the KG has ingested it: a page the KG could
+not take (down, timing out, a model step failed) is tried once more RETRY_MINUTES later, also after a restart, and a
+job whose pages still fail ends "failed" with the reason.
 """
 
 import asyncio
@@ -22,8 +26,10 @@ KG_URL = os.getenv("SOVEREIGN_KG_URL", "http://localhost:8080").rstrip("/")
 INGEST_PAGES = int(os.getenv("RESEARCH_INGEST_PAGES", "3"))
 DATA = Path(os.getenv("RESEARCH_DATA") or Path(__file__).resolve().parent.parent / ".data")
 JOBS_FILE = DATA / "jobs.json"
+PAGES_DIR = DATA / "pages"        # the text of read pages a job has not ingested yet
+KEEP_JOBS = int(os.getenv("RESEARCH_KEEP_JOBS", "1000"))   # jobs.json keeps the newest; older ones go on load
 # A run that fails reaching the KG (a timeout, a dropped connection — the machine briefly overloaded) before its
-# research is done is queued once more, this many minutes later.
+# research is done, or pages the KG could not ingest, are tried once more this many minutes later.
 RETRY_MINUTES = float(os.getenv("RESEARCH_RETRY_MINUTES", "10"))
 MODES = ("bootstrap", "update", "mission")
 
@@ -42,11 +48,24 @@ class Jobs:
     def _load(self) -> None:
         if JOBS_FILE.exists():
             self.jobs = {j["id"]: j for j in json.loads(JOBS_FILE.read_text())}
+        if len(self.jobs) > KEEP_JOBS:   # it grew without bound (every page's outcome, every step)
+            newest = sorted(self.jobs.values(), key=lambda j: j["created_at"], reverse=True)[:KEEP_JOBS]
+            self.jobs = {j["id"]: j for j in newest}
         for job in sorted(self.jobs.values(), key=lambda j: j["created_at"]):
-            if job["status"] == "queued":       # never started: run it now
+            if job["status"] == "queued":       # never started, or waiting for its retry: run it now
+                self.queue.put_nowait(job["id"])
+            elif job["status"] in ("researching", "ontology", "ingesting") and self._kept(job):
+                # ("researching" too: the pages are kept before the status moves on.)
+                # The pages were read and kept: ingest what is left instead of losing them.
+                job.update(status="queued", resume=True)
+                job["steps"].append({"at": now(), "text": "interrupted by a restart — ingesting the pages kept"})
                 self.queue.put_nowait(job["id"])
             elif job["status"] in ("researching", "ontology", "ingesting"):  # died mid-flight
                 job.update(status="failed", error="interrupted by a service restart", finished_at=now())
+        if PAGES_DIR.exists():   # kept pages of jobs gone or finished: nothing will read them again
+            for f in PAGES_DIR.glob("*.json"):
+                if (job := self.jobs.get(f.stem)) is None or job["status"] in ("done", "failed"):
+                    f.unlink(missing_ok=True)
         self._save()
 
     def _save(self) -> None:
@@ -70,9 +89,11 @@ class Jobs:
             out["pages"] = job["pages"]
         return out
 
-    def last(self, domain: str, mode: str) -> dict | None:
-        done = [j for j in self.jobs.values() if j["domain"] == domain and j["mode"] == mode]
-        return max(done, key=lambda j: j["created_at"]) if done else None
+    def bootstrapped(self, domain: str) -> bool:
+        """Whether a bootstrap of this domain finished with pages read. Any bootstrap used to count — a failed one
+        too, so a domain whose first research failed was never bootstrapped again."""
+        return any(j["domain"] == domain and j["mode"] == "bootstrap" and j["status"] == "done"
+                   and (j.get("summary") or {}).get("pages_read") for j in self.jobs.values())
 
     def active(self, domain: str) -> dict | None:
         return next((j for j in self.jobs.values()
@@ -95,18 +116,61 @@ class Jobs:
             job = self.jobs[await self.queue.get()]
             try:
                 await self._run(job)
+                if left := self._kept(job):
+                    if not job.get("ingest_retried"):
+                        self._later(job, f"{len(left)} page(s) not ingested — trying again in {RETRY_MINUTES:g} min",
+                                    resume=True, ingest_retried=True)
+                        continue
+                    errors = [(p.get("ingest") or {}).get("error") for p in job["pages"] if p["url"] in left]
+                    raise RuntimeError(f"{len(left)} of {job['summary'].get('pages_read', len(left))} page(s) could "
+                                       f"not be ingested — {next((e for e in errors if e), 'no reason recorded')}")
                 job["status"] = "done"
             except Exception as e:
-                if isinstance(e, httpx.TransportError) and not job.get("retried") and not job["report"]:
-                    job.update(status="queued", retried=True, started_at=None)
-                    self._step(job, f"{type(e).__name__} reaching the KG — trying again in {RETRY_MINUTES:g} min")
-                    asyncio.get_running_loop().call_later(RETRY_MINUTES * 60, self.queue.put_nowait, job["id"])
+                if self._kept(job) and not job.get("ingest_retried"):
+                    # Read, but the ontology or ingest step broke off: the pages are on disk.
+                    self._later(job, f"{type(e).__name__} after reading — ingesting the pages kept in "
+                                f"{RETRY_MINUTES:g} min", resume=True, ingest_retried=True)
+                    continue
+                if isinstance(e, httpx.TransportError) and not job.get("retried") and not job["pages"]:
+                    self._later(job, f"{type(e).__name__} reaching the KG — trying again in {RETRY_MINUTES:g} min",
+                                retried=True)
                     continue
                 detail = str(e) or ("no answer in time — the KG or the machine was overloaded"
                                     if isinstance(e, httpx.TimeoutException) else "")
                 job.update(status="failed", error=f"{type(e).__name__}: {detail}")
+                self._keep(job, {})   # nothing reads a failed job's pages again (they'd pile up on disk)
             job["finished_at"] = now()
             self._save()
+
+    def _later(self, job: dict, why: str, **flags) -> None:
+        """Queue the job once more, RETRY_MINUTES from now."""
+        job.update(status="queued", **flags)
+        if not flags.get("resume"):
+            job["started_at"] = None
+        self._step(job, why)
+        asyncio.get_running_loop().call_later(RETRY_MINUTES * 60, self.queue.put_nowait, job["id"])
+
+    # ── the pages read, until ingested ─────────────────────────────────────
+    @staticmethod
+    def _kept_file(job: dict) -> Path:
+        return PAGES_DIR / f"{job['id']}.json"
+
+    def _kept(self, job: dict) -> dict[str, dict]:
+        """url → {title, status, markdown} of the pages read and not ingested yet."""
+        try:
+            return json.loads(self._kept_file(job).read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _keep(self, job: dict, pages: dict[str, dict]) -> None:
+        path = self._kept_file(job)
+        if pages:
+            PAGES_DIR.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(pages, ensure_ascii=False))
+            tmp.replace(path)
+        else:
+            path.unlink(missing_ok=True)
 
     def _step(self, job: dict, text: str) -> None:
         job["steps"].append({"at": now(), "text": text})
@@ -115,18 +179,28 @@ class Jobs:
 
     # ── the pipeline ───────────────────────────────────────────────────────
     async def _run(self, job: dict) -> None:
+        if job.get("resume"):      # read before: what is left of the ontology step and the ingest
+            job.update(started_at=job.get("started_at") or now())
+            if job["mode"] == "bootstrap" and not job.get("ontology_done"):
+                async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(job["domain"]), timeout=30) as kg:
+                    r = await kg.get(f"/domains/{job['domain']}/episodes", params={"limit": 1})
+                    await self._ontology(job, not r.raise_for_status().json()["episodes"])
+            await self._ingest(job, self._kept(job))
+            return
         domain = job["domain"]
         job.update(status="researching", started_at=now())
         async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain), timeout=30) as kg:
             detail = (await kg.get(f"/domains/{domain}")).raise_for_status().json()
-            episodes = (await kg.get(f"/domains/{domain}/episodes", params={"limit": 500})).json()["episodes"]
+            episodes = (await kg.get(f"/domains/{domain}/episodes", params={"limit": 500})).raise_for_status().json()
         description = detail["config"].get("description") or domain
-        known = {e["source"] for e in episodes}
+        # Newest first (the KG's order): the prompt shows the most recent sources and the sites read most of late.
+        recent = list(dict.fromkeys(e["source"] for e in episodes["episodes"]
+                                    if str(e.get("source") or "").startswith("http")))
 
         if job["mode"] == "bootstrap":
             prompt = missions.bootstrap(domain, description)
         elif job["mode"] == "update":
-            prompt = missions.update(domain, description, sorted(known, key=lambda u: u)[:200])
+            prompt = missions.update(domain, description, recent)
         else:
             prompt = missions.mission(domain, description, job["question"])
 
@@ -134,7 +208,7 @@ class Jobs:
         on_step = lambda text: loop.call_soon_threadsafe(self._step, job, text)  # noqa: E731
         started = time.monotonic()
         report, pages = await asyncio.to_thread(runner.run, prompt, on_step, job["id"])
-        seconds = {"research": round(time.monotonic() - started), "ontology": 0, "ingest": 0}
+        job["seconds"] = {"research": round(time.monotonic() - started), "ontology": 0, "ingest": 0}
         job["report"] = report
         readable = [p for p in pages if p.status != "failed"]
         if not readable:
@@ -148,58 +222,108 @@ class Jobs:
             {"url": p.url, "title": p.title, "status": p.status, "error": p.error, "chars": len(p.markdown)}
             for p in pages
         ]
+        # Until 2026-10-14 the text lived only in memory: pages the KG couldn't take were lost with "done".
+        self._keep(job, {p.url: {"title": p.title, "status": p.status, "markdown": p.markdown} for p in readable})
         self._step(job, f"read {len(readable)} page(s), {len(pages) - len(readable)} failed")
 
-        # Long pages are several chunks of LLM work on the KG side (minutes each): wait up to an hour per call.
-        async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain), timeout=httpx.Timeout(3600, connect=10)) as kg:
-            if job["mode"] == "bootstrap" and readable:
-                job["status"] = "ontology"
-                self._step(job, "deriving the domain's ontology from the pages read")
-                started = time.monotonic()
-                r = await kg.post(f"/domains/{domain}/ontology/generate",
-                                  json={"corpus": [p.markdown for p in readable], "wait": True})
-                seconds["ontology"] = round(time.monotonic() - started)
-                if r.is_success:
-                    self._step(job, f"ontology: {', '.join(r.json()['ontology']['entity_types'])}")
-                else:
-                    self._step(job, f"ontology generation failed ({r.status_code}); keeping the current one")
+        await self._ontology(job, not episodes["episodes"])
+        await self._ingest(job, self._kept(job))
 
-            job["status"] = "ingesting"
-            self._save()
-            by_url = {p["url"]: p for p in job["pages"]}
+    async def _ontology(self, job: dict, empty: bool) -> None:
+        """Bootstrap: the grammar from the pages read — only for a domain with nothing in it yet. A populated domain
+        keeps its ontology (perhaps edited by hand): a bootstrap run again used to replace it."""
+        if job["mode"] != "bootstrap" or job.get("ontology_done"):
+            return
+        if not empty:
+            self._step(job, "the domain already has sources: keeping its ontology")
+            job["ontology_done"] = True
+            return
+        job["status"] = "ontology"
+        self._step(job, "deriving the domain's ontology from the pages read")
+        started = time.monotonic()
+        async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(job["domain"]),
+                                     timeout=httpx.Timeout(3600, connect=10)) as kg:
+            r = await kg.post(f"/domains/{job['domain']}/ontology/generate",
+                              json={"corpus": [p["markdown"] for p in self._kept(job).values()], "wait": True})
+        job.setdefault("seconds", {})["ontology"] = round(time.monotonic() - started)
+        job["ontology_done"] = True
+        if r.is_success:
+            self._step(job, f"ontology: {', '.join(r.json()['ontology']['entity_types'])}")
+        else:
+            self._step(job, f"ontology generation failed ({r.status_code}); keeping the current one")
+
+    async def _known(self, kg: httpx.AsyncClient, domain: str, urls: "list[str]") -> set[str]:  # list: a method here
+        """The URLs the graph has read in full (any time — the newest 500 episodes missed older ones, which were
+        read again as new episodes). A failed or unfinished read isn't known: it is read again."""
+        known: set[str] = set()
+        for i in range(0, len(urls), 500):
+            try:
+                r = await kg.post(f"/domains/{domain}/sources", json={"urls": urls[i:i + 500]})
+                known.update(r.raise_for_status().json().get("known", []))
+            except (httpx.HTTPError, ValueError) as e:
+                # The KG dedupes identical text by itself; a page that changed is then read as a new episode.
+                print(f"[Research] {domain}: known sources unavailable ({type(e).__name__})", flush=True)
+        return known
+
+    async def _ingest(self, job: dict, kept: dict[str, dict]) -> None:
+        """Every kept page → the KG; a page leaves the kept file once the graph has it."""
+        domain = job["domain"]
+        job["status"] = "ingesting"
+        self._save()
+        by_url = {p["url"]: p for p in job["pages"]}
+        seconds = job.setdefault("seconds", {"research": 0, "ontology": 0, "ingest": 0})
+        # Long pages are several chunks of LLM work on the KG side (minutes each): wait up to an hour per call.
+        async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain),
+                                     timeout=httpx.Timeout(3600, connect=10)) as kg:
+            known = await self._known(kg, domain, list(kept))
             # Pages go to the KG side by side: it reads their chunks in parallel and writes them one at a time.
             gate = asyncio.Semaphore(INGEST_PAGES)
             ingest_started = time.monotonic()
 
-            async def ingest(page):
-                entry = by_url[page.url]
-                if page.url in known:
+            def ingested(url: str) -> None:
+                kept.pop(url, None)
+                self._keep(job, kept)
+
+            async def ingest(url: str, page: dict):
+                entry = by_url.setdefault(url, {"url": url, "title": page["title"], "status": page["status"],
+                                                "error": "", "chars": len(page["markdown"])})
+                if url in known:
                     entry["ingest"] = {"skipped": "already in the graph"}
+                    ingested(url)
                     return
-                known.add(page.url)
                 async with gate:
-                    self._step(job, f"ingesting {page.url}")
+                    self._step(job, f"ingesting {url}")
                     started = time.monotonic()
                     try:
                         r = await kg.post(f"/domains/{domain}/ingest", json={
-                            "raw_text": page.markdown, "source": page.url, "title": page.title,
-                            "content_status": page.status,
+                            "raw_text": page["markdown"], "source": url, "title": page["title"],
+                            "content_status": page["status"],
                         })
                         r.raise_for_status()
                         res = r.json()
-                        entry["ingest"] = {k: res.get(k) for k in (
-                            "duplicate", "entities_created", "entities_matched", "facts_created",
-                            "facts_strengthened", "facts_invalidated", "facts_rejected", "review_items",
-                            "chunks", "timings")}
-                    except httpx.HTTPError as e:
-                        known.discard(page.url)
+                    except (httpx.HTTPError, ValueError) as e:
                         entry["ingest"] = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
+                    else:
+                        if res.get("failed"):
+                            # The KG took the call but a model step or a write failed: the text is read again.
+                            reason = str(res.get("reason") or "no reason given")[:200]
+                            entry["ingest"] = {"error": f"the KG could not read it: {reason}"}
+                        elif res.get("duplicate") and res.get("pending"):
+                            entry["ingest"] = {"skipped": "being read by another call", "pending": True}
+                            ingested(url)
+                        else:
+                            entry["ingest"] = {k: res.get(k) for k in (
+                                "duplicate", "entities_created", "entities_matched", "facts_created",
+                                "facts_strengthened", "facts_invalidated", "facts_rejected", "review_items",
+                                "chunks", "timings")}
+                            ingested(url)
                     entry["ingest"]["seconds"] = round(time.monotonic() - started)
                     self._save()
-            await asyncio.gather(*(ingest(p) for p in readable))
-            seconds["ingest"] = round(time.monotonic() - ingest_started)   # wall time: pages overlap
+            await asyncio.gather(*(ingest(u, p) for u, p in list(kept.items())))
+            seconds["ingest"] = seconds.get("ingest", 0) + round(time.monotonic() - ingest_started)   # wall time
 
+        read = [p for p in job["pages"] if p["status"] != "failed"]
         totals = {k: sum((p.get("ingest") or {}).get(k) or 0 for p in job["pages"]) for k in (
             "entities_created", "facts_created", "facts_strengthened", "facts_invalidated", "review_items")}
-        job["summary"] = {"pages_read": len(readable), "pages_failed": len(pages) - len(readable), **totals,
-                          "seconds": seconds}
+        job["summary"] = {"pages_read": len(read), "pages_failed": len(job["pages"]) - len(read),
+                          "pages_not_ingested": len(kept), **totals, "seconds": dict(seconds)}

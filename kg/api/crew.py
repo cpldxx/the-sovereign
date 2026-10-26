@@ -1,6 +1,7 @@
 """The Head's team (core/crew.py): who is on it, what each agent is doing, and their conversations with the Head."""
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from core import activity, auth, crew
 
@@ -32,11 +33,16 @@ async def api_thread(domain_name: str, uid: str, req: Request):
 
 
 @router.post("/domains/{domain_name}/head-review")
-async def api_review_sweep(domain_name: str, req: Request, minutes: float = 45):
+async def api_review_sweep(domain_name: str, req: Request, minutes: float = 45, wait: bool = True):
     """The Head decides the pending review queue now, in rounds, for at most `minutes` (the nightly run does this
-    before the report)."""
+    before the report, waiting for the result). wait=false starts it in the background → 202 {started: true}, or
+    {busy: true} when a sweep of the domain is running already."""
     auth.require(domain_name, "editor")
-    return await crew.review_sweep(req.app.state.db, domain_name, min(minutes, 240))
+    if wait:
+        return await crew.review_sweep(req.app.state.db, domain_name, min(minutes, 240))
+    if not crew.start_review_sweep(req.app.state.db, domain_name, min(minutes, 240)):
+        return {"busy": True}
+    return JSONResponse({"started": True}, status_code=202)
 
 
 @router.get("/domains/{domain_name}/activity")

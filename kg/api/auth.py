@@ -68,9 +68,10 @@ async def config():
 
 
 @router.post("/signup", status_code=201)
-async def signup(body: SignUp, response: Response):
+async def signup(body: SignUp, request: Request, response: Response):
     try:
-        user, token = await accounts.signup(body.email, body.password, body.name, body.invite)
+        user, token = await accounts.signup(body.email, body.password, body.name, body.invite,
+                                            client=request.client.host if request.client else "")
     except AccountError as e:
         raise _fail(e)
     _start_session(response, token)
@@ -89,7 +90,10 @@ async def login(body: SignIn, request: Request, response: Response):
 
 @router.post("/logout")
 async def logout(request: Request, response: Response):
-    if found := auth.credentials(request.headers):
+    """Ends the session. Reached signed out too (auth.OPTIONAL): an expired or unknown cookie is still cleared, and
+    only a credential that resolves to a person is revoked."""
+    principal = auth.current.get()
+    if principal and principal.kind == "user" and (found := auth.credentials(request.headers)):
         await accounts.revoke(found[0])
     response.delete_cookie(auth.COOKIE, path="/", samesite="lax", secure=COOKIE_SECURE, httponly=True)
     return {"status": "signed out"}

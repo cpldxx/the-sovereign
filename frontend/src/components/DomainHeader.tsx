@@ -21,6 +21,7 @@ export function DomainHeader({ detail, me, onDelete, onLeft }: {
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [sharing, setSharing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { stats, role } = detail;
 
   return (
@@ -57,7 +58,10 @@ export function DomainHeader({ detail, me, onDelete, onLeft }: {
           <span className="text-dim">Delete domain and its graph?</span>
           <button
             disabled={busy}
-            onClick={async () => { setBusy(true); try { await onDelete(); } finally { setBusy(false); setConfirm(false); } }}
+            onClick={async () => {
+              setBusy(true); setError(null);
+              try { await onDelete(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); setConfirm(false); }
+            }}
             className="rounded bg-bad px-2 py-1 text-black disabled:opacity-50"
           >
             Delete
@@ -69,6 +73,8 @@ export function DomainHeader({ detail, me, onDelete, onLeft }: {
           <Trash2 size={14} />
         </button>
       )}
+
+      {error && <span className="max-w-[220px] truncate text-[11px] text-bad" title={error}>{error}</span>}
 
       {sharing && (
         <MembersDialog domain={detail.domain} me={me} role={role} onClose={() => setSharing(false)}

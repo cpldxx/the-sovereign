@@ -18,7 +18,8 @@ import contextvars
 import functools
 import inspect
 import os
-import re
+import time
+from collections import defaultdict, deque
 from collections.abc import Callable
 from typing import Literal
 
@@ -90,7 +91,9 @@ def _guarded(fn: Callable, need: str) -> Callable:
         if principal is None:
             raise ToolError("Not signed in")
         reset = _caller.set((principal, need))
-        if isinstance(domain := kwargs.get("domain"), str):
+        # Only into a feed the caller may use: before the role check, anyone signed in could write into another
+        # tenant's agent view (2026-10-14).
+        if isinstance(domain := kwargs.get("domain"), str) and auth.denial(principal, domain, need) is None:
             activity.event(domain, "head" if principal.kind == "service" else "user",
                            _TOOL_AGENT.get(fn.__name__, "graph"), "tool", fn.__name__)
         try:
@@ -230,8 +233,9 @@ async def list_reviews(domain: str, limit: int = 15) -> dict:
     "link" (a new fact may restate or replace existing facts). Each has a summary and its payload; `pending` is how
     many wait in all."""
     _require(domain)
-    items = await kgdb.list_reviews(db, domain, "pending", limit=10_000)
-    return {"pending": len(items), "items": list(reversed(items))[:max(1, min(limit, 50))]}
+    # Counted and paged in the database: it read every pending item (up to 10 000) to show 15.
+    items = await kgdb.list_reviews(db, domain, "pending", limit=max(1, min(limit, 50)), oldest_first=True)
+    return {"pending": await kgdb.count_reviews(db, domain, "pending"), "items": items}
 
 
 @tool()
@@ -270,24 +274,10 @@ async def list_actions(domain: str) -> list[dict]:
 @tool("readonly")
 async def list_playbooks(domain: str) -> list[dict]:
     """The domain's playbooks: situations worth acting on, each with the entities it watches, the prepared
-    response and action, and the facts behind it. Written every night from the graph; a triggered playbook
-    becomes a proposal by itself. Check them when deciding what to do."""
+    response and action, and the facts behind it. Written every night from the graph; a playbook that fires is
+    reported to you with the action it calls for, and you decide. Check them when deciding what to do."""
     _require(domain)
     return await playbooks.list_playbooks(db, domain)
-
-
-_INTERNALS = (
-    re.compile(r"\s*[(（][^()（）]*\b(?:weight|evidence|uid)\b[^()（）]*[)）]", re.I),
-    re.compile(r",?\s*\b(?:weight|evidence)\s*[=:]\s*[0-9.]+", re.I),
-    re.compile(r"\s*`?\b(?:f|e|ep|thre|prop|chat)_[0-9a-f]{8,}\b`?"),
-)
-
-
-def _scrub(text: str) -> str:
-    """Uids and weights a model copied into text a person reads (the same rule as Hermes' answers)."""
-    for pattern in _INTERNALS:
-        text = pattern.sub("", text)
-    return text
 
 
 @tool()
@@ -299,20 +289,8 @@ async def propose_action(domain: str, action: str, params: dict | None = None, r
     and wait for the user's confirmation in the Actions tab — the Operator reports to you once one has run. Never
     say one was done unless its status is "executed"."""
     _require(domain)
-    # A local model often tucks the rationale or the evidence into params: take them out rather than fail the call.
-    params = dict(params or {})
-    spec = next((a for a in await actions.catalog(db, domain) if a["name"] == action), None)
-    own = {p["name"] for p in spec["params"]} if spec else set()
-    for key in ("rationale", "reason", "evidence"):
-        if key in params and key not in own:
-            value = params.pop(key)
-            if key == "evidence":
-                evidence = evidence or (value if isinstance(value, list) else [str(value)])
-            else:
-                rationale = rationale or str(value)
-    rationale = rationale.strip() or str(params.get("message") or params.get("body") or "(no rationale given)")
-    if action in ("alert", "draft"):   # what the user reads carries no uids or weights (they go in `evidence`)
-        params = {k: _scrub(v) if isinstance(v, str) else v for k, v in params.items()}
+    # A local model tucks the rationale or the evidence into params, and copies uids into what the user reads.
+    params, rationale, evidence = await actions.tidy_request(db, domain, action, params, rationale, evidence)
     try:
         with activity.working(domain, "operator", action):
             p = await actions.propose(db, domain, action, params, rationale, evidence, source="head")
@@ -332,10 +310,30 @@ async def list_proposals(domain: str, status: str = "proposed") -> list[dict]:
 
 # ── Senses: the world right now (the graph can be a day old) ──────────────
 
+# web_search and read_webpage take no domain: without a check, any signed-in account — even one with no domain —
+# could use them as a search / fetch proxy (2026-10-14). They need the service or a role somewhere, and are paced.
+PROXY_CALLS = int(os.getenv("MCP_PROXY_CALLS_PER_MINUTE", "30"))
+_proxy_calls: dict[str, deque] = defaultdict(deque)
+
+
+def _proxy_allowed() -> None:
+    principal, _ = _caller.get()
+    if principal.kind != "service" and not principal.visible(registry.list_domains()):
+        raise ToolError("Live search and reading need access to a domain")
+    who = f"service:{principal.scope}" if principal.kind == "service" else f"user:{(principal.user or {}).get('uid')}"
+    calls, t = _proxy_calls[who], time.monotonic()
+    while calls and t - calls[0] > 60:
+        calls.popleft()
+    if len(calls) >= PROXY_CALLS:
+        raise ToolError(f"Too many live searches / page reads ({PROXY_CALLS} a minute) — wait a minute")
+    calls.append(t)
+
+
 @tool("readonly")
 async def web_search(query: str, recent: bool = False) -> list[dict]:
     """Search the web right now: titles, URLs, snippets. recent=true prefers the last day's results.
     Nothing is stored — use start_research for knowledge worth keeping."""
+    _proxy_allowed()
     params = {"q": query, "limit": 8} | ({"time_range": "day"} if recent else {})
     out = await _research("GET", "/search", params=params, timeout=60)
     return out.get("results", [])
@@ -347,6 +345,7 @@ async def read_webpage(url: str) -> dict:
     too (robots.txt respected; sites that refuse automated visitors can't be read — try another site). Use it for
     live data no sensor covers: a quote page, an official announcement, a status page. Nothing is stored —
     ingest_data it if it is worth keeping."""
+    _proxy_allowed()
     return await _research("POST", "/fetch", json={"url": url, "max_chars": 12000}, timeout=120)
 
 

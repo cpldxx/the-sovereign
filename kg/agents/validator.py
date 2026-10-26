@@ -51,8 +51,13 @@ _agent = Agent(MODEL, name="validator", model_settings=model_settings(decisive=T
                system_prompt=SYSTEM, output_type=Verdicts, retries=3)
 
 
-async def validate(text: str, source: str, facts: list[str]) -> list[FactVerdict]:
-    """Verdicts in the same order as `facts`. Never raises: on failure every fact is unsupported."""
+def _unjudged(i: int) -> FactVerdict:
+    return FactVerdict(index=i, supported=False, reliability=0.0, reason="not validated")
+
+
+async def judge(text: str, source: str, facts: list[str]) -> list[FactVerdict] | None:
+    """Verdicts in the same order as `facts`. Never raises: None when the model call failed, so ingest can tell
+    "the Validator rejected these" from "the Validator never ran" (2026-10-14)."""
     if not facts:
         return []
     listing = "\n".join(f"[{i}] {f}" for i, f in enumerate(facts))
@@ -61,8 +66,11 @@ async def validate(text: str, source: str, facts: list[str]) -> list[FactVerdict
         verdicts = {v.index: v for v in (await _agent.run(prompt)).output.verdicts}
     except Exception as e:
         print(f"[Validator] failed: {type(e).__name__}: {e}", flush=True)
-        verdicts = {}
-    return [
-        verdicts.get(i, FactVerdict(index=i, supported=False, reliability=0.0, reason="not validated"))
-        for i in range(len(facts))
-    ]
+        return None
+    return [verdicts.get(i) or _unjudged(i) for i in range(len(facts))]
+
+
+async def validate(text: str, source: str, facts: list[str]) -> list[FactVerdict]:
+    """Verdicts in the same order as `facts`. Never raises: on failure every fact is unsupported."""
+    found = await judge(text, source, facts)
+    return [_unjudged(i) for i in range(len(facts))] if found is None else found

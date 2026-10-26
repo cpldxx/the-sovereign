@@ -17,7 +17,8 @@ A restart re-queues what was waiting and reports what it interrupted.
 Runaway guard: one thread wakes the Head at most MAX_WAKES times and a domain at most WAKES_PER_HOUR times an hour;
 past that, reports wait in the inbox for the next conversation.
 
-The review queue is the Head's too: review_loop has it decide what waits there every REVIEW_EVERY minutes.
+The review queue is the Head's too: review_loop has it decide what waits there every REVIEW_EVERY minutes; a
+queue it couldn't decide waits until it changes, and repeated fruitless sweeps back off (up to 6 h).
 """
 
 import asyncio
@@ -255,8 +256,15 @@ class Learn(BaseModel):
 
 async def _learn(db: ArcadeDB, domain: str, x: Learn) -> Outcome:
     r = await kg.ingest(db, domain, x.text, source=x.source, title=x.title or None)
+    if r.get("pending"):
+        return Outcome("The same text is being read right now; its facts land when that reading ends.",
+                       {"episode_uid": r["episode_uid"]})
     if r.get("duplicate"):
         return Outcome("Already learned: the same text is in the graph.", {"episode_uid": r["episode_uid"]})
+    if r.get("failed"):
+        # A failed reading stores nothing and is read again on the next try (kg.ingest), so say so.
+        return Outcome(f"Couldn't learn it: {r.get('reason') or 'the model step failed'} — assign it again to retry.",
+                       {"episode_uid": r["episode_uid"]}, ok=False)
     keys = ("entities_created", "entities_matched", "facts_created", "facts_strengthened", "facts_invalidated",
             "facts_rejected", "review_items")
     counts = {k: r[k] for k in keys}
@@ -330,8 +338,10 @@ class Since(BaseModel):
 
 async def _watch(db: ArcadeDB, domain: str, x: Since) -> Outcome:
     since = (datetime.now(timezone.utc) - timedelta(hours=x.hours)).isoformat(timespec="seconds")
-    fired = await playbooks.check_triggers(db, domain)
-    evaluated = await playbooks.evaluate(db, domain, since)
+    try:   # beside the nightly cycle it would evaluate the same changes again and report them twice
+        fired, evaluated = await playbooks.check_now(db, domain, since)
+    except RuntimeError as e:
+        return Outcome(f"{e} — it reports what fires; check again when it is done.", ok=False)
     reported = evaluated.get("reported", []) + fired
     return Outcome(f"Checked {evaluated.get('evaluated', 0)} playbooks against the last {x.hours} h and the live "
                    f"triggers: {len(reported)} fired and reported to you" + ("" if not reported else " — " + "; ".join(
@@ -342,13 +352,15 @@ async def _watch(db: ArcadeDB, domain: str, x: Since) -> Outcome:
 class RunAction(BaseModel):
     action: str = Field(description="An action from the catalog (list_actions)")
     params: dict = Field(default_factory=dict, description="Its parameters")
-    rationale: str = Field(description="Why — the facts it rests on, with their weights")
+    rationale: str = Field("", description="Why — the facts it rests on, with their weights")
     evidence: list[str] = Field(default_factory=list, description="uids of those facts")
 
 
 async def _run_action(db: ArcadeDB, domain: str, x: RunAction) -> Outcome:
+    # The same repair and scrub as MCP propose_action (this task skipped both before 2026-10-14).
+    params, rationale, evidence = await actions.tidy_request(db, domain, x.action, x.params, x.rationale, x.evidence)
     try:
-        p = await actions.propose(db, domain, x.action, x.params, x.rationale, x.evidence, source="head")
+        p = await actions.propose(db, domain, x.action, params, rationale, evidence, source="head")
     except actions.ActionError as e:
         return Outcome(str(e), ok=False)
     if p["status"] == "proposed":
@@ -556,7 +568,8 @@ async def _post(db: ArcadeDB, domain: str, thread: str, sender: str, recipient: 
     msg = await kgdb.insert_doc(db, domain, "Message", {
         "thread": thread, "sender": sender, "recipient": recipient, "kind": kind, "task": task, "text": text,
         "data": data or {}, "status": status, "finished_at": None}, MESSAGE_JSON)
-    activity.event(domain, sender, recipient, kind, f"{task}: {text}" if task and kind == "task" else text)
+    shown = f"{task}: {text}" if task and kind == "task" and not text.startswith(f"{task}: ") else text
+    activity.event(domain, sender, recipient, kind, shown)   # assign() writes "task: …" already
     await kgdb.update_doc(db, domain, "Thread", thread, {"updated_at": msg["created_at"]})
     if status == QUEUED:
         _ready.set()
@@ -594,8 +607,12 @@ async def assign(db: ArcadeDB, domain: str, agent: str, task: str, inputs: dict 
     uid = await _open(db, domain, member.name, f"{member.title}: {task} — {shown}"[:160], by, thread)
     text = note or (f"{task}: {shown}" if shown else task)
     msg = await _post(db, domain, uid, by, member.name, "task", text, {"inputs": checked.model_dump()}, task=task)
+    try:
+        ahead = await _queue_length(db)
+    except Exception:   # the task is queued: a count that failed must not make it look refused
+        ahead = None
     return {"thread": uid, "message": msg["uid"], "status": QUEUED, "agent": member.name, "task": task,
-            "background": t.background, "ahead": await _queue_length(db)}
+            "background": t.background, "ahead": ahead}
 
 
 async def ask(db: ArcadeDB, domain: str, agent: str, question: str, thread: str | None = None, by: str = HEAD,
@@ -676,7 +693,7 @@ async def inbox(db: ArcadeDB, domain: str, mark_read: bool = True, limit: int = 
 async def unread(db: ArcadeDB, domain: str) -> int:
     if not await db.exists(domain):
         return 0
-    await kgdb.ensure_domain_db(db, domain)
+    await kgdb.ensure_domain_db(db, domain, create=False)
     rows = await db.sql(domain, "SELECT count(*) AS n FROM Message WHERE recipient = :h AND status = :s",
                         h=HEAD, s=UNREAD)
     return rows[0]["n"] if rows else 0
@@ -723,27 +740,37 @@ async def _queue_length(db: ArcadeDB) -> int:
     """Messages waiting for an agent, across every domain (this one included)."""
     n = 0
     for domain in registry.list_domains():
-        if await db.exists(domain):
-            await kgdb.ensure_domain_db(db, domain)
-            rows = await db.sql(domain, "SELECT count(*) AS n FROM Message WHERE status = :s", s=QUEUED)
-            n += rows[0]["n"] if rows else 0
+        try:
+            if await db.exists(domain):
+                await kgdb.ensure_domain_db(db, domain, create=False)
+                rows = await db.sql(domain, "SELECT count(*) AS n FROM Message WHERE status = :s", s=QUEUED)
+                n += rows[0]["n"] if rows else 0
+        except Exception:   # one unreadable domain doesn't hide the others' queue
+            continue
     return n
 
 
 async def _next(db: ArcadeDB) -> tuple[str, dict] | None:
     best = None
     for domain in registry.list_domains():
-        rows = await kgdb.find_docs(db, domain, "Message", MESSAGE_JSON, "status = :s AND recipient IN :names",
-                                    order="created_at ASC", limit=1, s=QUEUED, names=list(ROSTER))
+        try:
+            rows = await kgdb.find_docs(db, domain, "Message", MESSAGE_JSON, "status = :s AND recipient IN :names",
+                                        order="created_at ASC", limit=1, s=QUEUED, names=list(ROSTER))
+        except Exception as e:   # one broken domain database must not stall every domain's queue
+            print(f"[Crew] queue of {domain} unreadable: {type(e).__name__}: {e}", flush=True)
+            continue
         if rows and (best is None or rows[0]["created_at"] < best[1]["created_at"]):
             best = (domain, rows[0])
     return best
 
 
 async def _history(db: ArcadeDB, domain: str, msg: dict) -> str:
-    earlier = [m for m in await kgdb.find_docs(db, domain, "Message", (), "thread = :t", order="created_at ASC",
-                                               limit=200, t=msg["thread"]) if m["uid"] != msg["uid"]]
-    return "\n".join(f"{m['sender']} → {m['recipient']} ({m['kind']}): {m['text'][:600]}" for m in earlier[-HISTORY:])
+    """The thread's last HISTORY messages before this one, oldest first. (It read the first 200 and kept their
+    tail: a long thread showed messages 193-200, not the latest.)"""
+    latest = await kgdb.find_docs(db, domain, "Message", (), "thread = :t", order="created_at DESC",
+                                  limit=HISTORY + 1, t=msg["thread"])
+    earlier = [m for m in latest if m["uid"] != msg["uid"]][:HISTORY][::-1]
+    return "\n".join(f"{m['sender']} → {m['recipient']} ({m['kind']}): {m['text'][:600]}" for m in earlier)
 
 
 async def _answer(db: ArcadeDB, domain: str, member: Member, msg: dict) -> Outcome:
@@ -764,11 +791,13 @@ async def _answer(db: ArcadeDB, domain: str, member: Member, msg: dict) -> Outco
 
 async def _work(db: ArcadeDB, domain: str, msg: dict) -> None:
     """One queued message: run the task or answer the question, then report on the thread."""
+    # Claim it: of two KG processes on one database, only one runs it.
+    if not await kgdb.update_doc(db, domain, "Message", msg["uid"], {"status": WORKING}, if_status=QUEUED):
+        return
     member = ROSTER.get(msg["recipient"])
     if member is None:
         await _finish(db, domain, msg, Outcome(f"No agent '{msg['recipient']}'", ok=False))
         return
-    await kgdb.update_doc(db, domain, "Message", msg["uid"], {"status": WORKING})
     await kgdb.update_doc(db, domain, "Thread", msg["thread"], {"status": WORKING})
     t = member.tasks.get(msg["task"]) if msg["kind"] == "task" else None
 
@@ -814,22 +843,33 @@ async def _finish(db: ArcadeDB, domain: str, msg: dict, outcome: Outcome) -> Non
 
 
 async def _wake(db: ArcadeDB, domain: str, thread_uid: str) -> None:
-    """A teammate finished: the Head reads the thread's unread reports and decides — within the runaway guard."""
+    """A teammate reported: the Head reads the thread's unread reports and decides — within the runaway guard. Then
+    the next thread whose report waits (a report that lost the one-wake-per-domain race, or one that arrived on this
+    thread during the turn) gets its turn, as long as the guard allows."""
+    while thread_uid and await _wake_once(db, domain, thread_uid):
+        thread_uid = await _waiting_report(db, domain)
+
+
+async def _wake_once(db: ArcadeDB, domain: str, thread_uid: str) -> bool:
+    """One Head turn on one thread. True if the Head read the reports (the next waiting one may follow)."""
     t = await kgdb.get_doc(db, domain, "Thread", thread_uid)
     recent = _wakes[domain]
     while recent and time.monotonic() - recent[0] > 3600:
         recent.popleft()
     if not t or (t.get("wakes") or 0) >= MAX_WAKES or len(recent) >= WAKES_PER_HOUR or domain in _waking:
-        return  # the report waits in the inbox
+        return False  # the report waits in the inbox
     _waking.add(domain)
-    recent.append(time.monotonic())
+    slot, wakes = time.monotonic(), t.get("wakes") or 0
+    recent.append(slot)
+    reports: list[dict] = []
+    answered = False
     try:
-        await kgdb.update_doc(db, domain, "Thread", thread_uid, {"wakes": (t.get("wakes") or 0) + 1})
+        await kgdb.update_doc(db, domain, "Thread", thread_uid, {"wakes": wakes + 1})
         reports = await kgdb.find_docs(db, domain, "Message", MESSAGE_JSON,
                                        "thread = :t AND recipient = :h AND status = :s", order="created_at ASC",
                                        limit=10, t=thread_uid, h=HEAD, s=UNREAD)
         if not reports:
-            return
+            return False
         history = await _history(db, domain, {"thread": thread_uid, "uid": ""})
         message = (f"[Your team reports — thread {thread_uid}, “{t['title']}”]\n{history}\n\n"
                    f"You were woken because a teammate reported. Decide what follows: store findings worth keeping as "
@@ -838,26 +878,43 @@ async def _wake(db: ArcadeDB, domain: str, thread_uid: str) -> None:
                    f"repeat work that is done. End with a two-sentence note of what you decided.")
         for r in reports:
             await kgdb.update_doc(db, domain, "Message", r["uid"], {"status": READ})
-        try:
-            note = await _ask_head(domain, message)
-        except httpx.HTTPError as e:
-            for r in reports:  # the Head is unreachable: back to the inbox
-                await kgdb.update_doc(db, domain, "Message", r["uid"], {"status": UNREAD})
-            print(f"[Crew] couldn't wake the Head for {domain}: {type(e).__name__}", flush=True)
-            return
+        note = await _ask_head(domain, message)
+        answered = True
         await _post(db, domain, thread_uid, HEAD, t["agent"], "note", note.strip() or "(no note)", status=READ)
+        return True
+    except Exception as e:
+        print(f"[Crew] couldn't wake the Head for {domain}: {type(e).__name__}: {e}"[:400], flush=True)
+        return False
     finally:
         _waking.discard(domain)
-    if (nxt := await _waiting_report(db, domain)) and nxt != thread_uid:
-        await _wake(db, domain, nxt)
+        if not answered:
+            # Not woken after all (Hermes down, an HTTP error, a body that isn't JSON, a cancellation): the wake
+            # isn't spent — not the thread's count, not the hour's slot — and the reports go back to the inbox.
+            # 2026-10-14: only httpx errors put them back, and every failure used up a wake.
+            try:
+                recent.remove(slot)
+            except ValueError:
+                pass
+            try:
+                await kgdb.update_doc(db, domain, "Thread", thread_uid, {"wakes": wakes})
+                for r in reports:
+                    await kgdb.update_doc(db, domain, "Message", r["uid"], {"status": UNREAD})
+            except Exception as e:
+                print(f"[Crew] couldn't put {domain}'s reports back: {type(e).__name__}: {e}", flush=True)
 
 
 async def _waiting_report(db: ArcadeDB, domain: str) -> str | None:
-    """The oldest thread with an unread report for the Head that may still wake it."""
+    """The oldest thread with an unread report for the Head that may still wake it — any thread: a teammate's report
+    on a task the Head gave, a playbook that fired (Watcher), an action's outcome (Operator). (Only threads the Head
+    opened counted before 2026-10-14: a Watcher report that lost the race for the wake was never woken again.)"""
+    seen: set[str] = set()
     for r in await kgdb.find_docs(db, domain, "Message", (), "recipient = :h AND status = :s AND kind = :k",
-                                  order="created_at ASC", limit=20, h=HEAD, s=UNREAD, k="report"):
+                                  order="created_at ASC", limit=100, h=HEAD, s=UNREAD, k="report"):
+        if r["thread"] in seen:
+            continue
+        seen.add(r["thread"])
         t = await kgdb.get_doc(db, domain, "Thread", r["thread"])
-        if t and t.get("opened_by") == HEAD and (t.get("wakes") or 0) < MAX_WAKES:
+        if t and (t.get("wakes") or 0) < MAX_WAKES:
             return t["uid"]
     return None
 
@@ -875,7 +932,19 @@ async def _pending_reviews(db: ArcadeDB, domain: str) -> int:
     return rows[0]["n"] if rows else 0
 
 
+async def _pending_mark(db: ArcadeDB, domain: str) -> tuple:
+    """What waits in the review queue, as a mark that changes when an item comes or goes."""
+    rows = await db.sql(domain, "SELECT count(*) AS n, min(created_at) AS oldest, max(created_at) AS newest "
+                                "FROM ReviewItem WHERE status = 'pending'")
+    r = rows[0] if rows else {}
+    return (r.get("n") or 0, str(r.get("oldest")), str(r.get("newest")))
+
+
 _reviewing: set[str] = set()
+# domain → (pending mark, fruitless sweeps in a row, when (monotonic), not before (monotonic)). 2026-10-14: a queue
+# the Head kept not deciding cost a full Head turn every 30 min (48 a day) for nothing.
+_fruitless: dict[str, tuple[tuple, int, float, float]] = {}
+FRUITLESS_CAP = 6 * 3600
 
 
 async def review_sweep(db: ArcadeDB, domain: str, minutes: float = 45) -> dict:
@@ -891,17 +960,63 @@ async def review_sweep(db: ArcadeDB, domain: str, minutes: float = 45) -> dict:
         _reviewing.discard(domain)
 
 
+def start_review_sweep(db: ArcadeDB, domain: str, minutes: float = 45) -> bool:
+    """review_sweep in the background (the UI's button doesn't hold a request open for minutes). False when a sweep
+    of the domain is running already."""
+    registry.load_domain(domain)
+    if domain in _reviewing:
+        return False
+    _reviewing.add(domain)   # taken now, so a second click finds it busy
+
+    async def run() -> None:
+        try:
+            r = await _sweep(db, domain, minutes)
+            print(f"[Crew] Head reviews for {domain}: {r}", flush=True)
+        except Exception as e:
+            print(f"[Crew] review sweep for {domain} failed: {type(e).__name__}: {e}", flush=True)
+        finally:
+            _reviewing.discard(domain)
+    task = asyncio.get_running_loop().create_task(run())
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    return True
+
+
+def _skip_review(domain: str, mark: tuple) -> bool:
+    """After a sweep that decided nothing: the same queue waits until it changes (or FRUITLESS_CAP passed), and
+    sweeps keep failing on a changing queue back off — every, 2x, 4x … up to FRUITLESS_CAP."""
+    if not (last := _fruitless.get(domain)):
+        return False
+    t = time.monotonic()
+    return t < last[3] or (mark == last[0] and t < last[2] + FRUITLESS_CAP)
+
+
+def _after_review(domain: str, r: dict, mark: tuple, every: float) -> None:
+    if r.get("busy") or r.get("unreachable"):
+        return
+    if r.get("decided"):
+        _fruitless.pop(domain, None)
+        return
+    streak = (_fruitless[domain][1] if domain in _fruitless else 0) + 1
+    t = time.monotonic()
+    _fruitless[domain] = (mark, streak, t, t + min(every * 60 * 2 ** (streak - 1), FRUITLESS_CAP))
+
+
 async def review_loop(db: ArcadeDB, every: float = REVIEW_EVERY, turn: float = REVIEW_TURN) -> None:
     """Around the clock: whatever waits in a domain's review queue, the Head decides — nobody works it by hand.
-    Skipped while the Head is busy with a teammate's report."""
+    Skipped while the Head is busy with a teammate's report, and while a queue it couldn't decide is unchanged."""
     await asyncio.sleep(120)
     while True:
         for domain in registry.list_domains():
             try:
-                if (await db.exists(domain) and not activity.busy(domain, HEAD) and domain not in _waking
-                        and await _pending_reviews(db, domain)):
-                    r = await review_sweep(db, domain, turn)
-                    print(f"[Crew] Head reviews for {domain}: {r}", flush=True)
+                if not (await db.exists(domain) and not activity.busy(domain, HEAD) and domain not in _waking):
+                    continue
+                mark = await _pending_mark(db, domain)
+                if not mark[0] or _skip_review(domain, mark):
+                    continue
+                r = await review_sweep(db, domain, turn)
+                _after_review(domain, r, await _pending_mark(db, domain), every)
+                print(f"[Crew] Head reviews for {domain}: {r}", flush=True)
             except Exception as e:
                 print(f"[Crew] review sweep for {domain} failed: {type(e).__name__}: {e}", flush=True)
         await asyncio.sleep(every * 60)
@@ -912,14 +1027,15 @@ async def _sweep(db: ArcadeDB, domain: str, minutes: float) -> dict:
     if not start:
         return {"pending": 0, "decided": 0, "rounds": 0}
     thread = await _open(db, domain, HEAD, f"Head: review queue ({start} pending)", HEAD, None)
-    pending, rounds = start, 0
+    pending, rounds, unreachable = start, 0, False
     while pending and time.monotonic() < deadline:
         rounds += 1
         try:
             with activity.working(domain, HEAD, f"reviewing {pending} items"):
                 note = await _ask_head(domain, REVIEW, max_iterations=30)   # Hermes caps a turn at 30
-        except httpx.HTTPError as e:
+        except Exception as e:   # not only httpx errors: a body that isn't JSON too
             await _post(db, domain, thread, HEAD, "user", "note", f"Hermes unreachable ({type(e).__name__})", status=READ)
+            unreachable = True
             break
         after = await _pending_reviews(db, domain)
         await _post(db, domain, thread, HEAD, "user", "note", f"Round {rounds}: {pending - after} decided, {after} left. "
@@ -928,32 +1044,45 @@ async def _sweep(db: ArcadeDB, domain: str, minutes: float) -> dict:
             break
         pending = after
     await kgdb.update_doc(db, domain, "Thread", thread, {"status": DONE})
-    return {"pending": pending, "decided": start - pending, "rounds": rounds, "thread": thread}
+    return {"pending": pending, "decided": start - pending, "rounds": rounds, "thread": thread,
+            **({"unreachable": True} if unreachable else {})}
 
 
 async def _recover(db: ArcadeDB) -> None:
     """After a restart: queued work stays queued; work that was running is reported as interrupted."""
     for domain in registry.list_domains():
-        for msg in await kgdb.find_docs(db, domain, "Message", MESSAGE_JSON, "status IN :states", limit=200,
-                                        states=[WORKING, WAITING]):
-            await _finish(db, domain, msg, Outcome("Interrupted by a restart — assign it again if it is still "
-                                                   "needed.", ok=False))
+        try:
+            rows = await kgdb.find_docs(db, domain, "Message", MESSAGE_JSON, "status IN :states", limit=200,
+                                        states=[WORKING, WAITING])
+            for msg in rows:
+                await _finish(db, domain, msg, Outcome("Interrupted by a restart — assign it again if it is still "
+                                                       "needed.", ok=False))
+        except Exception as e:
+            print(f"[Crew] recovery of {domain} failed: {type(e).__name__}: {e}", flush=True)
+
+
+_recovered = False
 
 
 async def work_loop(db: ArcadeDB, idle: float = 30) -> None:
-    """The queue worker: one message at a time, oldest first, across every domain."""
-    try:
-        await _recover(db)
-    except Exception as e:
-        print(f"[Crew] recovery failed: {type(e).__name__}: {e}", flush=True)
+    """The queue worker: one message at a time, oldest first, across every domain. Restarted by main.py's
+    supervisor if it ever dies — recovery runs once per process (a restarted worker must not report the background
+    tasks still running as interrupted)."""
+    global _recovered
+    if not _recovered:
+        _recovered = True
+        try:
+            await _recover(db)
+        except Exception as e:
+            print(f"[Crew] recovery failed: {type(e).__name__}: {e}", flush=True)
     while True:
+        _ready.clear()   # before the scan: a set() made while scanning wakes the wait below (it was lost)
         try:
             item = await _next(db)
         except Exception as e:
             print(f"[Crew] queue unreadable: {type(e).__name__}: {e}", flush=True)
             item = None
         if item is None:
-            _ready.clear()
             try:
                 await asyncio.wait_for(_ready.wait(), idle)
             except asyncio.TimeoutError:
@@ -964,4 +1093,7 @@ async def work_loop(db: ArcadeDB, idle: float = 30) -> None:
             await _work(db, domain, msg)
         except Exception as e:  # never let one message stop the queue
             print(f"[Crew] {msg['uid']} failed: {type(e).__name__}: {e}", flush=True)
-            await kgdb.update_doc(db, domain, "Message", msg["uid"], {"status": FAILED})
+            try:   # a second database error here ended the worker (2026-10-14)
+                await kgdb.update_doc(db, domain, "Message", msg["uid"], {"status": FAILED})
+            except Exception as e2:
+                print(f"[Crew] couldn't mark {msg['uid']} failed: {type(e2).__name__}: {e2}", flush=True)

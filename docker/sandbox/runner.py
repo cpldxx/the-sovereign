@@ -5,12 +5,19 @@ Secrets (API keys the module declared in SECRETS) arrive on stdin, never in the 
 with secret("NAME"), and their values are masked in everything written back.
 Pages (the module's PAGES, opened in a browser by the KG before this container starts — robots.txt respected) arrive
 on stdin too; the module reads one with page("name"). Requests the module makes itself are checked against robots.txt
-here."""
+here.
 
+The module runs with curated builtins: no open/exec/eval/compile/getattr/…, and imports limited to ALLOWED, each
+handed over as a copy holding only its public, non-module names (statistics.sys, httpx._utils.os are not there).
+The KG's static check refuses the same things first; this is the second wall."""
+
+import builtins
+import importlib
 import json
 import signal
 import sys
 import traceback
+import types
 import urllib.robotparser
 from urllib.parse import urlsplit
 
@@ -64,6 +71,50 @@ httpx.Client._send_single_request = _send_politely
 httpx.AsyncClient._send_single_request = _send_politely_async
 
 
+# Keep in sync with ALLOWED_IMPORTS in kg/core/sensors.py (this container can't import kg; a KG test compares them).
+ALLOWED = {"httpx", "json", "re", "math", "statistics", "datetime", "time", "urllib.parse",
+           "xml.etree.ElementTree", "html", "csv", "io", "zoneinfo", "decimal"}
+# 2026-10-14: the module ran with the real builtins — `__builtins__["__import__"]("socket")` passed the static check.
+DENIED = {"open", "exec", "eval", "compile", "input", "breakpoint", "getattr", "setattr", "delattr", "vars", "globals",
+          "locals", "memoryview", "super", "help", "exit", "quit", "copyright", "credits", "license", "__import__",
+          "__loader__", "__spec__"}
+HIDDEN = {"open", "open_code", "FileIO"}   # io's file openers
+# Modules C code imports on the module's behalf: PyImport_Import takes __import__ from the calling frame's builtins,
+# so datetime.strptime / time.strptime reached _import("_strptime") and failed. The KG's static check still refuses
+# a sensor that imports them itself.
+IMPLICIT = {"_strptime"}
+
+
+def _public(module: types.ModuleType) -> types.ModuleType:
+    """A copy of a module with its public names only: no submodules (a way to os / socket), no file openers."""
+    copy = types.ModuleType(module.__name__, module.__doc__)
+    for k, v in vars(module).items():
+        if not k.startswith("_") and not isinstance(v, types.ModuleType) and k not in HIDDEN:
+            setattr(copy, k, v)
+    return copy
+
+
+def _import(name, globals=None, locals=None, fromlist=(), level=0):
+    """`import x.y` binds x (holding just the way to y); `from x.y import z` gets z from x.y. Allowed modules only."""
+    if not level and name in IMPLICIT:   # the C caller reads sys.modules; code that asks gets the public copy
+        return _public(importlib.import_module(name))
+    if level or name not in ALLOWED:
+        raise ImportError(f"import {name} is not allowed in a sensor")
+    module = _public(importlib.import_module(name))
+    if fromlist:
+        return module
+    parts = name.split(".")
+    top = module
+    for i in range(len(parts) - 1, 0, -1):   # urllib.parse → urllib (with .parse)
+        parent = types.ModuleType(".".join(parts[:i]))
+        setattr(parent, parts[i], top)
+        top = parent
+    return top
+
+
+SAFE_BUILTINS = {k: v for k, v in vars(builtins).items() if k not in DENIED} | {"__import__": _import}
+
+
 def _timeout(*_):
     raise TimeoutError(f"run() took longer than {LIMIT} s")
 
@@ -85,7 +136,7 @@ def main() -> None:
             raise RuntimeError(f"page {name!r} could not be opened: {pages[name]['error']}")
         return pages[name]["text"]
 
-    namespace: dict = {"__name__": "sensor", "secret": secret, "page": page}
+    namespace: dict = {"__name__": "sensor", "__builtins__": SAFE_BUILTINS, "secret": secret, "page": page}
     try:
         exec(compile(job["code"], "sensor.py", "exec"), namespace)
         signal.signal(signal.SIGALRM, _timeout)

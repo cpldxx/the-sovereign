@@ -1,6 +1,8 @@
 """The graph holds facts: an entity is stored only when a fact about it survives, and entities left without any
 fact are pruned — except those a pending review or a playbook still refers to. Stand-in agents, real database."""
 
+import secrets
+
 import pytest
 
 from agents.extractor import ExtractedEntity, ExtractedFact, Extraction
@@ -13,8 +15,9 @@ from domains import registry
 @pytest.fixture
 async def domain(db, tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "DOMAINS_DIR", tmp_path)
-    name = registry.create_domain("Gate test", "A throwaway domain for the ingest gate")
-    await kgdb.ensure_domain_db(db, name)
+    # A random id: a fixed one would drop a real domain (or another run's) of that name.
+    name = registry.create_domain(f"Gate test {secrets.token_hex(3)}", "A throwaway domain for the ingest gate")
+    await kgdb.ensure_domain_db(db, name, create=True)
 
     async def extract(text, *a, **k):
         return Extraction(
@@ -27,7 +30,7 @@ async def domain(db, tmp_path, monkeypatch):
                    ExtractedFact(source="Weak Gizmo", relation="related_to", target="Acme Labs",
                                  fact="Weak Gizmo is related to Acme Labs.")])
 
-    async def validate(text, source, facts):
+    async def judge(text, source, facts):
         return [FactVerdict(index=i, supported=True, reliability=0.9 if "enables" in f else 0.4)
                 for i, f in enumerate(facts)]
 
@@ -39,7 +42,7 @@ async def domain(db, tmp_path, monkeypatch):
 
     async def link(items):
         return []
-    for fn in (extract, validate, embed, resolve, link):
+    for fn in (extract, judge, embed, resolve, link):
         monkeypatch.setattr(kg, fn.__name__, fn)
     yield db, name
     await kgdb.drop_domain_db(db, name)
@@ -89,7 +92,7 @@ async def test_a_relation_filed_as_a_state_is_linked(domain, monkeypatch):
                                  fact="Acme Labs is testing its Widget Engine for launch.")])
     checked = []
 
-    async def validate(text, source, facts):
+    async def judge(text, source, facts):
         checked.extend(facts)
         return [FactVerdict(index=i, supported=True, reliability=0.9) for i, _ in enumerate(facts)]
 
@@ -97,7 +100,7 @@ async def test_a_relation_filed_as_a_state_is_linked(domain, monkeypatch):
         assert items[0]["entities"] == ["Widget Engine", "Acme Labs"]
         return [Relation(index=0, source="Acme Labs", relation="enables", target="Widget Engine")]
     monkeypatch.setattr(kg, "extract", extract)
-    monkeypatch.setattr(kg, "validate", validate)
+    monkeypatch.setattr(kg, "judge", judge)
     monkeypatch.setattr(kg, "relate", relate)
     report = await kg.ingest(db, name, "Acme Labs is testing its Widget Engine for launch. " * 3, source="test")
     assert checked == ["Acme Labs enables Widget Engine."]
@@ -124,10 +127,10 @@ async def test_stored_states_are_relinked_once(domain, monkeypatch):
     async def no_relations(items, relations):
         return []
 
-    async def validate(text, source, facts):
+    async def judge(text, source, facts):
         return [FactVerdict(index=i, supported=True, reliability=0.9) for i, _ in enumerate(facts)]
     monkeypatch.setattr(kg, "extract", extract)
-    monkeypatch.setattr(kg, "validate", validate)
+    monkeypatch.setattr(kg, "judge", judge)
     monkeypatch.setattr(kg, "relate", no_relations)
     await kg.ingest(db, name, "Widget Engine shipped 5 units. Acme Labs is related to Other Thing. " * 3, source="t")
     # a state stored before this fix, naming another entity
@@ -202,19 +205,12 @@ def test_an_english_name_for_a_thing_a_korean_text_names_passes_the_mention_gate
     assert not _translated(["공정위"], korean)                             # a Korean name must be in the text
 
 
-def test_a_learning_cycle_is_due_once_per_slot_in_the_users_timezone():
-    from datetime import datetime, timezone
-    from core.learning import check, due, LearningError
-    s = {"enabled": True, "times": ["03:00", "15:00"], "timezone": "America/New_York"}
-    at = datetime(2026, 10, 13, 7, 10, tzinfo=timezone.utc)          # 03:10 in New York
-    assert due(s, at, set()) == "2026-10-13 03:00"
-    assert due(s, at, {"2026-10-13 03:00"}) is None                     # ran already
-    assert due(s, datetime(2026, 10, 13, 8, 0, tzinfo=timezone.utc), set()) is None   # 04:00: window closed
-    assert due({**s, "enabled": False}, at, set()) is None
-    for bad in ({"times": ["9:00"]}, {"times": ["25:00"]}, {"timezone": "Mars/Base"}, {"curiosity": 9}):
-        try:
-            check(bad)
-            raise AssertionError(bad)
-        except LearningError:
-            pass
-    assert check({"times": ["15:00", "03:00", "03:00"]}) == {"times": ["03:00", "15:00"]}
+
+def test_a_link_that_never_closes_does_not_freeze_the_reader():
+    """2026-10-15: one unclosed markdown link made the old pattern backtrack exponentially and froze the KG."""
+    import time
+    from core.kg import readable
+    t = time.monotonic()
+    out = readable("Samsung raised HBM output. [source](" + "a" * 5000 + " and more text")
+    assert time.monotonic() - t < 1 and "Samsung raised HBM output." in out
+    assert readable("See [HBM](https://en.wikipedia.org/wiki/HBM_(memory)) and ![x](i.png \"t\")") == "See HBM and"

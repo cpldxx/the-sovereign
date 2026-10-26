@@ -8,7 +8,7 @@
     keep     the Head decides the review queue, the Linker and Summarizer tidy up (nightly report)
     forget   forget(): a fact that rested on one weak source and was never confirmed in `forget_after_days` is
              retired (invalidated, reason "forgotten: …" — still history, never an answer); an entity left with only
-             forgotten facts goes. Nothing a pending review or a playbook relies on.
+             forgotten facts goes. Nothing a pending review or an active playbook relies on.
 
 Settings per domain (a Setting document "learning" in its database): when it runs (times in the user's timezone),
 how many questions it pursues per cycle, how long an unconfirmed weak fact may wait. The research service runs the
@@ -104,10 +104,11 @@ async def last_cycle(db: ArcadeDB, domain: str) -> dict | None:
 
 # ── Look ───────────────────────────────────────────────────────────────────
 
-async def gaps(db: ArcadeDB, domain: str) -> dict:
-    """What the graph is unsure or silent about — the raw material of the next cycle's questions."""
+async def gaps(db: ArcadeDB, domain: str, user: str | None = None) -> dict:
+    """What the graph is unsure or silent about — the raw material of the next cycle's questions.
+    `user`: show only that person's own unanswered questions (unanswered_total still counts everyone's)."""
     if not await db.exists(domain):
-        return {"weak": [], "stale": [], "unanswered": [], "ontology": []}
+        return {"weak": [], "stale": [], "unanswered": [], "unanswered_total": 0, "ontology": []}
     before = (datetime.now(timezone.utc) - timedelta(days=STALE_DAYS)).isoformat(timespec="seconds")
     weak = await db.cypher(
         domain,
@@ -119,13 +120,17 @@ async def gaps(db: ArcadeDB, domain: str) -> dict:
         "WHERE degree >= 5 AND last < datetime($before) RETURN e.name AS name, degree, last ORDER BY degree DESC LIMIT 8",
         before=before)
     # What people asked that the graph couldn't answer: the Head went to the web for it.
+    # Each answer pairs with its own asker's question: turns of everyone are read together (2026-10-14: answers were
+    # paired with whoever spoke last — another person's question). Everyone's feed the Strategist; a person sees only
+    # their own (each person's chat is theirs alone).
     turns = await kgdb.find_docs(db, domain, "ChatTurn", ("steps",), limit=200)
     turns.sort(key=lambda t: t.get("n") or 0)
-    unanswered = []
-    for i, t in enumerate(turns):
-        if t["role"] == "assistant" and any(s.get("name") in ("web_search", "read_webpage") for s in t.get("steps") or []):
-            if i and turns[i - 1]["role"] == "user":
-                unanswered.append(turns[i - 1]["content"][:200])
+    unanswered, last = [], {}
+    for t in turns:
+        prev, last[t.get("user")] = last.get(t.get("user")), t
+        if t["role"] == "assistant" and prev and prev["role"] == "user" and any(
+                isinstance(s, dict) and s.get("name") in ("web_search", "read_webpage") for s in t.get("steps") or []):
+            unanswered.append((prev.get("user"), (prev.get("content") or "")[:200]))
     gaps_ = {}
     for r in await db.cypher(domain, "MATCH (ep:Episode) WHERE ep.ontology_gaps IS NOT NULL "
                                      "RETURN ep.ontology_gaps AS g ORDER BY ep.created_at DESC LIMIT 50"):
@@ -133,7 +138,8 @@ async def gaps(db: ArcadeDB, domain: str) -> dict:
             gaps_[k] = gaps_.get(k, 0) + v
     return {"weak": [{"entity": r["name"], "weak_facts": r["n"]} for r in weak],
             "stale": [{"entity": r["name"], "facts": r["degree"], "last": str(r["last"])[:10]} for r in stale],
-            "unanswered": unanswered[-8:],
+            "unanswered": [q for who, q in unanswered if user is None or who == user][-8:],
+            "unanswered_total": len(unanswered),
             "ontology": [k for k, _ in sorted(gaps_.items(), key=lambda kv: -kv[1])[:8]]}
 
 
@@ -166,12 +172,7 @@ async def forget(db: ArcadeDB, domain: str, days: int, dry_run: bool = False) ->
     if days <= 0 or not await db.exists(domain):
         return {"facts": 0, "entities": 0, "examples": []}
     before = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
-    keep: set[str] = set()
-    for r in await kgdb.list_reviews(db, domain, limit=100000):
-        p = r.get("payload") or {}
-        keep |= {v for v in p.values() if isinstance(v, str)}
-    for pb in await kgdb.find_docs(db, domain, "Playbook", ("watch", "evidence", "trigger"), limit=10000):
-        keep |= set(pb.get("evidence") or []) | {w.get("uid") for w in pb.get("watch") or [] if isinstance(w, dict)}
+    keep = await kgdb.referenced(db, domain)   # pending reviews (nested values too), active playbooks
     rows = await db.cypher(
         domain,
         "MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE r.invalid_at IS NULL AND r.evidence <= 1 AND r.disbelief > $d "
@@ -200,20 +201,22 @@ async def forget(db: ArcadeDB, domain: str, days: int, dry_run: bool = False) ->
 
 # ── When ───────────────────────────────────────────────────────────────────
 
+WINDOW = 30   # minutes a slot stays due: a busy minute isn't a missed run
+
+
 def due(s: dict, at: datetime, done: set[str]) -> str | None:
-    """The slot ("2026-10-13 03:00") due at `at` (UTC) for these settings, unless already in `done`."""
+    """The slot ("2026-10-13 03:00") due at `at` (UTC) for these settings, unless already in `done`. A window runs
+    past midnight (2026-10-14: 23:59 never became due, 23:45 had 14 minutes); its slot keeps the day it started."""
     if not s.get("enabled"):
         return None
     local = at.astimezone(ZoneInfo(s.get("timezone") or "UTC"))
-    hm = local.strftime("%H:%M")
+    minute = local.hour * 60 + local.minute
     for t in s.get("times") or []:
-        slot = f"{local.date().isoformat()} {t}"
-        if t <= hm < _plus(t, 30) and slot not in done:    # a 30-minute window: a busy minute isn't a missed run
-            return slot
+        h, m = map(int, t.split(":"))
+        since = (minute - (h * 60 + m)) % (24 * 60)
+        if since < WINDOW:
+            day = local.date() - timedelta(days=1) if since > minute else local.date()
+            slot = f"{day.isoformat()} {t}"
+            if slot not in done:
+                return slot
     return None
-
-
-def _plus(t: str, minutes: int) -> str:
-    h, m = map(int, t.split(":"))
-    total = min(h * 60 + m + minutes, 24 * 60 - 1)
-    return f"{total // 60:02d}:{total % 60:02d}"

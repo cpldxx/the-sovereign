@@ -25,6 +25,7 @@ import os
 import re
 import statistics
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 from pathlib import Path
@@ -37,7 +38,7 @@ from core import accounts, auth
 from core import database as kgdb
 from core.database import ArcadeDB, now
 
-IMAGE = os.getenv("SANDBOX_IMAGE", "sovereign-sandbox:4")
+IMAGE = os.getenv("SANDBOX_IMAGE", "sovereign-sandbox:5")   # a new tag whenever docker/sandbox changes (never rebuilt)
 RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
 SANDBOX_DIR = Path(__file__).resolve().parents[2] / "docker" / "sandbox"
 RUN_TIMEOUT = 40          # seconds per container (the runner gives run() 25 s)
@@ -52,17 +53,24 @@ COOLDOWN_HOURS = 6        # a source that refused us (bot protection, 403/429, r
 PAGE_TTL = 60             # seconds a rendered page is reused (a check and its verification don't open it twice)
 _BLOCKED = re.compile(r"anti-bot|captcha|challenge|robots\.txt|\b403\b|\b429\b|rate.?limit|too many requests", re.I)
 
+# Kept in sync by hand with docker/sandbox/runner.py's ALLOWED (the runner can't import kg; a test compares them).
 ALLOWED_IMPORTS = {"httpx", "json", "re", "math", "statistics", "datetime", "time", "urllib.parse",
                    "xml.etree.ElementTree", "html", "csv", "io", "zoneinfo", "decimal"}
 FORBIDDEN_NAMES = {"eval", "exec", "compile", "open", "__import__", "globals", "locals", "vars", "input",
-                   "breakpoint", "getattr", "setattr", "delattr", "memoryview", "help", "exit", "quit"}
+                   "breakpoint", "getattr", "setattr", "delattr", "memoryview", "help", "exit", "quit", "super"}
+# 2026-10-14: `__builtins__["__import__"]("socket")` and `io.open(...)` passed the check — dunder names, file
+# openers reached as attributes, and private attributes (httpx._utils.os, a module's internals) are refused too.
+# `type(sock).mro()` would reach the unguarded C socket class, `get_extra_info("socket")` a raw socket.
+FORBIDDEN_ATTRS = {"open", "open_code", "FileIO", "fdopen", "mro", "get_extra_info"}
+_DUNDER_OK = {"__name__"}   # `if __name__ == "__main__":` is common in written modules and harmless
 _NAME = re.compile(r"[a-z][a-z0-9_]{2,40}")
 _TYPES = {"string", "number", "integer", "boolean"}
 
 def available_secrets(domain: str | None = None) -> list[str]:
     """API keys the operator lets sensors use: names listed in SENSOR_SECRETS that have a value in the environment —
-    for the operator's own (trusted) domains only; other accounts' sensors run without them."""
-    if domain and not accounts.trusted(domain):
+    for the operator's own (trusted) domains only; other accounts' sensors run without them — and so does a run that
+    names no domain (a probe, the self-check)."""
+    if not domain or not accounts.trusted(domain):
         return []
     names = [n.strip() for n in os.getenv("SENSOR_SECRETS", "").split(",") if n.strip()]
     return [n for n in names if os.getenv(n)]
@@ -88,7 +96,8 @@ def run(symbol: str) -> dict:
 
 Rules:
 - Imports only from: {", ".join(sorted(ALLOWED_IMPORTS))}.
-- No file access, no eval/exec/getattr, no dunder attributes. No API keys: use free public endpoints that need none.
+- No file access, no eval/exec/getattr, no dunder (__x) names or private (._x) attributes. No API keys: use free
+  public endpoints that need none.
 - PARAMS: every parameter of run() with a type ({", ".join(sorted(_TYPES))}), a description and an example value.
 - Always pass timeout=15 and a browser-like User-Agent header. Follow redirects.
 - A source without an API (a web page, JavaScript pages too): declare PAGES = {{"main": "https://site/quote/{{symbol}}"}}
@@ -122,10 +131,16 @@ def inspect_code(code: str, domain: str | None = None) -> tuple[dict, list[str]]
         elif isinstance(node, ast.ImportFrom):
             if node.level or node.module not in ALLOWED_IMPORTS:
                 problems.append(f"from {node.module} import … is not allowed")
-        elif isinstance(node, ast.Name) and node.id in FORBIDDEN_NAMES:
+        elif isinstance(node, ast.Name) and (node.id in FORBIDDEN_NAMES or
+                                             node.id.startswith("__") and node.id not in _DUNDER_OK):
             problems.append(f"{node.id} is not allowed")
         elif isinstance(node, ast.Attribute) and node.attr.startswith("__"):
             problems.append(f"dunder attribute .{node.attr} is not allowed")
+        elif isinstance(node, ast.Attribute) and (node.attr.startswith("_") or node.attr in FORBIDDEN_ATTRS):
+            problems.append(f"attribute .{node.attr} is not allowed")
+        elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant) and \
+                isinstance(key := node.slice.value, str) and key.startswith("__"):   # not "open": OHLC data
+            problems.append(f"[{key!r}] is not allowed")
         elif isinstance(node, ast.Constant) and isinstance(node.value, str) and (why := unusable(node.value)):
             problems.append(f"{why}: {node.value[:60]!r} — use SECRETS for keys we hold")
     meta: dict = {}
@@ -298,16 +313,22 @@ async def run_code(code: str, params: dict, domain: str | None = None) -> dict:
     names = list(meta.get("pages") or {})
     rendered = await asyncio.gather(*(render(fill(meta["pages"][n], params), domain) for n in names))
     pages = dict(zip(names, rendered))
+    container = f"sovereign-sbx-{uuid.uuid4().hex[:12]}"
     try:
         _, out, err = await _docker(
-            "run", "--rm", "-i", "--read-only", "--tmpfs", "/tmp:rw,size=16m", "--memory", "256m", "--cpus", "0.5",
-            "--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+            "run", "--rm", "-i", "--name", container, "--read-only", "--tmpfs", "/tmp:rw,size=16m",
+            "--memory", "256m", "--cpus", "0.5", "--pids-limit", "64", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
             "--add-host", "host.docker.internal:127.0.0.1", "--add-host", "gateway.docker.internal:127.0.0.1",
             IMAGE, stdin=json.dumps({"code": code, "params": params, "pages": pages, "secrets": {
                 name: os.environ[name] for name in (meta.get("secrets") or []) if name in available_secrets(domain)}}
             ).encode(),
         )
     except TimeoutError:
+        # Killing the docker CLI leaves the container running (module-level code has no alarm): remove it.
+        try:
+            await _docker("rm", "-f", container, timeout=30)
+        except (TimeoutError, OSError):
+            pass
         return {"ok": False, "error": f"timed out after {RUN_TIMEOUT} s"}
     try:
         return json.loads(out.decode().strip().splitlines()[-1])
@@ -402,15 +423,28 @@ def _missed(member: dict, args: dict) -> bool:
 
 
 def _route(members: list[dict], args: dict) -> list[dict]:
-    """Best first; those that failed for these parameters lately after the rest; resting ones last (tried only if
-    nothing else answers — except a robots.txt refusal, which is never retried while it rests)."""
-    ready = [m for m in members if not cooling(m)]
+    """Best first; those that failed for these parameters lately after the rest; then a live search; resting ones
+    last (tried only if nothing else answers — except a robots.txt refusal, never retried while it rests)."""
+    ready = [m for m in members if not cooling(m) and m.get("kind") != "search"]
+    search = [m for m in members if not cooling(m) and m.get("kind") == "search"]
     resting = [m for m in members if cooling(m) and "robots" not in (m.get("last_error") or "")]
-    return [m for m in ready if not _missed(m, args)] + [m for m in ready if _missed(m, args)] + resting
+    return [m for m in ready if not _missed(m, args)] + [m for m in ready if _missed(m, args)] + search + resting
 
 
-async def list_sensors(db: ArcadeDB, domain: str, *, with_code: bool = False) -> list[dict]:
-    rows = await kgdb.find_docs(db, domain, "Sensor", SENSOR_JSON, order="name ASC")
+def _second_opinion(queue: list[dict], sites: set[str]) -> list[dict]:
+    """The queue after an answer: sources of other sites first (sg.finance.yahoo.com confirming finance.yahoo.com
+    proves little) — but a resting source or a live search stays behind every ready source (2026-10-14: the re-sort
+    asked a resting site and the live-search stopgap before a ready source of the same site)."""
+    return sorted(queue, key=lambda m: (cooling(m), m.get("kind") == "search", _site(host_of(m)) in sites))
+
+
+LIST_LIMIT = 5000   # find_docs' default 100 counted retired sources too: past 100, groups silently vanished
+
+
+async def list_sensors(db: ArcadeDB, domain: str, *, with_code: bool = False, active: bool = False) -> list[dict]:
+    """Every stored source (retired ones too) — or, with `active`, the ones in use."""
+    rows = await kgdb.find_docs(db, domain, "Sensor", SENSOR_JSON, "status = 'active'" if active else "",
+                                order="name ASC", limit=LIST_LIMIT)
     return [r if with_code else {k: v for k, v in r.items() if k != "code"} for r in rows]
 
 
@@ -421,7 +455,7 @@ async def get_sensor(db: ArcadeDB, domain: str, name: str) -> dict | None:
 
 async def members(db: ArcadeDB, domain: str, name: str, *, with_code: bool = True) -> list[dict]:
     """The active sources of a group, best first — or the one sensor called `name`."""
-    rows = [s for s in await list_sensors(db, domain, with_code=with_code) if s["status"] == "active"]
+    rows = await list_sensors(db, domain, with_code=with_code, active=True)
     group = [s for s in rows if group_of(s) == name]
     return _order(group or [s for s in rows if s["name"] == name])
 
@@ -429,9 +463,8 @@ async def members(db: ArcadeDB, domain: str, name: str, *, with_code: bool = Tru
 async def groups(db: ArcadeDB, domain: str) -> list[dict]:
     """What agents see: one entry per group with its best source's description, parameters and sample."""
     by: dict[str, list[dict]] = {}
-    for s in await list_sensors(db, domain):
-        if s["status"] == "active":
-            by.setdefault(group_of(s), []).append(s)
+    for s in await list_sensors(db, domain, active=True):
+        by.setdefault(group_of(s), []).append(s)
     out = []
     for name, ms in sorted(by.items()):
         ms = _order(ms)
@@ -600,7 +633,8 @@ def _numbers(text: str) -> list[float]:
 
 
 def verified(values: dict, evidence: dict, text: str, schema: list[dict]) -> dict:
-    """The extracted values that hold up: each quote is on the page, and a number is in its quote."""
+    """The extracted values that hold up: each quote is on the page, and the value — a number, or a text — is in
+    its quote (2026-10-14: a text value passed with any quote that was on the page)."""
     norm = lambda t: re.sub(r"\s+", " ", str(t)).strip().lower()  # noqa: E731
     page = norm(text)
     kinds = {f["name"]: f.get("type") for f in schema}
@@ -615,6 +649,8 @@ def verified(values: dict, evidence: dict, text: str, schema: list[dict]) -> dic
                     abs(n - number) <= 1e-6 * max(1.0, abs(number)) for n in _numbers(str(quote))):
                 continue
             value = number
+        elif isinstance(value, str) and norm(value) not in norm(quote):
+            continue
         out[name] = value
     return out
 
@@ -751,11 +787,15 @@ async def save_extract(db: ArcadeDB, domain: str, url: str, need: str, sample: d
     return await kgdb.insert_doc(db, domain, "Sensor", doc, SENSOR_JSON)
 
 
-async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict, schema: list[dict] | None = None,
-                      doubted: str = "") -> dict:
-    """One source, its answer checked against the group's fields, and its outcome recorded: success history,
-    speed, last error, which parameters it failed for, and — when the site refused us — a rest that doubles with
-    every refusal in a row (6 h … 48 h). `doubted`: the answer came back but the other sources outvoted it."""
+async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict, schema: list[dict] | None = None) -> dict:
+    """One source asked (_ask) and its outcome recorded (_record)."""
+    out, seconds = await _ask(domain, member, args, schema)
+    await _record(db, domain, member, args, out, seconds)
+    return out
+
+
+async def _ask(domain: str, member: dict, args: dict, schema: list[dict] | None = None) -> tuple[dict, float]:
+    """One source's answer, checked against the group's fields → (outcome, seconds)."""
     started = time.monotonic()
     if member.get("kind") == "extract":   # no parser: the model reads the page (tier 2)
         out = await extract_page(url_of(member), args, schema or schema_of(member), member["description"], domain)
@@ -772,8 +812,13 @@ async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict, schem
     if out["ok"] and schema is not None:
         data, problem = conform(out["result"], schema)
         out = {**out, "result": data} if data is not None else {"ok": False, "error": problem}
-    if doubted:
-        out = {"ok": False, "error": doubted}
+    return out, seconds
+
+
+async def _record(db: ArcadeDB, domain: str, member: dict, args: dict, out: dict, seconds: float) -> None:
+    """A source's outcome, from `member` as it was before it was asked: success history, speed, last error, which
+    parameters it failed for, and — when the site refused us — a rest that doubles with every refusal in a row
+    (6 h … 48 h). Recording a failure for the same `member` again replaces the success just recorded (outvoted)."""
     avg = member.get("avg_seconds")
     misses = dict(member.get("misses") or {})
     key = _params_key(args)
@@ -796,7 +841,6 @@ async def _run_member(db: ArcadeDB, domain: str, member: dict, args: dict, schem
                 changes["status"] = "retired"   # the site said no twice, hours apart: it doesn't want to be read
     changes["misses"] = dict(sorted(misses.items(), key=lambda kv: kv[1])[-50:])
     await kgdb.update_doc(db, domain, "Sensor", member["uid"], changes, SENSOR_JSON)
-    return out
 
 
 def _site(host: str) -> str:
@@ -835,7 +879,7 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
     keys = next((m["key_fields"] for m in sources if m.get("key_fields")), [])
     field = verify_field or (keys[0] if keys else None)
     tol = tolerance(sources[0])
-    answers, failed = [], []
+    answers, failed, took = [], [], {}
     queue = _route(sources, args)
     def wanted() -> int:
         """How many answers are needed: 1; 2 to verify or after a surprising move; 3 when those two disagree."""
@@ -853,13 +897,11 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
 
     while queue and len(answers) < wanted():
         member = queue.pop(0)
-        out = await _run_member(db, domain, member, args, schema)
+        out, took[member["uid"]] = await _ask(domain, member, args, schema)
+        await _record(db, domain, member, args, out, took[member["uid"]])
         if out["ok"]:
             answers.append((member, out))
-            # A second opinion should come from another provider (sg.finance.yahoo.com confirming
-            # finance.yahoo.com proves little): sources of other sites first.
-            sites = {_site(host_of(m)) for m, _ in answers}
-            queue.sort(key=lambda m: (_site(host_of(m)) in sites, cooling(m)))
+            queue = _second_opinion(queue, {_site(host_of(m)) for m, _ in answers})
         else:
             failed.append({"source": host_of(member) or member["name"], "error": str(out.get("error"))[:200]})
     if not answers:
@@ -873,16 +915,16 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
         return {"sensor": name, "params": args, "read_at": now(), "ok": False,
                 "error": f"every source failed — {why}; live search: {live['error']}"}
 
-    chosen = answers[0]
+    chosen, outvoted = answers[0], []
     if field and len(answers) == 3:
         values = [value_at(a[1].get("result"), field) for a in answers]
         if all(isinstance(v, (int, float)) for v in values):
             odd = outliers(values, floor=tol)
             chosen = next(a for a, o in zip(answers, odd) if not o)
-            for (m, _), o in zip(answers, odd):
-                if o:   # outvoted: this source read something else this time
-                    await _run_member(db, domain, m, args, schema,
-                                      doubted=f"disagreed with the other sources on {field}")
+            outvoted = [a for a, o in zip(answers, odd) if o]
+            for m, _ in outvoted:   # it read something else this time: its success becomes a failure (not re-run)
+                await _record(db, domain, m, args, {"ok": False, "error": f"disagreed with the other sources on {field}"},
+                              took[m["uid"]])
     member, out = chosen
     reading = {"sensor": name, "source": host_of(member) or member["name"], "params": args, "read_at": now(), **out}
     if failed:
@@ -891,18 +933,22 @@ async def read(db: ArcadeDB, domain: str, name: str, params: dict | None = None,
     if isinstance(value, (int, float)):
         _last[(domain, name, _params_key(args))] = (value, time.monotonic())
     if len(answers) > 1 and field:
-        other = next(a for a in answers if a is not chosen)
+        # The confirmation is an answer that wasn't outvoted (2026-10-14: it named the outvoted one, so `agree` was
+        # False after every settled vote and live triggers vetoed on the dissenter).
+        other = next((a for a in answers if a is not chosen and a not in outvoted), None) or \
+            next(a for a in answers if a is not chosen)
         theirs = value_at(other[1].get("result"), field)
         reading["agreement"] = {"field": field, "value": value, "other_source": host_of(other[0]) or other[0]["name"],
                                 "other_value": theirs, "agree": agree(value, theirs, tol),
-                                "sources_read": len(answers)}
+                                "sources_read": len(answers),
+                                "outvoted": [host_of(m) or m["name"] for m, _ in outvoted]}
     return reading
 
 
 async def remove(db: ArcadeDB, domain: str, name: str) -> None:
     """Remove one source — or, by its group name, the whole group."""
-    targets = [s for s in await list_sensors(db, domain) if s["name"] == name] or \
-        [s for s in await list_sensors(db, domain) if group_of(s) == name]
+    stored = await list_sensors(db, domain)
+    targets = [s for s in stored if s["name"] == name] or [s for s in stored if group_of(s) == name]
     if not targets:
         raise SensorError(f"No sensor {name!r}")
     for sensor in targets:

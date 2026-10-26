@@ -16,6 +16,10 @@ const STATUS_LABEL: Record<ResearchJob['status'], string> = {
 
 const MODE_LABEL = { bootstrap: 'bootstrap', update: "what's new", mission: 'mission' } as const;
 
+function when(iso: string) {
+  return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 function duration(seconds: number) {
   return seconds < 90 ? `${Math.round(seconds)}s` : `${Math.round(seconds / 60)}m`;
 }
@@ -71,7 +75,7 @@ function JobCard({ job, open, onToggle }: { job: ResearchJob; open: boolean; onT
             <span className={`flex items-center gap-1 text-[11px] ${j.status === 'failed' ? 'text-bad' : active ? 'text-accent' : 'text-good'}`}>
               {active && <Loader2 size={11} className="animate-spin" />}{STATUS_LABEL[j.status]}
             </span>
-            <span className="ml-auto font-mono text-[10px] text-faint">{j.created_at.slice(5, 16).replace('T', ' ')}</span>
+            <span className="ml-auto font-mono text-[10px] text-faint">{when(j.created_at)}</span>
           </div>
           {j.question && <p className="mt-1 truncate text-[12px] text-ink">{j.question}</p>}
           {j.status === 'done' && (
@@ -115,7 +119,7 @@ function JobCard({ job, open, onToggle }: { job: ResearchJob; open: boolean; onT
   );
 }
 
-export function ResearchPanel({ domain, onIngesting }: { domain: string; onIngesting: () => void }) {
+export function ResearchPanel({ domain, editable, onIngesting }: { domain: string; editable: boolean; onIngesting: () => void }) {
   const [jobs, setJobs] = useState<ResearchJob[] | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [question, setQuestion] = useState('');
@@ -163,8 +167,9 @@ export function ResearchPanel({ domain, onIngesting }: { domain: string; onInges
       <div className="space-y-2.5 border-b border-line p-3">
         <p className="text-[11px] leading-snug text-faint">
           The research agent (DeerFlow) searches and reads the web; every page it reads becomes a source in the
-          graph. It runs every night by itself — or start a run now.
+          graph. It runs on the domain's learning schedule (Settings › Learning){editable ? ' — or start a run now.' : '.'}
         </p>
+        {editable && <>
         <div className="flex gap-2">
           <button
             onClick={() => start('bootstrap')}
@@ -194,6 +199,7 @@ export function ResearchPanel({ domain, onIngesting }: { domain: string; onInges
             {busy ? <Loader2 size={14} className="animate-spin" /> : <Globe size={14} />}
           </button>
         </form>
+        </>}
         {error && <p className="text-xs text-bad">{error}</p>}
       </div>
 

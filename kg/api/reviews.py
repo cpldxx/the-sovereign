@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from core import database as kgdb
@@ -18,12 +18,17 @@ class Decision(BaseModel):
 
 
 @router.get("/{domain_name}/reviews")
-async def list_reviews(domain_name: str, req: Request, status: Literal["pending", "approved", "rejected"] = "pending"):
+async def list_reviews(domain_name: str, req: Request, status: Literal["pending", "approved", "rejected"] = "pending",
+                       limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+                       order: Literal["oldest", "newest"] = "newest"):
+    """A page of the queue and how many items it holds in all (`total`) — a long queue is more than one page."""
     try:
         load_domain(domain_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return {"reviews": await kgdb.list_reviews(req.app.state.db, domain_name, status)}
+    db = req.app.state.db
+    return {"reviews": await kgdb.list_reviews(db, domain_name, status, limit, offset, oldest_first=order == "oldest"),
+            "total": await kgdb.count_reviews(db, domain_name, status)}
 
 
 @router.post("/{domain_name}/reviews/{uid}")

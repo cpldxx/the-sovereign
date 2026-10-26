@@ -73,12 +73,16 @@ class Timings(dict):
 
 # Trace names → what the owner calls them.
 _ACTIVITY = {"Hermes turn": "head agent", "lead-agent": "research", "daily_report": "daily report"}
+# Tags the KG's traces carry beside their domain (observe(tags=[domain, activity])).
+_ACTIVITY_TAGS = {"ingest", "query", "report", "playbooks"}
 
 
-async def llm_usage(start: str, end: str) -> list[dict] | None:
-    """LLM calls, tokens and model time per activity (trace name) over a period, from LangFuse.
-    None when tracing is off or LangFuse is unreachable."""
-    if not ENABLED:
+async def llm_usage(start: str, end: str, domain: str) -> list[dict] | None:
+    """LLM calls, tokens and model time per activity (trace name) over a period for one domain, from LangFuse: the
+    generations of traces tagged with the domain (the KG tags its ingest, query, report and playbook traces; work
+    that carries no domain tag isn't counted). None when tracing is off, LangFuse is unreachable, or the domain's id
+    is also an activity tag (its numbers would include every tenant's). 2026-10-14: this counted ALL tenants."""
+    if not ENABLED or domain in _ACTIVITY_TAGS:
         return None
     query = {
         "view": "observations",
@@ -86,7 +90,8 @@ async def llm_usage(start: str, end: str) -> list[dict] | None:
                     {"measure": "totalTokens", "aggregation": "sum"},
                     {"measure": "latency", "aggregation": "sum"}],
         "dimensions": [{"field": "traceName"}],
-        "filters": [{"column": "type", "operator": "=", "value": "GENERATION", "type": "string"}],
+        "filters": [{"column": "type", "operator": "=", "value": "GENERATION", "type": "string"},
+                    {"column": "tags", "operator": "any of", "value": [domain], "type": "arrayOptions"}],
         "fromTimestamp": start, "toTimestamp": end,
     }
     try:

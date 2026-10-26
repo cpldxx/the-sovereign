@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle, Bell, Check, ChevronDown, ChevronRight, FileText, Globe, Loader2, Plus, RefreshCw, Send, Trash2, X,
 } from 'lucide-react';
-import { kg, type ActionDef, type ActionParam, type Fact, type Playbook, type Proposal } from '../lib/api';
+import { can, kg, type ActionDef, type ActionParam, type Fact, type Playbook, type Proposal, type Role } from '../lib/api';
 import { Markdown } from '../components/Markdown';
 import { SensorsView } from '../components/SensorsView';
 
@@ -42,17 +42,43 @@ function Evidence({ uids, facts, onSelect }: { uids: string[]; facts: Map<string
   );
 }
 
-function PendingCard({ p, facts, onSelect, onDecide }: {
+/** Decisions the KG refused (403: not a person; 409: already decided, or the API changed since the proposal), kept
+ * on their card with the server's reason until dismissed — the proposal itself leaves the pending list on the next
+ * load, and with it the reason. */
+function useDecisions(domain: string, load: () => Promise<void>) {
+  const [refused, setRefused] = useState<Map<string, { p: Proposal; why: string }>>(new Map());
+  const drop = (uid: string) => setRefused(m => { const n = new Map(m); n.delete(uid); return n; });
+  async function decide(p: Proposal, approve: boolean, note: string) {
+    try {
+      await kg.decideProposal(domain, p.uid, approve, note);
+      drop(p.uid);
+    } catch (e) {
+      const why = (e as Error).message;
+      setRefused(m => new Map(m).set(p.uid, { p, why }));
+    }
+    await load();
+  }
+  /** The pending proposals, then the refused ones that are no longer pending. */
+  const cards = (pending: Proposal[]) =>
+    [...pending, ...[...refused.values()].filter(r => !pending.some(p => p.uid === r.p.uid)).map(r => r.p)];
+  return { refused, decide, drop, cards };
+}
+
+function PendingCard({ p, facts, onSelect, onDecide, editable, refusal, closed, onDismiss }: {
   p: Proposal;
   facts: Map<string, Fact>;
   onSelect: (uid: string) => void;
-  onDecide: (uid: string, approve: boolean, note: string) => Promise<void>;
+  onDecide: (p: Proposal, approve: boolean, note: string) => Promise<void>;
+  editable: boolean;     // editors and owners decide; a viewer sees what waits
+  refusal?: string;      // why the KG refused the last decision
+  closed?: boolean;      // no longer pending: only the reason is left to read
+  onDismiss: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState('');
   async function decide(approve: boolean) {
     setBusy(true);
-    try { await onDecide(p.uid, approve, note); } finally { setBusy(false); }
+    try { await onDecide(p, approve, note); } finally { setBusy(false); }
   }
   return (
     <li className="space-y-2 rounded-md border border-accent/40 bg-accent/5 p-3">
@@ -69,7 +95,14 @@ function PendingCard({ p, facts, onSelect, onDecide }: {
         <div className="mb-0.5 font-mono text-[10px] tracking-widest text-faint uppercase">Dry run — what will happen</div>
         <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-bg p-2 font-mono text-[10.5px] text-dim">{p.preview}</pre>
       </div>
-      <div className="flex gap-2">
+      {refusal && (
+        <p className="flex items-start gap-1 text-[11.5px] text-bad">
+          <AlertTriangle size={12} className="mt-0.5 shrink-0" /> <span className="flex-1">{refusal}</span>
+          <button onClick={onDismiss} className="shrink-0 text-faint hover:text-ink" title="Dismiss"><X size={12} /></button>
+        </p>
+      )}
+      {!editable && !closed && <p className="text-[11px] text-faint">An editor or owner of this domain confirms or rejects it.</p>}
+      {editable && !closed && <div className="flex gap-2">
         <input value={note} onChange={e => setNote(e.target.value)} placeholder="Note (optional)"
           className="min-w-0 flex-1 rounded-md border border-line-2 bg-bg px-2 py-1 text-[11.5px] outline-none focus:border-accent/60" />
         <button onClick={() => decide(false)} disabled={busy}
@@ -80,7 +113,7 @@ function PendingCard({ p, facts, onSelect, onDecide }: {
           className="flex items-center gap-1 rounded-md bg-accent px-2.5 text-[11.5px] text-black disabled:opacity-40">
           {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} Confirm
         </button>
-      </div>
+      </div>}
     </li>
   );
 }
@@ -118,7 +151,7 @@ function PlaybookCard({ pb, facts, onSelect, onHighlight, onRetire }: {
   facts: Map<string, Fact>;
   onSelect: (uid: string) => void;
   onHighlight: (uids: Set<string>) => void;
-  onRetire: (uid: string) => void;
+  onRetire?: (uid: string) => void;   // editors only
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -148,9 +181,11 @@ function PlaybookCard({ pb, facts, onSelect, onHighlight, onRetire }: {
           <Evidence uids={pb.evidence} facts={facts} onSelect={onSelect} />
           <div className="flex gap-2">
             <button onClick={() => onHighlight(new Set(pb.watch.map(w => w.uid)))} className="rounded border border-line-2 px-2 py-0.5 text-[10.5px] text-dim hover:text-ink">Highlight watched</button>
-            <button onClick={() => onRetire(pb.uid)} className="ml-auto flex items-center gap-1 rounded border border-line-2 px-2 py-0.5 text-[10.5px] text-dim hover:text-bad">
-              <Trash2 size={10} /> Retire
-            </button>
+            {onRetire && (
+              <button onClick={() => onRetire(pb.uid)} className="ml-auto flex items-center gap-1 rounded border border-line-2 px-2 py-0.5 text-[10.5px] text-dim hover:text-bad">
+                <Trash2 size={10} /> Retire
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -165,7 +200,12 @@ function parseParams(text: string): ActionParam[] {
   });
 }
 
-function Catalog({ domain, actions, onChanged }: { domain: string; actions: ActionDef[]; onChanged: () => Promise<void> }) {
+function Catalog({ domain, actions, owner, onChanged }: {
+  domain: string;
+  actions: ActionDef[];
+  owner: boolean;   // connecting and removing APIs is the owner's
+  onChanged: () => Promise<void>;
+}) {
   const [form, setForm] = useState({ name: '', description: '', url: '', params: '', dry_run: false, auto: false });
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -195,8 +235,11 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
                 {a.confirm ? 'asks you first' : a.auto ? 'runs when the Head says' : 'runs at once'}
               </span>
               {a.dry_run && <span className="rounded bg-panel-2 px-1.5 text-[9.5px] text-faint">dry run</span>}
-              {a.kind === 'webhook' && (
-                <button onClick={async () => { await kg.removeAction(domain, a.name); await onChanged(); }}
+              {a.kind === 'webhook' && owner && (
+                <button onClick={async () => {
+                  setError(null);
+                  try { await kg.removeAction(domain, a.name); await onChanged(); } catch (err) { setError((err as Error).message); }
+                }}
                   className="ml-auto text-faint hover:text-bad" title="Remove"><Trash2 size={12} /></button>
               )}
             </div>
@@ -208,7 +251,10 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
           </li>
         ))}
       </ul>
-      {adding ? (
+      {!adding && error && <p className="text-xs text-bad">{error}</p>}
+      {!owner ? (
+        <p className="text-[11px] text-faint">The domain's owner connects APIs.</p>
+      ) : adding ? (
         <form onSubmit={add} className="space-y-2 rounded-md border border-line-2 p-3">
           <p className="text-[11px] text-faint">
             Connect an API: the URL receives a JSON POST with the parameters and answers with a result (a simulation,
@@ -245,8 +291,9 @@ function Catalog({ domain, actions, onChanged }: { domain: string; actions: Acti
 }
 
 /** What waits for your confirmation — on top of the Head chat, where the decision to act was made. */
-export function PendingActions({ domain, version, onSelect, onPending }: {
+export function PendingActions({ domain, role, version, onSelect, onPending }: {
   domain: string;
+  role: Role;
   version: number;
   onSelect: (uid: string) => void;
   onPending: (count: number) => void;
@@ -276,26 +323,28 @@ export function PendingActions({ domain, version, onSelect, onPending }: {
     return () => clearInterval(t);
   }, [load]);
 
-  async function decide(uid: string, approve: boolean, note: string) {
-    try { await kg.decideProposal(domain, uid, approve, note); } catch (e) { setError((e as Error).message); }
-    await load();
-  }
+  const { refused, decide, drop, cards } = useDecisions(domain, load);
+  const shown = cards(pending);
 
-  if (!pending.length && !error) return null;
+  if (!shown.length && !error) return null;
   return (
     <div className="max-h-[45%] shrink-0 overflow-y-auto border-b border-line p-3">
       <h4 className="mb-2 font-mono text-[10px] tracking-widest text-accent uppercase">Waiting for your confirmation · {pending.length}</h4>
       {error && <p className="mb-2 text-xs text-bad">{error}</p>}
       <ul className="space-y-2">
-        {pending.map(p => <PendingCard key={p.uid} p={p} facts={facts} onSelect={onSelect} onDecide={decide} />)}
+        {shown.map(p => (
+          <PendingCard key={p.uid} p={p} facts={facts} onSelect={onSelect} onDecide={decide} editable={can(role, 'editor')}
+            refusal={refused.get(p.uid)?.why} closed={!pending.includes(p)} onDismiss={() => drop(p.uid)} />
+        ))}
       </ul>
     </div>
   );
 }
 
 /** The actions' views; with `view`, just that one (the Briefing's activity, the Settings' playbooks / sensors / APIs). */
-export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending, view: only }: {
+export function ActionsPanel({ domain, role, version, onSelect, onHighlight, onPending, view: only }: {
   domain: string;
+  role: Role;
   version: number;
   onSelect: (uid: string) => void;
   onHighlight: (uids: Set<string>) => void;
@@ -337,16 +386,10 @@ export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending
     return () => clearInterval(t);
   }, [load, running]);
 
-  async function decide(uid: string, approve: boolean, note: string) {
-    try {
-      await kg.decideProposal(domain, uid, approve, note);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-    await load();
-  }
-
+  const { refused, decide, drop, cards } = useDecisions(domain, load);
+  const editable = can(role, 'editor');
   const pending = proposals.filter(p => p.status === 'proposed');
+  const shown = cards(pending);
   const activity = proposals.filter(p => p.status !== 'proposed');
   const tabs: { id: View; label: string }[] = [
     { id: 'inbox', label: pending.length ? `Inbox (${pending.length})` : 'Inbox' },
@@ -364,8 +407,10 @@ export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending
             {t.label}
           </button>
         ))}
-        {view === 'playbooks' && (
-          <button onClick={async () => { await kg.runPlaybooks(domain).catch(e => setError((e as Error).message)); setRunning(true); }}
+        {view === 'playbooks' && editable && (
+          <button onClick={async () => {
+              try { await kg.runPlaybooks(domain); setRunning(true); } catch (e) { setError((e as Error).message); }
+            }}
             disabled={running} title="Check the playbooks against the last 24 hours, then rewrite them from the graph"
             className="ml-auto flex items-center gap-1 rounded-md border border-line-2 px-2 py-1 text-[11px] text-dim hover:text-ink disabled:opacity-50">
             {running ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />} {running ? 'Running…' : 'Run now'}
@@ -377,12 +422,15 @@ export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {view === 'inbox' && (
           <div className="space-y-4">
-            {pending.length > 0 && (
+            {shown.length > 0 && (
               <ul className="space-y-2">
-                {pending.map(p => <PendingCard key={p.uid} p={p} facts={facts} onSelect={onSelect} onDecide={decide} />)}
+                {shown.map(p => (
+                  <PendingCard key={p.uid} p={p} facts={facts} onSelect={onSelect} onDecide={decide} editable={editable}
+                    refusal={refused.get(p.uid)?.why} closed={!pending.includes(p)} onDismiss={() => drop(p.uid)} />
+                ))}
               </ul>
             )}
-            {pending.length === 0 && (
+            {shown.length === 0 && (
               <p className="text-[11.5px] leading-snug text-faint">
                 Nothing waits for you. When the Head decides to use an API that asks you first, it appears here with a
                 dry run and runs only when you confirm; the Operator then reports the result to the Head. Alerts,
@@ -407,13 +455,15 @@ export function ActionsPanel({ domain, version, onSelect, onHighlight, onPending
             <ul className="space-y-2">
               {playbooks.map(pb => (
                 <PlaybookCard key={pb.uid} pb={pb} facts={facts} onSelect={onSelect} onHighlight={onHighlight}
-                  onRetire={async uid => { await kg.retirePlaybook(domain, uid); await load(); }} />
+                  onRetire={editable ? async uid => {
+                    try { await kg.retirePlaybook(domain, uid); await load(); } catch (e) { setError((e as Error).message); }
+                  } : undefined} />
               ))}
             </ul>
           </div>
         )}
-        {view === 'sensors' && <SensorsView domain={domain} version={version} />}
-        {view === 'catalog' && <Catalog domain={domain} actions={catalog} onChanged={load} />}
+        {view === 'sensors' && <SensorsView domain={domain} version={version} editable={editable} />}
+        {view === 'catalog' && <Catalog domain={domain} actions={catalog} owner={can(role, 'owner')} onChanged={load} />}
       </div>
     </div>
   );

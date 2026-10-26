@@ -161,7 +161,7 @@ export function LearningPanel({ domain, editable }: { domain: string; editable: 
           <ul className="space-y-1 text-dim">
             {gaps.weak.length > 0 && <li>One weak source only: {gaps.weak.slice(0, 5).map(w => w.entity).join(', ')}</li>}
             {gaps.stale.length > 0 && <li>Nothing new for a month: {gaps.stale.slice(0, 5).map(w => w.entity).join(', ')}</li>}
-            {gaps.unanswered.length > 0 && <li>Asked, but not in the graph: {gaps.unanswered.slice(-3).map(q => `“${q.slice(0, 60)}”`).join(', ')}</li>}
+            {gaps.unanswered.length > 0 && <li>You asked, but it's not in the graph: {gaps.unanswered.slice(-3).map(q => `“${q.slice(0, 60)}”`).join(', ')}{gaps.unanswered_total > gaps.unanswered.length ? ` (${gaps.unanswered_total} such questions from everyone)` : ''}</li>}
             {gaps.ontology.length > 0 && <li>No words for yet: {gaps.ontology.slice(0, 5).join(', ')}</li>}
             {!gaps.weak.length && !gaps.stale.length && !gaps.unanswered.length && !gaps.ontology.length && <li className="text-faint">Nothing stands out.</li>}
           </ul>

@@ -16,7 +16,7 @@ import threading
 import time
 import urllib.robotparser
 from dataclasses import dataclass, field
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from deerflow.community.url_safety import validate_public_http_url
@@ -28,6 +28,14 @@ USER_AGENT = "SovereignBot/0.1 (research agent; respects robots.txt)"
 AGENT_CHARS = 12_000      # what the agent reads; the KG gets the whole page
 MIN_SITE_INTERVAL = 2.0   # seconds between requests to the same site
 PARTIAL_BELOW = 800       # characters: less than this is probably a teaser, not the article
+# A subscriber phrase marks a page partial only when little text came with it: a full article under a "Subscribe to
+# continue reading" banner was marked partial, and every fact of a partial source goes to Head review (2026-10-14).
+PAYWALL_BODY = 3000
+# robots.txt answers are kept a day; an error (5xx, unreachable, a bad redirect) only briefly — it means "keep out
+# for now", not "no rules" (RFC 9309 §2.3.1.4).
+ROBOTS_TTL = 24 * 3600
+ROBOTS_ERROR_TTL = 600
+ROBOTS_REDIRECTS = 5
 
 _PAYWALL = re.compile(
     r"subscribe to (continue|read)|to continue reading|sign in to (read|continue)|"
@@ -58,7 +66,9 @@ class Capture:
 
 current: Capture | None = None   # set by the runner around a research run
 
-_robots: dict[str, urllib.robotparser.RobotFileParser | None] = {}
+# site → (expires, rules): a parser, True / False for "everything allowed / disallowed", or None for "robots.txt
+# couldn't be read just now" (kept out briefly).
+_robots: dict[str, tuple[float, urllib.robotparser.RobotFileParser | bool | None]] = {}
 # Per-site pacing. DeerFlow runs parallel tool calls on separate event loops, so the pacing state is guarded by
 # a thread lock and each call reserves its time slot instead of holding a lock across the wait (an asyncio.Lock
 # shared across loops deadlocked a run that fetched three pages at once).
@@ -71,22 +81,57 @@ def _record(page: Page) -> None:
         current.add(page)
 
 
+async def _robots_rules(site: str) -> tuple[urllib.robotparser.RobotFileParser | bool | None, float]:
+    """(rules, seconds to keep them) for a site. Until 2026-10-14 any answer but 200 — a 401/403, a 5xx, a dropped
+    connection — counted as "no rules" and was cached for the process lifetime. Now: 401/403 and errors keep out
+    (as the sandbox runner does), 404/410 and other 4xx allow everything. Redirects are followed by hand, each target
+    checked like any page (an open redirect must not lead into the local network)."""
+    url = f"{site}/robots.txt"
+    try:
+        async with httpx.AsyncClient(timeout=10, headers={"User-Agent": USER_AGENT}, follow_redirects=False) as c:
+            for _ in range(ROBOTS_REDIRECTS + 1):
+                r = await c.get(url)
+                if not r.is_redirect:
+                    break
+                url = urljoin(url, r.headers.get("location", ""))
+                if await asyncio.to_thread(validate_public_http_url, url, allow_private_addresses=False):
+                    return None, ROBOTS_ERROR_TTL
+            else:
+                return None, ROBOTS_ERROR_TTL       # too many redirects
+    except httpx.HTTPError:
+        return None, ROBOTS_ERROR_TTL               # unreachable: keep out for now
+    if r.status_code == 200:
+        parser = urllib.robotparser.RobotFileParser()
+        parser.parse(r.text.splitlines())
+        return parser, ROBOTS_TTL
+    if r.status_code in (401, 403):
+        return False, ROBOTS_TTL
+    if r.status_code == 429 or r.status_code >= 500:
+        return None, ROBOTS_ERROR_TTL
+    return True, ROBOTS_TTL                         # 404, 410 …: no rules published
+
+
 async def _robots_allows(url: str) -> bool:
+    return not await robots_refusal(url)
+
+
+async def robots_refusal(url: str) -> str:
+    """Why robots.txt keeps us out of this URL, or "" if it doesn't. A robots.txt that couldn't be read just now is
+    worded without "robots": the KG rests a source refused by robots.txt for hours and retires it the second time
+    (core/sensors._record) — a 503 for ten minutes must not do that."""
     parts = urlsplit(url)
     site = f"{parts.scheme}://{parts.netloc}"
-    if site not in _robots:
-        parser = None
-        try:
-            async with httpx.AsyncClient(timeout=10, headers={"User-Agent": USER_AGENT}, follow_redirects=True) as c:
-                r = await c.get(f"{site}/robots.txt")
-            if r.status_code == 200:
-                parser = urllib.robotparser.RobotFileParser()
-                parser.parse(r.text.splitlines())
-        except httpx.HTTPError:
-            parser = None  # unreachable robots.txt: no rules published
-        _robots[site] = parser
-    parser = _robots[site]
-    return parser is None or parser.can_fetch(USER_AGENT, url)
+    hit = _robots.get(site)
+    if not hit or hit[0] < time.monotonic():
+        rules, ttl = await _robots_rules(site)
+        if len(_robots) > 5000:
+            _robots.clear()
+        hit = _robots[site] = (time.monotonic() + ttl, rules)
+    rules = hit[1]
+    if rules is None:
+        return "the site's crawl rules couldn't be read just now — try again in a few minutes"
+    allowed = rules if isinstance(rules, bool) else rules.can_fetch(USER_AGENT, url)
+    return "" if allowed else "disallowed by robots.txt"
 
 
 async def _pace(url: str) -> None:
@@ -99,6 +144,13 @@ async def _pace(url: str) -> None:
         await asyncio.sleep(slot - now)
 
 
+def _text_chars(markdown: str) -> int:
+    """Characters of text in a page, without link targets, images and markup."""
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", " ", markdown)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    return len(re.sub(r"[#*_>`|\-\s]+", " ", text).strip())
+
+
 def _title(markdown: str) -> str:
     m = re.search(r"^#{1,2}\s+(.+)$", markdown, re.M)
     return m.group(1).strip()[:200] if m else ""
@@ -108,8 +160,8 @@ async def fetch_page(url: str) -> Page:
     """Fetch one page under Sovereign's rules. Never raises."""
     if url_error := await asyncio.to_thread(validate_public_http_url, url, allow_private_addresses=False):
         return Page(url, "", "", "failed", url_error)
-    if not await _robots_allows(url):
-        return Page(url, "", "", "failed", "disallowed by robots.txt")
+    if refusal := await robots_refusal(url):
+        return Page(url, "", "", "failed", refusal)
     await _pace(url)
     try:
         async with httpx.AsyncClient(timeout=60) as c:
@@ -126,7 +178,8 @@ async def fetch_page(url: str) -> Page:
         return Page(url, "", "", "failed", f"{type(e).__name__}: {e}")
     if not markdown:
         return Page(url, "", "", "failed", "no readable content")
-    partial = len(markdown) < PARTIAL_BELOW or bool(_PAYWALL.search(markdown[:5000]))
+    partial = len(markdown) < PARTIAL_BELOW or (bool(_PAYWALL.search(markdown[:5000]))
+                                                 and _text_chars(markdown) < PAYWALL_BODY)
     return Page(url, _title(markdown), markdown, "partial" if partial else "full")
 
 

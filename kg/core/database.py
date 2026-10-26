@@ -6,7 +6,7 @@ One ArcadeDB database per domain:
     -[:<rel>]->  synapse  one edge type per ontology relation, all EXTENDS Fact:
                           uid, fact, sources, evidence, disbelief, embedding, created_at, updated_at,
                           invalid_at, invalid_reason
-    (:Episode)   memory   uid, source, title, content, content_status, content_hash, created_at
+    (:Episode)   memory   uid, source, title, content, content_status, content_hash, status, error, created_at
     (:Episode)-[:MENTIONS]->(:Entity)
     ReviewItem (document) uid, kind, status, summary, payload (JSON), created_at, resolved_at, resolution
     Report     (document) uid, kind, period_start, period_end, created_at, headline, briefing, spoken,
@@ -44,10 +44,6 @@ DB_PASS = os.getenv("ARCADEDB_PASS", "sovereign_pass")
 
 ENTITY_INDEX = "Entity[embedding]"
 STATE = "has_state"  # built-in relation for facts about a single entity (self-loop)
-# Relation names that would collide with the schema's own types.
-_RESERVED = {"entity", "episode", "fact", "mentions", "reviewitem", "report", "action", "proposal", "playbook",
-             "sensor"}
-
 _NON_IDENT = re.compile(r"[^A-Za-z0-9_]+")
 
 _SCHEMA = """
@@ -61,6 +57,7 @@ CREATE PROPERTY Episode.uid IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Episode (uid) UNIQUE;
 CREATE PROPERTY Episode.content_hash IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Episode (content_hash) UNIQUE;
+CREATE PROPERTY Episode.status IF NOT EXISTS STRING;
 CREATE EDGE TYPE Fact IF NOT EXISTS;
 CREATE EDGE TYPE MENTIONS IF NOT EXISTS;
 CREATE DOCUMENT TYPE ReviewItem IF NOT EXISTS;
@@ -100,6 +97,9 @@ CREATE INDEX IF NOT EXISTS ON ChatTurn (uid) UNIQUE;
 CREATE PROPERTY ChatTurn.user IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON ChatTurn (user) NOTUNIQUE;
 """
+# Relation names that would collide with the schema's own types: every type above (2026-10-14: the list had been
+# written by hand and missed Thread, Message, Setting, ChatTurn — a relation "message" would have been a document).
+_RESERVED = {t.lower() for t in re.findall(r"CREATE (?:VERTEX|EDGE|DOCUMENT) TYPE (\w+)", _SCHEMA)}
 
 # Vector indexes need the embedding dimension, so they are created on first use.
 # The index on the Fact supertype does not cover its subtypes, so every relation gets its own.
@@ -221,11 +221,14 @@ async def get_db() -> ArcadeDB:
 
 # ── Domain databases + schema ──────────────────────────────────────────────
 
-async def ensure_domain_db(db: ArcadeDB, domain: str) -> None:
-    """Create the domain's database + schema if missing. Idempotent."""
+async def ensure_domain_db(db: ArcadeDB, domain: str, create: bool = True) -> None:
+    """Create the domain's database + schema if missing. Idempotent. With create=False a missing database is an
+    error: a write that outlives its domain (a nightly step, a background task) must not bring the database back."""
     if domain in db._ready:
         return
     if not await db.exists(domain):
+        if not create:
+            raise ArcadeDBError(f"domain database '{domain}' does not exist")
         await db.server(f"create database {db_name(domain)}")
     await db.command(domain, "sqlscript", _SCHEMA)
     db._ready.add(domain)
@@ -259,12 +262,21 @@ async def _relation_types(db: ArcadeDB, domain: str) -> list[str]:
 # ── Episodes ───────────────────────────────────────────────────────────────
 
 async def find_episode(db: ArcadeDB, domain: str, content_hash: str) -> dict | None:
-    rows = await db.sql(domain, "SELECT uid, source, created_at FROM Episode WHERE content_hash = :h", h=content_hash)
-    return rows[0] if rows else None
+    """The episode of this text: uid, source, status (None: stored before episodes had one — done), created_at."""
+    rows = await db.sql(domain, "SELECT uid, source, status, created_at FROM Episode WHERE content_hash = :h",
+                        h=content_hash)
+    return {**rows[0], "status": rows[0].get("status")} if rows else None
 
 
-async def create_episode(db: ArcadeDB, domain: str, episode: dict) -> None:
-    await db.cypher(domain, "CREATE (e:Episode) SET e += $props", props=episode)
+async def create_episode(db: ArcadeDB, domain: str, episode: dict, status: str = "pending") -> None:
+    """A new source. `status` says how far its ingest got (pending → done | failed), so a text whose ingest died
+    half-way is read again instead of being skipped as a duplicate."""
+    await db.cypher(domain, "CREATE (e:Episode) SET e += $props", props={**episode, "status": status})
+
+
+async def set_episode_status(db: ArcadeDB, domain: str, uid: str, status: str, error: str | None = None) -> None:
+    await db.cypher(domain, "MATCH (ep:Episode {uid: $uid}) SET ep.status = $s, ep.error = $e",
+                    uid=uid, s=status, e=error)
 
 
 async def set_episode_gaps(db: ArcadeDB, domain: str, episode_uid: str, gaps: dict[str, int]) -> None:
@@ -290,7 +302,7 @@ async def list_episodes(db: ArcadeDB, domain: str, limit: int = 50) -> list[dict
         domain,
         "MATCH (ep:Episode) OPTIONAL MATCH (ep)-[:MENTIONS]->(e:Entity) "
         "RETURN ep.uid AS uid, ep.source AS source, ep.title AS title, ep.content_status AS content_status, "
-        "ep.created_at AS created_at, left(ep.content, 240) AS snippet, count(e) AS entities "
+        "ep.status AS status, ep.created_at AS created_at, left(ep.content, 240) AS snippet, count(e) AS entities "
         "ORDER BY created_at DESC LIMIT $n",
         n=limit,
     )
@@ -351,7 +363,8 @@ async def touch_entity(db: ArcadeDB, domain: str, uid: str, keys: list[str], ali
 async def create_fact(
     db: ArcadeDB, domain: str, source_uid: str, relation: str, target_uid: str,
     fact: str, embedding: list[float] | None, episode_uid: str, reliability: float,
-) -> str:
+) -> str | None:
+    """A new fact. Its uid — or None when no edge was written (an endpoint entity is gone: merged or pruned)."""
     rel = edge_type(relation)
     if embedding:
         await _ensure_relation(db, domain, rel, len(embedding))
@@ -365,12 +378,13 @@ async def create_fact(
     }
     if embedding:
         props["embedding"] = embedding
-    await db.cypher(
+    rows = await db.cypher(
         domain,
-        f"MATCH (a:Entity {{uid: $a}}), (b:Entity {{uid: $b}}) CREATE (a)-[r:`{rel}`]->(b) SET r += $props",
+        f"MATCH (a:Entity {{uid: $a}}), (b:Entity {{uid: $b}}) CREATE (a)-[r:`{rel}`]->(b) SET r += $props "
+        "RETURN r.uid AS uid",
         a=source_uid, b=target_uid, props=props,
     )
-    return uid
+    return uid if rows else None
 
 
 async def strengthen_fact(db: ArcadeDB, domain: str, relation: str, fact_uid: str, episode_uid: str,
@@ -391,9 +405,11 @@ async def strengthen_fact(db: ArcadeDB, domain: str, relation: str, fact_uid: st
 
 
 async def invalidate_fact(db: ArcadeDB, domain: str, relation: str, fact_uid: str, reason: str) -> None:
+    """Supersede a valid fact. One already superseded keeps its first date and reason — that is its history."""
     await db.cypher(
         domain,
-        f"MATCH ()-[r:`{edge_type(relation)}`]->() WHERE r.uid = $uid SET r.invalid_at = $now, r.invalid_reason = $why",
+        f"MATCH ()-[r:`{edge_type(relation)}`]->() WHERE r.uid = $uid AND r.invalid_at IS NULL "
+        "SET r.invalid_at = $now, r.invalid_reason = $why",
         uid=fact_uid, now=now(), why=reason,
     )
 
@@ -466,8 +482,18 @@ async def prune_factless_entities(db: ArcadeDB, domain: str, keep: set[str] = fr
     return doomed
 
 
+_ENTITY_REFS = ("entity", "candidate", "source", "target")   # review payload fields naming an entity: <x>_uid, <x>_name
+
+
 async def merge_entities(db: ArcadeDB, domain: str, duplicate_uid: str, into_uid: str) -> None:
-    """Fold a duplicate entity into another: names, mentions and every fact move over."""
+    """Fold a duplicate entity into another: names, mentions and every fact move over — each fact keeps its uid,
+    embedding and every property, so links, playbooks and reviews that cite it still find it. Pending reviews that
+    name the duplicate are pointed at the survivor. ValueError when the survivor is gone (the review stays)."""
+    if duplicate_uid == into_uid:
+        raise ValueError(f"Cannot merge {into_uid} into itself")
+    into = await get_entities(db, domain, [into_uid])
+    if not into:
+        raise ValueError(f"Entity {into_uid} no longer exists")
     dup = await entity_detail(db, domain, duplicate_uid)
     if not dup:
         return
@@ -485,19 +511,57 @@ async def merge_entities(db: ArcadeDB, domain: str, duplicate_uid: str, into_uid
         "MATCH (ep:Episode)-[:MENTIONS]->(d:Entity {uid: $d}) MATCH (t:Entity {uid: $t}) MERGE (ep)-[:MENTIONS]->(t)",
         d=duplicate_uid, t=into_uid,
     )
-    for f in dup["facts"]:
-        source = into_uid if f["source_uid"] == duplicate_uid else f["source_uid"]
-        target = into_uid if f["target_uid"] == duplicate_uid else f["target_uid"]
-        props = {k: f[k] for k in ("fact", "sources", "evidence", "created_at", "updated_at",
-                                    "invalid_at", "invalid_reason") if f.get(k) is not None}
-        props.update(uid=new_uid("f"), disbelief=round(1 - f["weight"], 6))
+    # 2026-10-14: facts were re-created with a new uid and without their embedding — a merge cut them out of vector
+    # search and broke every reference to them. One statement per fact: the copy and the delete commit together,
+    # so the uid's unique index never sees two.
+    for f in {f["uid"]: f for f in dup["facts"]}.values():
         await db.cypher(
             domain,
+            f"MATCH (:Entity)-[old:`{edge_type(f['relation'])}`]->(:Entity) WHERE old.uid = $uid "
             f"MATCH (a:Entity {{uid: $a}}), (b:Entity {{uid: $b}}) "
-            f"CREATE (a)-[r:`{edge_type(f['relation'])}`]->(b) SET r += $props",
-            a=source, b=target, props=props,
+            f"CREATE (a)-[r:`{edge_type(f['relation'])}`]->(b) SET r = properties(old) DELETE old",
+            uid=f["uid"], a=into_uid if f["source_uid"] == duplicate_uid else f["source_uid"],
+            b=into_uid if f["target_uid"] == duplicate_uid else f["target_uid"],
         )
     await db.cypher(domain, "MATCH (d:Entity {uid: $d}) DETACH DELETE d", d=duplicate_uid)
+    await _rehome_reviews(db, domain, duplicate_uid, into[0])
+    await _rehome_playbooks(db, domain, duplicate_uid, into[0])
+
+
+async def _rehome_playbooks(db: ArcadeDB, domain: str, duplicate_uid: str, into: dict) -> None:
+    """Playbooks watching a merged-away entity watch the survivor instead — else the Watcher never sees its facts
+    again (their evidence facts keep their uids, so only `watch` needs it)."""
+    for pb in await find_docs(db, domain, "Playbook", ("watch",), limit=10000):
+        watch = pb.get("watch") or []
+        if not any(isinstance(w, dict) and w.get("uid") == duplicate_uid for w in watch):
+            continue
+        moved = []
+        for w in watch:
+            w = {"uid": into["uid"], "name": into["name"]} if w.get("uid") == duplicate_uid else w
+            if all(m.get("uid") != w.get("uid") for m in moved):
+                moved.append(w)
+        await update_doc(db, domain, "Playbook", pb["uid"], {"watch": moved}, ("watch",))
+
+
+async def _rehome_reviews(db: ArcadeDB, domain: str, duplicate_uid: str, into: dict) -> None:
+    """Pending reviews that name a merged-away entity now name the survivor, so approving one later acts on it.
+    A merge review left asking to merge the survivor into itself is closed: that is done. The review being applied
+    (and any twin of it) is left as it is: its decider closes it."""
+    for r in await list_reviews(db, domain, limit=100000):
+        p = r["payload"]
+        hit = [x for x in _ENTITY_REFS if p.get(f"{x}_uid") == duplicate_uid]
+        if not hit or (r["kind"] == "merge" and (p.get("entity_uid"), p.get("candidate_uid")) == (duplicate_uid,
+                                                                                                  into["uid"])):
+            continue
+        for x in hit:
+            p[f"{x}_uid"] = into["uid"]
+            if f"{x}_name" in p:
+                p[f"{x}_name"] = into["name"]
+        if r["kind"] == "merge" and p.get("entity_uid") == p.get("candidate_uid"):
+            await close_review(db, domain, r["uid"], "approved", f"already one entity: merged into {into['name']}")
+            continue
+        await db.sql(domain, "UPDATE ReviewItem SET payload = :p WHERE uid = :uid AND status = 'pending'",
+                     p=json.dumps(p, default=str), uid=r["uid"])
 
 
 # ── Reads ──────────────────────────────────────────────────────────────────
@@ -572,12 +636,13 @@ async def search_entities(db: ArcadeDB, domain: str, vector: list[float], k: int
 
 
 async def search_facts(db: ArcadeDB, domain: str, vector: list[float], k: int) -> list[dict]:
-    """Nearest valid facts by embedding, across every relation type."""
+    """Nearest valid facts by embedding, across every relation type. Each index is asked for more than k: the
+    superseded paraphrases of a fact sit right next to it and would otherwise take the valid hits' places."""
     sims: dict[str, float] = {}
     for rel in await _relation_types(db, domain):
         rows = await db.sql(
             domain, "SELECT uid, invalid_at, distance FROM (SELECT expand(vector.neighbors(:i, :v, :k)))",
-            i=f"{rel}[embedding]", v=vector, k=k,
+            i=f"{rel}[embedding]", v=vector, k=max(k, min(k * 3, 30)),
         )
         for r in rows:
             if r.get("invalid_at") is None:
@@ -631,16 +696,24 @@ async def add_review(db: ArcadeDB, domain: str, kind: str, summary: str, payload
     return uid
 
 
-async def list_reviews(db: ArcadeDB, domain: str, status: str = "pending", limit: int = 100) -> list[dict]:
+async def list_reviews(db: ArcadeDB, domain: str, status: str = "pending", limit: int = 100, offset: int = 0,
+                       oldest_first: bool = False) -> list[dict]:
     if not await db.exists(domain):
         return []
     rows = await db.sql(
         domain,
         "SELECT uid, kind, status, summary, payload, created_at, resolved_at, resolution FROM ReviewItem "
-        "WHERE status = :s ORDER BY created_at DESC LIMIT :n",
-        s=status, n=limit,
+        f"WHERE status = :s ORDER BY created_at {'ASC' if oldest_first else 'DESC'} SKIP :o LIMIT :n",
+        s=status, o=max(0, offset), n=limit,
     )
     return [{**r, "payload": json.loads(r["payload"])} for r in rows]
+
+
+async def count_reviews(db: ArcadeDB, domain: str, status: str = "pending") -> int:
+    if not await db.exists(domain):
+        return 0
+    rows = await db.sql(domain, "SELECT count(*) AS n FROM ReviewItem WHERE status = :s", s=status)
+    return rows[0]["n"] if rows else 0
 
 
 async def get_review(db: ArcadeDB, domain: str, uid: str) -> dict | None:
@@ -648,12 +721,39 @@ async def get_review(db: ArcadeDB, domain: str, uid: str) -> dict | None:
     return {**rows[0], "payload": json.loads(rows[0]["payload"])} if rows else None
 
 
-async def close_review(db: ArcadeDB, domain: str, uid: str, status: str, resolution: str) -> None:
-    await db.sql(
+async def close_review(db: ArcadeDB, domain: str, uid: str, status: str, resolution: str) -> bool:
+    """Decide a pending item. True only if this call closed it (two deciders at once: one wins)."""
+    rows = await db.sql(
         domain,
-        "UPDATE ReviewItem SET status = :s, resolution = :res, resolved_at = :now WHERE uid = :uid",
+        "UPDATE ReviewItem SET status = :s, resolution = :res, resolved_at = :now WHERE uid = :uid "
+        "AND status = 'pending'",
         s=status, res=resolution, now=now(), uid=uid,
     )
+    return bool(rows and rows[0].get("count"))
+
+
+async def referenced(db: ArcadeDB, domain: str) -> set[str]:
+    """Every uid something still relies on: any value, however nested, of a pending review's payload (entity and
+    fact uids, `supersedes`, `existing[].uid` …) and the evidence facts and watched entities of active playbooks.
+    Pruning and forgetting spare these."""
+    keep: set[str] = set()
+
+    def walk(v) -> None:
+        if isinstance(v, str):
+            keep.add(v)
+        elif isinstance(v, dict):
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    for r in await list_reviews(db, domain, limit=100000):
+        walk(r.get("payload") or {})
+    for pb in await find_docs(db, domain, "Playbook", ("watch", "evidence", "trigger"), "status = 'active'",
+                              limit=10000):
+        keep |= {u for u in pb.get("evidence") or [] if isinstance(u, str)}
+        keep |= {w["uid"] for w in pb.get("watch") or [] if isinstance(w, dict) and w.get("uid")}
+    return keep
 
 
 # ── Changes over a period (daily report, summary refresh) ──────────────────
@@ -667,7 +767,7 @@ async def changes_since(db: ArcadeDB, domain: str, since: str, limit: int = 300)
              "facts_invalidated": [], "reviews_opened": [], "reviews_decided": []}
     if not await db.exists(domain):
         return empty
-    await ensure_domain_db(db, domain)
+    await ensure_domain_db(db, domain, create=False)
     episodes = await db.cypher(
         domain,
         "MATCH (ep:Episode) WHERE ep.created_at >= datetime($since) OPTIONAL MATCH (ep)-[:MENTIONS]->(e:Entity) "
@@ -769,7 +869,7 @@ async def set_entity_summary(db: ArcadeDB, domain: str, uid: str, summary: str) 
 # ── Reports ────────────────────────────────────────────────────────────────
 
 async def save_report(db: ArcadeDB, domain: str, report: dict) -> str:
-    await ensure_domain_db(db, domain)
+    await ensure_domain_db(db, domain, create=False)
     uid = new_uid("rep")
     await db.sql(
         domain,
@@ -792,7 +892,7 @@ def _report(row: dict, full: bool) -> dict:
 async def list_reports(db: ArcadeDB, domain: str, limit: int = 30) -> list[dict]:
     if not await db.exists(domain):
         return []
-    await ensure_domain_db(db, domain)
+    await ensure_domain_db(db, domain, create=False)
     rows = await db.sql(
         domain,
         "SELECT uid, kind, period_start, period_end, created_at, headline, briefing, spoken, stats FROM Report "
@@ -805,7 +905,7 @@ async def list_reports(db: ArcadeDB, domain: str, limit: int = 30) -> list[dict]
 async def get_report(db: ArcadeDB, domain: str, uid: str) -> dict | None:
     if not await db.exists(domain):
         return None
-    await ensure_domain_db(db, domain)
+    await ensure_domain_db(db, domain, create=False)
     rows = await db.sql(
         domain,
         "SELECT uid, kind, period_start, period_end, created_at, headline, briefing, spoken, stats, digest "
@@ -832,7 +932,7 @@ def _decode(row: dict, json_fields: tuple[str, ...]) -> dict:
 
 
 async def insert_doc(db: ArcadeDB, domain: str, type_: str, doc: dict, json_fields: tuple[str, ...] = ()) -> dict:
-    await ensure_domain_db(db, domain)
+    await ensure_domain_db(db, domain, create=False)   # a deleted domain's late write must not bring it back
     doc = {"uid": new_uid(type_.lower()[:4]), "created_at": now(), **doc}
     # Names quoted and parameters prefixed: some names are SQL keywords (trigger), as columns and as parameters.
     await db.sql(domain, f"INSERT INTO {type_} SET " + ", ".join(f"`{k}` = :p_{k}" for k in doc),
@@ -844,7 +944,7 @@ async def find_docs(db: ArcadeDB, domain: str, type_: str, json_fields: tuple[st
                     order: str = "created_at DESC", limit: int = 100, **params) -> list[dict]:
     if not await db.exists(domain):
         return []
-    await ensure_domain_db(db, domain)
+    await ensure_domain_db(db, domain, create=False)
     rows = await db.sql(domain, f"SELECT FROM {type_}{' WHERE ' + where if where else ''} ORDER BY {order} LIMIT :n",
                         n=limit, **params)
     return [_decode(r, json_fields) for r in rows]

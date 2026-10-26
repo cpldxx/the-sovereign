@@ -24,7 +24,7 @@ async def query_kg(domain_name: str, request: QueryRequest, req: Request):
     {
       "entities": [{...entity, "similarity"?}],      # closest entities (with similarity) + fact endpoints
       "facts":    [{...fact, "similarity"?}],         # closest facts first, then strongest facts around them
-      "episodes": [{"uid", "source", "title", ...}]   # sources behind the facts
+      "episodes": [{"uid", "source", "title", ...}]   # sources behind the facts, first facts' first
     }
     """
     try:

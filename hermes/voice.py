@@ -94,7 +94,9 @@ def speakable(text: str) -> str:
     text = re.sub(r"^\s*\|.*\|\s*$", " ", text, flags=re.M)              # table rows
     text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)                 # links → their text
     text = re.sub(r"https?://\S+", " ", text)
-    text = re.sub(r"\(?`?\b(?:e|f|ep|r|rep|prop|play|sens|acti)_[0-9a-f]{8,}\b`?\)?", " ", text)  # uids
+    from head_agent import scrub  # noqa: PLC0415 — the KG's uid shape, not a list of prefixes that missed some
+
+    text = scrub(text)
     text = re.sub(r"[`*_#>~]+", " ", text)
     text = re.sub(r"^\s*[-•]\s+", "", text, flags=re.M)
     text = re.sub(r"\s+", " ", text).strip()

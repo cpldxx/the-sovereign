@@ -13,7 +13,7 @@ import secrets
 import httpx
 import pytest
 
-from core import accounts, actions, auth, sensors
+from core import accounts, actions, auth, selfcheck, sensors
 from core.auth import Principal
 
 from conftest import SERVICE, URLS
@@ -48,7 +48,7 @@ async def store(db, monkeypatch):
     monkeypatch.setattr(accounts, "SYSTEM_DB", name)
     monkeypatch.setattr(accounts, "SIGNUP", "invite")
     for cache in ("_principals", "_failures"):
-        monkeypatch.setattr(accounts, cache, {} if cache == "_principals" else accounts.defaultdict(list))
+        monkeypatch.setattr(accounts, cache, {})
     before = auth._authenticator
     await accounts.setup(db)
     yield accounts
@@ -110,11 +110,60 @@ def _module(body: str) -> str:
 
 
 @pytest.mark.sandbox
-@pytest.mark.parametrize("url", ["http://127.0.0.1:8080/health", "http://host.docker.internal:11434/api/tags",
-                                 "http://localhost:2480/", "http://169.254.169.254/"])
+@pytest.mark.parametrize("url", selfcheck.SANDBOX_TARGETS)
 async def test_sandbox_cannot_reach_this_machine(url):
+    """The guard's own refusal is the pass condition: a connection error only says nothing listens there today.
+    Private addresses too — on Docker Desktop 192.168.65.254 is the Mac (Ollama answers there without auth)."""
     out = await sensors.run_code(_module("    return {'status': httpx.get(url, timeout=5).status_code}"), {"url": url})
-    assert not out["ok"], out
+    assert not out["ok"] and "only public internet addresses" in out["error"], out
+
+
+def test_selfcheck_counts_only_the_guards_refusal():
+    refused = "ConnectError: x: only public internet addresses are reachable from the sandbox"
+    assert selfcheck.sandbox_verdict({"a": refused, "b": refused})[0] == "pass"
+    assert selfcheck.sandbox_verdict({"a": refused, "b": "ConnectError: connection refused"})[0] == "fail"
+    assert selfcheck.sandbox_verdict({"a": "reached: HTTP 200"})[0] == "fail"
+
+
+async def test_selfcheck_static_probes_the_known_bypasses():
+    assert await selfcheck._static() == ("pass", "")
+
+
+def _raw(code: str) -> dict:
+    """The sandbox runner given code directly — past the KG's static check, to test the runner's own wall."""
+    import subprocess
+    head = 'NAME = "t"\nDESCRIPTION = "x"\nPARAMS = {}\n'
+    out = subprocess.run(["docker", "run", "--rm", "-i", "--read-only", "--cap-drop", "ALL", "--network", "none",
+                          sensors.IMAGE], input=json.dumps({"code": head + code, "params": {}}).encode(),
+                         capture_output=True, timeout=60)
+    return json.loads(out.stdout.decode().strip().splitlines()[-1])
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("code,error", [
+    ("def run():\n    return {'x': __builtins__['__import__']('socket').gethostname()}", "not allowed"),
+    ("def run():\n    return {'x': __import__('os').getcwd()}", "not allowed"),
+    ("def run():\n    return {'x': open('/etc/hostname').read()}", "'open' is not defined"),
+    ("import io\ndef run():\n    return {'x': io.open('/etc/hostname').read()}", "no attribute 'open'"),
+    ("import statistics\ndef run():\n    return {'x': str(statistics.sys)}", "no attribute 'sys'"),
+    ("import httpx\ndef run():\n    return {'x': str(httpx._utils)}", "no attribute '_utils'"),
+    ("def run():\n    return {'x': getattr(1, 'real')}", "'getattr' is not defined"),
+])
+async def test_sandbox_runner_has_no_way_out_even_past_the_static_check(code, error):
+    await sensors._ensure_image()
+    out = _raw(code)
+    assert not out["ok"] and error in out["error"], out
+
+
+@pytest.mark.sandbox
+async def test_sandbox_runner_still_imports_what_sensors_use():
+    await sensors._ensure_image()
+    out = _raw("import httpx, json, re, math, statistics, datetime, time, io, csv, html, zoneinfo, decimal\n"
+               "import urllib.parse\nimport xml.etree.ElementTree as ET\nfrom urllib.parse import quote\n"
+               "def run():\n    return {'q': quote('a b'), 'n': urllib.parse.urlsplit('https://x.com/').netloc,\n"
+               "            'x': ET.fromstring('<a>1</a>').text, 's': io.StringIO('z').read(),\n"
+               "            'm': statistics.median([1, 2, 3]), 'c': httpx.Client is not None}")
+    assert out == {"ok": True, "result": {"q": "a%20b", "n": "x.com", "x": "1", "s": "z", "m": 2, "c": True}}, out
 
 
 @pytest.mark.sandbox
@@ -127,10 +176,11 @@ async def test_sandbox_refuses_forbidden_code_without_running_it():
 async def test_sandbox_masks_secrets(monkeypatch):
     monkeypatch.setenv("SENSOR_SECRETS", "TEST_SECRET_KEY")
     monkeypatch.setenv("TEST_SECRET_KEY", "s3cr3t-value-123")
+    monkeypatch.setattr(accounts, "trusted", lambda domain: True)   # keys only for a named, trusted domain
     code = _module("    return {'leak': secret('TEST_SECRET_KEY')}").replace(
         'PARAMS =', 'SECRETS = ["TEST_SECRET_KEY"]\nPARAMS =')
-    out = await sensors.run_code(code, {"url": "x"})
-    assert "s3cr3t-value-123" not in json.dumps(out)
+    out = await sensors.run_code(code, {"url": "x"}, "trusted_test")
+    assert out["ok"] and out["result"] == {"leak": "***"}, out
 
 
 @pytest.mark.sandbox

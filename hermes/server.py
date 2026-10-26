@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 import auth
 import voice
-from head_agent import HEAD_MODEL, TRACING, DomainNotFound, ask_head, scrub, warm_up
+from head_agent import HEAD_MODEL, TRACING, DomainNotFound, KGUnavailable, Stop, ask_head, scrub, warm_up
 
 
 @asynccontextmanager
@@ -55,7 +55,8 @@ class Turn(BaseModel):
 
 class AskRequest(BaseModel):
     message: str = Field(..., min_length=1)
-    history: list[Turn] = []
+    # The page sends its whole conversation (it keeps 400 turns); the Head reads only the newest (head_agent.recent).
+    history: list[Turn] = Field(default=[], max_length=500)
     max_iterations: int = Field(default=8, ge=1, le=30)
     voice: bool = Field(default=False, description="Spoken conversation: short answers meant to be read aloud")
 
@@ -144,6 +145,9 @@ async def ask(domain_name: str, request: AskRequest):
     except DomainNotFound:
         await asyncio.to_thread(_chat_close, domain_name, handle, "This domain does not exist.", [], "error")
         raise HTTPException(status_code=404, detail=f"Domain '{domain_name}' does not exist")
+    except KGUnavailable as e:
+        await asyncio.to_thread(_chat_close, domain_name, handle, str(e), [], "error")
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         await asyncio.to_thread(_chat_close, domain_name, handle, f"Head Agent failed: {type(e).__name__}", [], "error")
         raise HTTPException(status_code=500, detail=f"Head Agent failed: {type(e).__name__}: {e}")
@@ -167,12 +171,22 @@ async def ask_stream(domain_name: str, request: AskRequest):
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[dict | None] = asyncio.Queue()
     tools = _tools(domain_name)
-    handle = await asyncio.to_thread(_chat_open, domain_name, _user(), request.message)
+    user = _user()
+    handle = await asyncio.to_thread(_chat_open, domain_name, user, request.message)
     log = _Steps()
+    # Stop (POST …/ask/stop) stops the Head: until 2026-10-14 the turn ran on in its thread — its ingests, proposals,
+    # review decisions and tasks still happened. A closed stream does NOT stop it: a reload, another domain or a
+    # closed tab must still get the answer (user, 2026-10-13: "messages must survive a reload"; the page picks up a
+    # pending answer from the KG).
+    stop = Stop()
 
     def emit(event: dict | None) -> None:  # called from the agent's worker thread
         log.record(event)
         loop.call_soon_threadsafe(queue.put_nowait, event)
+
+    def stopped() -> str:
+        """A stopped turn is saved as an error: what the Head had said so far (its earlier words are in the steps)."""
+        return f"{scrub(log.said).strip()}\n\nStopped.".strip()
 
     def run() -> None:
         content, status = "", "error"
@@ -185,21 +199,32 @@ async def ask_stream(domain_name: str, request: AskRequest):
                 on_event=emit,
                 voice=request.voice,
                 tools=tools,
+                stop=stop,
             )
-            content, status = answer or log.said.strip() or "(no answer)", "done"
-            emit({"type": "answer", "text": answer})
+            if stop.stopped:
+                content = stopped()
+                emit({"type": "error", "detail": content})
+            else:
+                content, status = answer or log.said.strip() or "(no answer)", "done"
+                emit({"type": "answer", "text": answer})
         except DomainNotFound:
             content = f"Domain '{domain_name}' does not exist"
             emit({"type": "error", "detail": content})
+        except KGUnavailable as e:
+            content = str(e)
+            emit({"type": "error", "detail": content})
         except Exception as e:
-            content = f"Head Agent failed: {type(e).__name__}: {e}"
+            content = stopped() if stop.stopped else f"Head Agent failed: {type(e).__name__}: {e}"
             emit({"type": "error", "detail": content})
         finally:
             # Saved even if the page that asked is gone: the worker thread outlives the stream.
             _chat_close(domain_name, handle, content, log.steps, status)
             emit(None)
 
+    turns = _running.setdefault((domain_name, user), set())
+    turns.add(stop)
     worker = asyncio.create_task(asyncio.to_thread(run))
+    worker.add_done_callback(lambda _t: turns.discard(stop))
 
     async def events():
         while (event := await queue.get()) is not None:
@@ -207,6 +232,19 @@ async def ask_stream(domain_name: str, request: AskRequest):
         await worker
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+
+_running: dict[tuple[str, str | None], set[Stop]] = {}   # (domain, person) → their turns still running
+
+
+@app.post("/domains/{domain_name}/ask/stop")
+async def ask_stop(domain_name: str):
+    """Stop the caller's running turns with this domain's Head (the Stop button). Hermes' interrupt: no tool call
+    starts after it; one already running finishes. The turn is saved as stopped."""
+    stops = list(_running.get((domain_name, _user()), ()))
+    for stop in stops:
+        stop()
+    return {"stopped": len(stops)}
 
 
 class SpeakRequest(BaseModel):

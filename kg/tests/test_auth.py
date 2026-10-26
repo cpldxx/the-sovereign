@@ -3,8 +3,9 @@
 import pytest
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from core import auth
 from core.auth import Principal
@@ -18,6 +19,7 @@ ORIGIN = auth.ORIGINS[0]
     ("POST", "/domains/a/query", ("a", "viewer")),
     ("POST", "/domains/a/ask/stream", ("a", "viewer")),
     ("POST", "/domains/a/sensors/x/read", ("a", "viewer")),
+    ("POST", "/domains/a/sources", ("a", "viewer")),          # which URLs are already read: a lookup
     ("POST", "/domains/a/ingest", ("a", "editor")),
     ("POST", "/domains/a/research", ("a", "editor")),
     ("POST", "/domains/a/proposals/p1", ("a", "editor")),
@@ -54,7 +56,17 @@ def _app(principals: dict[str, Principal]):
     async def ok(request):
         return JSONResponse({"ok": True})
 
-    app = Starlette(routes=[Route("/{path:path}", ok, methods=["GET", "POST", "PUT", "DELETE"])])
+    async def ws(websocket):
+        await websocket.accept()
+        await websocket.send_json({"principal": websocket.scope["state"]["principal"].kind})
+        await websocket.close()
+
+    async def logout(request):
+        principal = auth.current.get()
+        return JSONResponse({"principal": principal.kind if principal else None})
+
+    app = Starlette(routes=[Route("/auth/logout", logout, methods=["POST"]), WebSocketRoute("/ws/{path:path}", ws),
+                            Route("/{path:path}", ok, methods=["GET", "POST", "PUT", "DELETE"])])
     app.add_middleware(auth.Auth)
     return TestClient(app)
 
@@ -101,3 +113,27 @@ def test_cookie_writes_need_our_origin(client):
     assert client.get("/domains/a", headers={"Origin": "https://evil.example"}).status_code == 200   # reads are fine
     assert client.post("/domains/a/ingest", headers={"Origin": "https://evil.example"}).status_code == 403
     assert client.post("/domains/a/ingest", headers={"Origin": ORIGIN}).status_code == 200
+
+
+def test_websockets_need_credentials(client):
+    """2026-10-14: websocket scopes passed the middleware unchecked."""
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/ws/domains/a"):
+            pass
+    with pytest.raises(WebSocketDisconnect):                                   # not a member: refused too
+        with client.websocket_connect("/ws/x", headers={"Authorization": "Bearer nope"}):
+            pass
+    with client.websocket_connect("/ws/x", headers={"Authorization": "Bearer viewer"}) as ws:
+        assert ws.receive_json() == {"principal": "user"}
+    client.cookies.set(auth.COOKIE, "viewer")
+    with pytest.raises(WebSocketDisconnect):                                   # a cross-site page with our cookie
+        with client.websocket_connect("/ws/x", headers={"Origin": "https://evil.example"}):
+            pass
+
+
+def test_logout_works_signed_out(client):
+    """An expired cookie must still be clearable: logout passes without valid credentials, as nobody."""
+    assert client.post("/auth/logout").json() == {"principal": None}
+    client.cookies.set(auth.COOKIE, "expired")
+    assert client.post("/auth/logout").json() == {"principal": None}
+    assert client.post("/auth/logout", headers={"Authorization": "Bearer editor"}).json() == {"principal": "user"}

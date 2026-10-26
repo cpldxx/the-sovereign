@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from starlette.datastructures import Headers
 from starlette.requests import cookie_parser
 from starlette.responses import JSONResponse
+from starlette.websockets import WebSocketClose
 
 load_dotenv()
 TOKEN = os.getenv("SOVEREIGN_TOKEN", "").strip()
@@ -38,6 +39,8 @@ KG_URL = os.getenv("SOVEREIGN_KG_URL", "http://localhost:8080").rstrip("/")
 ORIGINS = [o.strip() for o in os.getenv("SOVEREIGN_ORIGINS", "http://localhost:5173").split(",") if o.strip()]
 COOKIE = "sovereign_session"
 PUBLIC = ("/health", "/auth/config", "/auth/login", "/auth/signup")
+# Work signed out too, acting only when a credential resolves: an expired cookie must still be clearable.
+OPTIONAL = ("/auth/logout",)
 CACHE_SECONDS = 15
 ROLES = {"viewer": 1, "editor": 2, "owner": 3}
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
@@ -76,10 +79,12 @@ def headers(domain: str | None = None) -> dict:
 # ── What a request needs ───────────────────────────────────────────────────
 
 _DOMAIN_PATH = re.compile(r"^/(?:domains|graph)/(?P<domain>[^/]+)(?P<rest>/.*)?$")
-_READ_POSTS = re.compile(r"^/(?:query|ask|ask/stream|sensors/[^/]+/read)$")   # POSTs that only read
-# Leaving a domain, and your own conversation with its Head (the handlers check whose).
+_READ_POSTS = re.compile(r"^/(?:query|ask|ask/stream|sensors/[^/]+/read|sources)$")   # POSTs that only read
+# Leaving a domain, and your own conversation with its Head (the handlers check whose; Hermes' ask/stop stops only
+# the caller's own turns).
 _ANY_MEMBER = (("DELETE", re.compile(r"^/members/[^/]+$")), ("POST", re.compile(r"^/chat(?:/import)?$")),
-               ("PATCH", re.compile(r"^/chat/[^/]+$")), ("DELETE", re.compile(r"^/chat$")))
+               ("PATCH", re.compile(r"^/chat/[^/]+$")), ("DELETE", re.compile(r"^/chat$")),
+               ("POST", re.compile(r"^/ask/stop$")))
 _OWNER = (("DELETE", re.compile(r"^$")), ("PUT", re.compile(r"^/members$")),
           ("POST", re.compile(r"^/actions$")), ("DELETE", re.compile(r"^/actions/[^/]+$")))
 
@@ -181,29 +186,44 @@ class Auth:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or scope["method"] == "OPTIONS" or scope["path"] in PUBLIC:
+        kind = scope["type"]
+        # 2026-10-14: websockets used to pass unchecked like lifespan — they get the same check as any request.
+        if kind not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
+        method = scope.get("method", "GET")   # a websocket opens with a GET
+        if kind == "http" and (method == "OPTIONS" or scope["path"] in PUBLIC):
+            await self.app(scope, receive, send)
+            return
+        optional = kind == "http" and scope["path"] in OPTIONAL
 
         async def deny(status: int, detail: str) -> None:
+            if kind == "websocket":   # closed before the handshake: the client sees 403
+                await WebSocketClose(code=1008, reason=detail)(scope, receive, send)
+                return
             await JSONResponse({"detail": detail}, status_code=status)(scope, receive, send)
 
         headers_ = Headers(scope=scope)
-        if not (found := credentials(headers_)):
-            return await deny(401, "Sign in first")
-        token, via = found
-        try:
-            principal = await resolve(token, via, headers_)
-        except httpx.HTTPError:
-            return await deny(503, "Can't check the session: the KG API is unreachable")
+        principal = None
+        if found := credentials(headers_):
+            token, via = found
+            try:
+                principal = await resolve(token, via, headers_)
+            except httpx.HTTPError:
+                if not optional:
+                    return await deny(503, "Can't check the session: the KG API is unreachable")
         if principal is None:
-            return await deny(401, "Session expired or invalid — sign in again")
-        # A session cookie rides along on any request the browser makes: writes must come from our own pages.
-        if via == "cookie" and scope["method"] not in SAFE_METHODS:
+            if optional:
+                await self.app(scope, receive, send)
+                return
+            return await deny(401, "Session expired or invalid — sign in again" if found else "Sign in first")
+        # A session cookie rides along on any request the browser makes: writes must come from our own pages — and
+        # so must websockets (a cross-site page may open one with the cookie).
+        if via == "cookie" and (method not in SAFE_METHODS or kind == "websocket"):
             origin = headers_.get("origin")
             if origin and origin not in ORIGINS:
                 return await deny(403, "Cross-site request refused")
-        if need := needed(scope["method"], scope["path"]):
+        if need := needed(method, scope["path"]):
             domain, role = need
             if principal.kind == "user" and not principal.can(domain, role):
                 principal = await resolve(token, via, headers_, fresh=True) or principal  # a domain made just now

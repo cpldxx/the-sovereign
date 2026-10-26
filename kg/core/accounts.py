@@ -22,7 +22,6 @@ import os
 import re
 import secrets
 import time
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from core import auth
@@ -35,8 +34,12 @@ SIGNUP = os.getenv("SIGNUP", "invite").strip().lower()          # "invite" | "op
 SESSION_DAYS = float(os.getenv("SESSION_DAYS", "30"))
 INVITE_DAYS = 7
 CACHE_SECONDS = 30
-MAX_FAILURES = {"email": 10, "client": 50}   # failed sign-ins per account / per address (higher: one address can
-FAILURE_WINDOW = 15 * 60                      # be a whole office or a proxy) within this many seconds, then 429
+MAX_FAILURES = {"email": 10, "client": 50,   # failed sign-ins per account / per address (higher: one address can
+                "signup": 10}                # be a whole office or a proxy) and sign-ups of any outcome per address
+FAILURE_WINDOW = 15 * 60                     # within this many seconds, then 429
+MAX_TRACKED = 20_000                         # throttle keys kept (random emails would otherwise pile up forever)
+SCRYPT_AT_ONCE = 4                           # each hash takes ~32 MB and a core: sign-up / sign-in floods queue
+READY_SECONDS = 60                           # how long the KG waits at start for ArcadeDB to answer
 ROLES = tuple(auth.ROLES)
 
 _SCHEMA = """
@@ -81,6 +84,13 @@ async def setup(db: ArcadeDB) -> None:
     """Create the account store if missing, and resolve user tokens against it from now on."""
     global _db
     _db = db
+    # 2026-10-14: started together with ArcadeDB (dev mode), the KG crashed on its first query — wait for it.
+    deadline = time.monotonic() + READY_SECONDS
+    while not await db.ready():
+        if time.monotonic() > deadline:
+            raise RuntimeError(f"ArcadeDB isn't answering after {READY_SECONDS} s (ARCADEDB_URL) — is its container "
+                               "running? `docker compose up -d arcadedb`")
+        await asyncio.sleep(2)
     if not await db.exists(SYSTEM_DB):
         await db.server(f"create database {SYSTEM_DB}")
     await db.command(SYSTEM_DB, "sqlscript", _SCHEMA)
@@ -143,6 +153,13 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 _DUMMY = hash_password(secrets.token_urlsafe(16))   # checked against for unknown emails: same timing as a real one
+_scrypt_slots = asyncio.Semaphore(SCRYPT_AT_ONCE)
+
+
+async def _hashing(fn, *args):
+    """hash_password / verify_password off the event loop, a few at a time (anyone can make the KG run them)."""
+    async with _scrypt_slots:
+        return await asyncio.to_thread(fn, *args)
 
 
 def _check_password(password: str, email: str = "") -> None:
@@ -225,11 +242,14 @@ async def has_accounts() -> bool:
     return bool(await _sql("SELECT uid FROM Account LIMIT 1"))
 
 
-async def signup(email: str, password: str, name: str = "", invite: str = "") -> tuple[dict, str]:
-    """A new account and its first browser session → (account, session token)."""
+async def signup(email: str, password: str, name: str = "", invite: str = "", client: str = "") -> tuple[dict, str]:
+    """A new account and its first browser session → (account, session token). Sign-ups per address are limited."""
     email = _check_email(email)
     _check_password(password, email)
-    stored = await asyncio.to_thread(hash_password, password)
+    if _throttled(key := f"signup:{client}"):
+        raise AccountError("Too many sign-ups from here — wait a few minutes", 429)
+    _note(key)
+    stored = await _hashing(hash_password, password)
     async with _signup_lock:   # one at a time: exactly one account can be the first
         first = not await has_accounts()
         invite_uid = None
@@ -260,14 +280,31 @@ async def _claim_unowned(user_uid: str) -> None:
             await add_member(domain, user_uid, "owner", added_by=user_uid)
 
 
-_failures: dict[str, list[float]] = defaultdict(list)
+_failures: dict[str, list[float]] = {}   # "email:…" / "client:…" / "signup:…" → recent times
 
 
 def _throttled(*keys: str) -> bool:
     cutoff = time.monotonic() - FAILURE_WINDOW
     for k in keys:
-        _failures[k] = [t for t in _failures[k] if t > cutoff]
-    return any(len(_failures[k]) >= MAX_FAILURES[k.split(":", 1)[0]] for k in keys)
+        if recent := [t for t in _failures.get(k, ()) if t > cutoff]:
+            _failures[k] = recent
+        else:
+            _failures.pop(k, None)
+    return any(len(_failures.get(k, ())) >= MAX_FAILURES[k.split(":", 1)[0]] for k in keys)
+
+
+def _note(*keys: str) -> None:
+    now_ = time.monotonic()
+    for k in keys:
+        _failures.setdefault(k, []).append(now_)
+    if len(_failures) > MAX_TRACKED:
+        # Expired keys first; still full → forget the ones whose last attempt is oldest, down to 90 % so this sort
+        # stays rare (never clear it all: a flood of random emails would reset everyone's count).
+        cutoff = now_ - FAILURE_WINDOW
+        for k in [k for k, ts in _failures.items() if ts[-1] <= cutoff]:
+            del _failures[k]
+        for k in sorted(_failures, key=lambda k: _failures[k][-1])[:max(0, len(_failures) - MAX_TRACKED * 9 // 10)]:
+            del _failures[k]
 
 
 async def login(email: str, password: str, client: str = "") -> tuple[dict, str]:
@@ -277,10 +314,9 @@ async def login(email: str, password: str, client: str = "") -> tuple[dict, str]
     if _throttled(*keys):
         raise AccountError("Too many failed sign-ins — wait a few minutes", 429)
     rows = await _sql("SELECT FROM Account WHERE email = :e", e=email)
-    ok = await asyncio.to_thread(verify_password, password, rows[0]["password"] if rows else _DUMMY)
+    ok = await _hashing(verify_password, password, rows[0]["password"] if rows else _DUMMY)
     if not (rows and ok):
-        for k in keys:
-            _failures[k].append(time.monotonic())
+        _note(*keys)
         raise AccountError("Wrong email or password", 401)
     _failures.pop(keys[0], None)
     token, _ = await _issue(rows[0]["uid"], "browser")
@@ -290,10 +326,10 @@ async def login(email: str, password: str, client: str = "") -> tuple[dict, str]
 async def change_password(user_uid: str, current: str, new: str, keep_token: str) -> None:
     """New password; every other browser session is signed out (API tokens stay)."""
     rows = await _sql("SELECT FROM Account WHERE uid = :uid", uid=user_uid)
-    if not rows or not await asyncio.to_thread(verify_password, current, rows[0]["password"]):
+    if not rows or not await _hashing(verify_password, current, rows[0]["password"]):
         raise AccountError("The current password is wrong", 403)
     _check_password(new, rows[0]["email"])
-    stored = await asyncio.to_thread(hash_password, new)
+    stored = await _hashing(hash_password, new)
     await _sql("UPDATE Account SET `password` = :p_password WHERE uid = :uid", p_password=stored, uid=user_uid)
     await _sql("DELETE FROM Token WHERE user_uid = :u AND kind = 'browser' AND token_hash <> :h",
                u=user_uid, h=_hash(keep_token))

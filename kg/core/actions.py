@@ -21,12 +21,14 @@ automations run locally (n8n on localhost).
 """
 
 import asyncio
+import hashlib
 import ipaddress
+import json
 import os
 import re
 import socket
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -114,18 +116,50 @@ async def add_webhook(db: ArcadeDB, domain: str, name: str, description: str, ur
 async def _check_destination(url: str) -> None:
     """Refuse a webhook URL whose host resolves to a private, loopback or link-local address (checked when it is
     added and again before every call: DNS can change)."""
-    if ALLOW_PRIVATE_WEBHOOKS:
-        return
+    await _vetted(url)
+
+
+async def _vetted(url: str) -> tuple[str, dict, dict]:
+    """(address to connect to, headers, request extensions) for a webhook call. The host is resolved once and every
+    address must be public; the call then goes to that vetted address with the original Host header and TLS name.
+    2026-10-14: checking the name and letting httpx resolve it again was check-then-connect — a DNS answer that
+    changes in between (rebinding) reached a private address."""
     parts = urlsplit(url)
+    if ALLOW_PRIVATE_WEBHOOKS:
+        return url, {}, {}
     try:
         infos = await asyncio.get_running_loop().getaddrinfo(parts.hostname, parts.port or 443,
                                                              type=socket.SOCK_STREAM)
-    except (socket.gaierror, UnicodeError) as e:
+        addrs = [ipaddress.ip_address(info[4][0].split("%")[0]) for info in infos]
+    except (socket.gaierror, UnicodeError, ValueError) as e:
         raise ActionError(f"Can't resolve {parts.hostname}") from e
-    for info in infos:
-        if not ipaddress.ip_address(info[4][0].split("%")[0]).is_global:
-            raise ActionError(f"{parts.hostname} is a private address: webhooks go to public endpoints only "
-                              "(ALLOW_PRIVATE_WEBHOOKS=true in kg/.env for a single-user install)")
+    if not addrs:
+        raise ActionError(f"Can't resolve {parts.hostname}")
+    if any(not a.is_global for a in addrs):
+        raise ActionError(f"{parts.hostname} is a private address: webhooks go to public endpoints only "
+                          "(ALLOW_PRIVATE_WEBHOOKS=true in kg/.env for a single-user install)")
+    ip = f"[{addrs[0]}]" if addrs[0].version == 6 else str(addrs[0])
+    userinfo, _, hostport = parts.netloc.rpartition("@")
+    netloc = (f"{userinfo}@" if userinfo else "") + ip + (f":{parts.port}" if parts.port else "")
+    return (urlunsplit((parts.scheme, netloc, parts.path, parts.query, "")), {"Host": hostport},
+            {"sni_hostname": parts.hostname} if parts.scheme == "https" else {})
+
+
+async def _post_webhook(url: str, payload: dict) -> httpx.Response:
+    """POST to a webhook at its vetted address; redirects are not followed (one could lead anywhere)."""
+    target, headers, extensions = await _vetted(url)
+    async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT, follow_redirects=False) as client:
+        return await client.post(target, json=payload, headers=headers, extensions=extensions)
+
+
+def revision(spec: dict) -> str:
+    """What a proposal was made against: a confirm runs only if the action is still the one proposed (a webhook's
+    URL, auto or dry-run setting and parameters unchanged)."""
+    if spec["kind"] == "builtin":
+        return "builtin"
+    stamp = json.dumps([spec.get("url"), bool(spec.get("auto")), bool(spec.get("dry_run")), spec.get("params")],
+                       sort_keys=True)
+    return hashlib.sha256(stamp.encode()).hexdigest()[:16]
 
 
 async def remove_webhook(db: ArcadeDB, domain: str, name: str) -> None:
@@ -151,6 +185,47 @@ def _check_params(action: dict, params: dict) -> dict:
     return params
 
 
+# ── What the Head writes ───────────────────────────────────────────────────
+# Uids and weights a model copied into text a person reads (the same rule as Hermes' answers). Uids have the shape of
+# new_uid / insert_doc uids; a parenthetical goes only when it holds nothing but such internals —
+# "(weight of AI servers in capex)" is prose.
+_UID = r"`?\b[a-z]{1,4}_[0-9a-f]{12}\b`?"
+_PAIR = r"\b(?:weight|evidence)\s*[=:]\s*\d+(?:\.\d+)?"
+_PAREN = re.compile(r"\s*[(（]([^()（）]*)[)）]")
+_LEFT_OVER = re.compile(r"(?:[\s,;/|]|\b(?:uids?|ids?|facts?)\b[:=]?)*", re.I)
+
+
+def scrub(text: str) -> str:
+    def paren(m: re.Match) -> str:
+        inner = re.sub(_PAIR, "", re.sub(_UID, "", m[1]), flags=re.I)
+        return "" if inner != m[1] and _LEFT_OVER.fullmatch(inner) else m[0]
+    text = _PAREN.sub(paren, text)
+    text = re.sub(r",?\s*" + _PAIR, "", text, flags=re.I)
+    return re.sub(r"\s*" + _UID, "", text)
+
+
+async def tidy_request(db: ArcadeDB, domain: str, action: str, params: dict | None, rationale: str,
+                       evidence: list[str] | None) -> tuple[dict, str, list[str] | None]:
+    """A local model's proposal made into what propose() takes: a rationale or evidence tucked into params is taken
+    out (measured 2026-10-13: it failed the call 3x and tripped Hermes' circuit breaker), a missing rationale
+    defaults to the message, and what the user reads in an alert or a draft carries no uids or weights. Used by
+    MCP propose_action and the Operator's run task alike."""
+    params = dict(params or {})
+    spec = next((a for a in await catalog(db, domain) if a["name"] == action), None)
+    own = {p["name"] for p in spec["params"]} if spec else set()
+    for key in ("rationale", "reason", "evidence"):
+        if key in params and key not in own:
+            value = params.pop(key)
+            if key == "evidence":
+                evidence = evidence or (value if isinstance(value, list) else [str(value)])
+            else:
+                rationale = rationale or str(value)
+    rationale = (rationale or "").strip() or str(params.get("message") or params.get("body") or "(no rationale given)")
+    if action in ("alert", "draft"):
+        params = {k: scrub(v) if isinstance(v, str) else v for k, v in params.items()}
+    return params, rationale, evidence
+
+
 # ── Proposals ──────────────────────────────────────────────────────────────
 
 async def propose(db: ArcadeDB, domain: str, action: str, params: dict, rationale: str,
@@ -165,7 +240,7 @@ async def propose(db: ArcadeDB, domain: str, action: str, params: dict, rational
     proposal = await kgdb.insert_doc(db, domain, "Proposal", {
         "action": action, "params": params, "rationale": rationale.strip(), "evidence": evidence or [],
         "source": source, "playbook_uid": playbook_uid, "risk": spec["risk"], "status": "proposed",
-        "preview": await _preview(spec, params, domain), "result": None,
+        "preview": await _preview(spec, params, domain), "result": None, "revision": revision(spec),
         "expires_at": (datetime.now(timezone.utc) + timedelta(hours=PROPOSAL_TTL)).isoformat(timespec="seconds"),
     }, PROPOSAL_JSON)
     if not spec["confirm"]:
@@ -182,10 +257,8 @@ async def _preview(spec: dict, params: dict, domain: str) -> str:
     preview = f"POST to {host} ({spec['name']}) with {params}"
     if spec.get("dry_run"):
         try:
-            await _check_destination(spec["url"])
-            async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT) as client:
-                r = await client.post(spec["url"], json={"domain": domain, "action": spec["name"], "params": params,
-                                                         "dry_run": True})
+            r = await _post_webhook(spec["url"], {"domain": domain, "action": spec["name"], "params": params,
+                                                  "dry_run": True})
             preview += f"\nEndpoint dry run → {r.status_code}: {r.text[:1500]}"
         except (httpx.HTTPError, ActionError) as e:
             preview += f"\nEndpoint dry run failed: {type(e).__name__}: {e}"
@@ -193,23 +266,32 @@ async def _preview(spec: dict, params: dict, domain: str) -> str:
 
 
 async def list_proposals(db: ArcadeDB, domain: str, status: str | None = None, limit: int = 50) -> list[dict]:
+    # Expiry was applied only when someone confirmed: REST, MCP and the Operator's desk showed stale proposals as
+    # still waiting (2026-10-14). Mark them first.
+    if await db.exists(domain):
+        await kgdb.ensure_domain_db(db, domain, create=False)
+        await db.sql(domain, "UPDATE Proposal SET status = 'expired' WHERE status = 'proposed' AND expires_at < :now",
+                     now=now())
     if status:
         return await kgdb.find_docs(db, domain, "Proposal", PROPOSAL_JSON, "status = :status", limit=limit,
                                     status=status)
     return await kgdb.find_docs(db, domain, "Proposal", PROPOSAL_JSON, limit=limit)
 
 
-async def decide(db: ArcadeDB, domain: str, uid: str, approve: bool, note: str = "") -> dict:
-    """The user's decision on a proposal: approve → execute exactly as previewed; reject → close it."""
+async def decide(db: ArcadeDB, domain: str, uid: str, approve: bool, note: str = "", by: str = "user") -> dict:
+    """The user's decision on a proposal: approve → execute exactly as previewed; reject → close it. `by`: who
+    decided (the person's account uid)."""
     proposal = await kgdb.get_doc(db, domain, "Proposal", uid, PROPOSAL_JSON)
     if not proposal:
         raise ActionError(f"Proposal {uid} not found")
     if proposal["status"] != "proposed":
         raise ActionError(f"Proposal {uid} is already {proposal['status']}")
     if not approve:
-        await kgdb.update_doc(db, domain, "Proposal", uid, {"status": "rejected", "decided_at": now(), "note": note},
-                              if_status="proposed")
-        return await _told({**proposal, "status": "rejected", "note": note}, db, domain)
+        if not await kgdb.update_doc(db, domain, "Proposal", uid, {"status": "rejected", "decided_at": now(),
+                                                                   "decided_by": by, "note": note},
+                                     if_status="proposed"):
+            raise ActionError(f"Proposal {uid} was already decided")   # a confirm won the race: no "declined" news
+        return await _told({**proposal, "status": "rejected", "note": note, "decided_by": by}, db, domain)
     if proposal["expires_at"] < now():
         await kgdb.update_doc(db, domain, "Proposal", uid, {"status": "expired"}, if_status="proposed")
         raise ActionError(f"Proposal {uid} expired: it was based on what was known {PROPOSAL_TTL:g}h ago — "
@@ -217,8 +299,14 @@ async def decide(db: ArcadeDB, domain: str, uid: str, approve: bool, note: str =
     actions = {a["name"]: a for a in await catalog(db, domain, with_urls=True)}
     if proposal["action"] not in actions:
         raise ActionError(f"Action {proposal['action']!r} no longer exists")
-    return await _told(await _execute(db, domain, proposal, actions[proposal["action"]], decided_by="user", note=note),
-                       db, domain)
+    spec = actions[proposal["action"]]
+    # A proposal from before revisions carries none: a built-in can't have changed; a webhook can't be told apart.
+    if (proposal.get("revision") or ("builtin" if spec["kind"] == "builtin" else None)) != revision(spec):
+        # What the user saw previewed went to another URL / setting: confirming must not run the new one.
+        await kgdb.update_doc(db, domain, "Proposal", uid, {"status": "expired", "note": "the API changed"},
+                              if_status="proposed")
+        raise ActionError(f"The API {proposal['action']!r} changed since this was proposed — propose it again")
+    return await _told(await _execute(db, domain, proposal, spec, decided_by=by, note=note), db, domain)
 
 
 async def _told(proposal: dict, db: ArcadeDB, domain: str) -> dict:
@@ -242,18 +330,20 @@ async def _execute(db: ArcadeDB, domain: str, proposal: dict, spec: dict, decide
         if spec["kind"] == "builtin":
             result = await _builtin(spec["name"], params, domain)
         else:
-            await _check_destination(spec["url"])
-            async with httpx.AsyncClient(timeout=WEBHOOK_TIMEOUT) as client:
-                r = await client.post(spec["url"], json={
-                    "domain": domain, "action": spec["name"], "params": params, "dry_run": False,
-                    "proposal": proposal["uid"], "rationale": proposal["rationale"],
-                })
+            r = await _post_webhook(spec["url"], {
+                "domain": domain, "action": spec["name"], "params": params, "dry_run": False,
+                "proposal": proposal["uid"], "rationale": proposal["rationale"]})
             result = {"status_code": r.status_code, "response": r.text[:2000]}
             if r.is_error:
                 raise ActionError(f"{spec['name']} answered {r.status_code}: {r.text[:300]}")
         status = "executed"
-    except (ActionError, httpx.HTTPError) as e:
-        result, status = {"error": f"{type(e).__name__}: {e}"}, "failed"
+    except asyncio.CancelledError:
+        await kgdb.update_doc(db, domain, "Proposal", proposal["uid"], {
+            "status": "failed", "executed_at": now(), "result": {"error": "interrupted (the KG stopped)"}},
+            PROPOSAL_JSON)
+        raise
+    except Exception as e:   # claimed: whatever happens, it ends executed or failed — never stuck "executing"
+        result, status = {"error": f"{type(e).__name__}: {e}"[:2000]}, "failed"
     await kgdb.update_doc(db, domain, "Proposal", proposal["uid"], {"status": status, "executed_at": now(),
                                                                     "result": result}, PROPOSAL_JSON)
     return {**proposal, "status": status, "result": result, "decided_by": decided_by}

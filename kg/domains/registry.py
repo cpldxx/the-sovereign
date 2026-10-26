@@ -27,12 +27,15 @@ SYSTEM_DB = "sovereign_system"
 
 
 def domain_id(name: str) -> str:
-    """Display name -> domain id ('Quant Trading' -> 'quant_trading')."""
+    """Display name -> domain id ('Quant Trading' -> 'quant_trading'). A name with no Latin letter first ('반도체',
+    '2026 plan') gets the id 'domain' (create_domain adds a suffix when it is taken); its title stays as typed."""
+    if not name.strip():
+        raise ValueError("A domain needs a name")
     slug = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
+    if not slug or not slug[0].isalpha():
+        return "domain"
     if not _DOMAIN_ID.fullmatch(slug):
-        raise ValueError(
-            f"Invalid domain name {name!r}: needs a letter first, then letters, digits or spaces (max 64)"
-        )
+        raise ValueError(f"Invalid domain name {name!r}: at most 64 letters, digits or spaces")
     return slug
 
 
@@ -43,12 +46,17 @@ def _domain_dir(name: str) -> Path:
     return DOMAINS_DIR / name
 
 
-def _slug(domain: str) -> str:
-    """The name a domain was created under, as a slug (its id may carry a suffix)."""
+def _title_key(title: str) -> str:
+    """A title as compared for "you already have one": case and spacing don't count."""
+    return " ".join(title.split()).casefold()
+
+
+def _title(domain: str) -> str:
+    """The name a domain was created under (its id may be a slug with a suffix, or just 'domain_…')."""
     try:
-        return domain_id(load_domain(domain)["config"].get("title") or domain)
-    except (ValueError, ImportError):
-        return domain
+        return _title_key(load_domain(domain)["config"].get("title") or domain)
+    except (ValueError, ImportError, OSError, SyntaxError):
+        return _title_key(domain)
 
 
 def _taken(domain: str) -> bool:
@@ -56,15 +64,16 @@ def _taken(domain: str) -> bool:
 
 
 def create_domain(name: str, description: str, data_sources: list[str] = None, keywords: list[str] = None,
-                  mine: set[str] | frozenset[str] = frozenset()) -> str:
-    """Create a new domain workspace from the template. Returns the domain id: the name's slug — or, when someone
-    else's domain already has it, the slug with a short random suffix (ids are global, names are per user).
-    `mine`: the caller's domains, where a repeated name is an error instead."""
+                  mine: set[str] | frozenset[str] = frozenset(), avoid: set[str] | frozenset[str] = frozenset()) -> str:
+    """Create a new domain workspace from the template. Returns the domain id: the name's slug — or, when the id is
+    taken, the slug with a short random suffix (ids are global, names are per user). `mine`: the domains the caller
+    owns, where the same title is an error instead. `avoid`: ids taken elsewhere (a database without a folder). Titles are compared, not slugs: "AI 반도체" and "AI 로봇" are both
+    "ai" (2026-10-14)."""
     domain = domain_id(name)
-    if any(_slug(d) == domain for d in mine):
+    if any(_title(d) == _title_key(name) for d in mine):
         raise ValueError(f"You already have a domain named '{name.strip()}'")
     base = domain[:58]
-    while _taken(domain):
+    while _taken(domain) or domain in avoid:
         domain = f"{base}_{secrets.token_hex(2)}"
     domain_dir = DOMAINS_DIR / domain
 

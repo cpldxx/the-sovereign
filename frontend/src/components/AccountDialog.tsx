@@ -21,7 +21,7 @@ function Secret({ value, note }: { value: string; note: string }) {
       <div className="flex items-center gap-2">
         <code className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink">{value}</code>
         <button
-          onClick={async () => { await navigator.clipboard.writeText(value); setCopied(true); }}
+          onClick={() => navigator.clipboard.writeText(value).then(() => setCopied(true), () => undefined)}
           className="rounded p-1 text-dim hover:text-ink" title="Copy"
         >
           {copied ? <Check size={13} className="text-good" /> : <Copy size={13} />}
@@ -105,7 +105,10 @@ function Tokens() {
             <KeyRound size={12} className="text-faint" />
             <span className="min-w-0 flex-1 truncate text-dim">{t.label}</span>
             <span className="font-mono text-[10px] text-faint">{t.created_at.slice(0, 10)}</span>
-            <button onClick={async () => { await auth.revokeToken(t.uid); await load(); }}
+            <button onClick={async () => {
+                setError(null);
+                try { await auth.revokeToken(t.uid); await load(); } catch (e) { setError((e as Error).message); }
+              }}
               className="rounded p-1 text-faint hover:text-bad" title="Revoke"><Trash2 size={12} /></button>
           </li>
         ))}
@@ -148,7 +151,10 @@ function Invites() {
             <li key={i.uid} className="flex items-center gap-2 text-xs">
               <Link2 size={12} className="text-faint" />
               <span className="flex-1 text-dim">unused · expires {i.expires_at.slice(0, 10)}</span>
-              <button onClick={async () => { await auth.revokeInvite(i.uid); await load(); }}
+              <button onClick={async () => {
+                  setError(null);
+                  try { await auth.revokeInvite(i.uid); await load(); } catch (e) { setError((e as Error).message); }
+                }}
                 className="rounded p-1 text-faint hover:text-bad" title="Revoke"><Trash2 size={12} /></button>
             </li>
           ))}

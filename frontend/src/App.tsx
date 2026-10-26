@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Bot, Network, Newspaper, Settings2, Workflow } from 'lucide-react';
-import { ApiError, auth, kg, onSignedOut, research, type DomainDetail, type DomainSummary, type Ontology, type User } from './lib/api';
+import { ApiError, auth, can, kg, onSignedOut, research, type DomainDetail, type DomainSummary, type Ontology, type User } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
 import { DomainHeader } from './components/DomainHeader';
@@ -48,17 +48,34 @@ function clearLocal() {
 export default function App() {
   const [me, setMe] = useState<User | null | undefined>(undefined);
   const [invite, setInvite] = useState(readInvite);
+  const [down, setDown] = useState<string | null>(null);   // why /auth/me failed (not a 401): the KG is down or restarting
 
   useEffect(() => {
-    auth.me().then(r => setMe(r.user)).catch(e => setMe(e instanceof ApiError && e.status === 401 ? null : undefined));
+    // Anything but a 401 means the KG can't answer yet: say so and ask again, waiting longer each time (it stayed on
+    // "Connecting…" forever).
+    let alive = true, timer = 0, wait = 2000;
+    const check = () => auth.me().then(r => { if (alive) { setDown(null); setMe(r.user); } }).catch(e => {
+      if (!alive) return;
+      if (e instanceof ApiError && e.status === 401) { setDown(null); setMe(null); return; }
+      setDown((e as Error).message);
+      timer = window.setTimeout(check, wait);
+      wait = Math.min(wait * 2, 30_000);
+    });
+    void check();
     const onHash = () => setInvite(readInvite());
     addEventListener('hashchange', onHash);
     const off = onSignedOut(() => { clearLocal(); setMe(null); });
-    return () => { off(); removeEventListener('hashchange', onHash); };
+    return () => { alive = false; clearTimeout(timer); off(); removeEventListener('hashchange', onHash); };
   }, []);
 
-  if (me === undefined) return <div className="flex h-full items-center justify-center text-xs text-faint">Connecting…</div>;
-  if (me === null) return <SignIn key={invite ?? ''} invite={invite} onSignedIn={setMe} />;
+  if (me === undefined) return (
+    <div className="flex h-full flex-col items-center justify-center gap-1 text-xs text-faint">
+      <span>Connecting…</span>
+      {down && <span className="max-w-sm text-center text-bad">{down} — trying again.</span>}
+    </div>
+  );
+  // A used invite stays in state after sign-up (replaceState fires no hashchange): a later sign-out must not show it.
+  if (me === null) return <SignIn key={invite ?? ''} invite={invite} onSignedIn={u => { setInvite(null); setMe(u); }} />;
   return (
     <Workspace
       key={me.uid}
@@ -181,6 +198,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
   async function deleteDomain(id: string) {
     await kg.deleteDomain(id);
     localStorage.removeItem(`sovereign.chat.${id}`);
+    localStorage.removeItem(`sovereign.chatImported.${id}`);
     await loadDomains();
   }
 
@@ -223,7 +241,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                 </nav>
                 <div className="relative min-h-0 flex-1">
                   {view === 'agents'
-                    ? <AgentView key={active} domain={active} onIngesting={refresh}
+                    ? <AgentView key={active} domain={active} canResearch={can(detail.role, 'editor')} onIngesting={refresh}
                         stats={{ entities: detail.stats.entity_count, facts: detail.stats.fact_count }} />
                     : <GraphPane key={active} domain={active} entityTypes={entityTypes} highlight={highlight} selected={selected}
                         version={version} onSelect={setSelected} onHighlight={setHighlight}
@@ -261,14 +279,14 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                 <div className="min-h-0 flex-1">
                   {/* Panels stay mounted so a running chat survives tab switches. */}
                   <div className={tab === 'head' ? 'flex h-full flex-col' : 'hidden'}>
-                    <PendingActions key={active} domain={active} version={version} onSelect={setSelected} onPending={setPendingActions} />
+                    <PendingActions key={active} domain={active} role={detail.role} version={version} onSelect={setSelected} onPending={setPendingActions} />
                     <div className="min-h-0 flex-1">
-                      <AskPanel key={active} domain={active} onKnowledgeChanged={refresh} onHighlight={setHighlight}
+                      <AskPanel key={active} domain={active} canIngest={can(detail.role, 'editor')} onKnowledgeChanged={refresh} onHighlight={setHighlight}
                         ontologyReady={detail.ontology_generated} onOpenBriefing={openDone} />
                     </div>
                   </div>
                   <div className={tab === 'briefing' ? 'h-full' : 'hidden'}>
-                    <BriefingPanel key={active} domain={active} version={version} view={briefing} onView={setBriefing}
+                    <BriefingPanel key={active} domain={active} role={detail.role} version={version} view={briefing} onView={setBriefing}
                       onHighlight={setHighlight}
                       onSelect={setSelected} onPending={setPendingActions} />
                   </div>
