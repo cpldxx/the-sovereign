@@ -1,9 +1,7 @@
 """Security invariants: what must never happen, checked against the real pieces.
 
-    webhooks   never reach this machine or a private network                         (offline)
     accounts   sign-up gates, throttling, revocation — in a throwaway accounts DB      (db)
-    sandbox    sensor code can't reach the host, can't run forbidden code, can't leak secrets, can't skip
-               robots.txt                                                             (sandbox; robots also slow)
+    selfcheck  the nightly check flags a crawler that would read what robots.txt forbids  (offline)
     services   nothing answers without credentials; a domain-scoped connection can't leave its domain  (live)
 """
 
@@ -13,7 +11,7 @@ import secrets
 import httpx
 import pytest
 
-from core import accounts, actions, auth, selfcheck, sensors
+from core import accounts, auth, selfcheck
 from core.auth import Principal
 
 from conftest import SERVICE, URLS
@@ -28,16 +26,6 @@ def test_mcp_answers_only_known_hosts(host, ok):
     from mcp.server.transport_security import TransportSecurityMiddleware
     import main
     assert TransportSecurityMiddleware(main.MCP_SECURITY)._validate_host(host) is ok
-
-
-# ── Webhooks ─────────────────────────────────────────────────────────────────────────────────────────────────────
-
-@pytest.mark.parametrize("url", ["http://localhost:11434/api/tags", "http://127.0.0.1:2480/", "http://[::1]:8080/",
-                                 "http://169.254.169.254/latest/meta-data", "http://10.0.0.1/", "http://192.168.1.1/"])
-async def test_webhooks_never_reach_private_addresses(url, monkeypatch):
-    monkeypatch.setattr(actions, "ALLOW_PRIVATE_WEBHOOKS", False)
-    with pytest.raises(actions.ActionError):
-        await actions._check_destination(url)
 
 
 # ── Accounts (a throwaway accounts database) ─────────────────────────────────────────────────────────────────────
@@ -101,96 +89,33 @@ async def test_tokens_and_sharing(store):
             await store.remove_member(domain, admin["uid"])
 
 
-# ── Sandbox ──────────────────────────────────────────────────────────────────────────────────────────────────────
+# ── Self-check ───────────────────────────────────────────────────────────────────────────────────────────────────
 
-def _module(body: str) -> str:
-    return ('import httpx\nNAME = "test_probe"\nDESCRIPTION = "x"\n'
-            'PARAMS = {"url": {"type": "string", "description": "u", "example": "x"}}\n'
-            f'def run(url: str) -> dict:\n{body}\n')
+async def test_selfcheck_flags_a_crawler_that_ignores_robots_txt(monkeypatch):
+    """The nightly check asks the research service about a URL robots.txt disallows: allowed is a failure."""
+    class Answer:
+        def __init__(self, body):
+            self.body = body
+        def raise_for_status(self):
+            return None
+        def json(self):
+            return self.body
 
+    class Client:
+        def __init__(self, body):
+            self.body = body
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *a):
+            return None
+        async def get(self, *a, **kw):
+            return Answer(self.body)
 
-@pytest.mark.sandbox
-@pytest.mark.parametrize("url", selfcheck.SANDBOX_TARGETS)
-async def test_sandbox_cannot_reach_this_machine(url):
-    """The guard's own refusal is the pass condition: a connection error only says nothing listens there today.
-    Private addresses too — on Docker Desktop 192.168.65.254 is the Mac (Ollama answers there without auth)."""
-    out = await sensors.run_code(_module("    return {'status': httpx.get(url, timeout=5).status_code}"), {"url": url})
-    assert not out["ok"] and "only public internet addresses" in out["error"], out
+    for body, status in (({"allowed": True, "reason": ""}, "fail"),
+                         ({"allowed": False, "reason": "robots.txt disallows it"}, "pass")):
+        monkeypatch.setattr(selfcheck.httpx, "AsyncClient", lambda *a, _b=body, **kw: Client(_b))
+        assert (await selfcheck._robots())[0] == status
 
-
-def test_selfcheck_counts_only_the_guards_refusal():
-    refused = "ConnectError: x: only public internet addresses are reachable from the sandbox"
-    assert selfcheck.sandbox_verdict({"a": refused, "b": refused})[0] == "pass"
-    assert selfcheck.sandbox_verdict({"a": refused, "b": "ConnectError: connection refused"})[0] == "fail"
-    assert selfcheck.sandbox_verdict({"a": "reached: HTTP 200"})[0] == "fail"
-
-
-async def test_selfcheck_static_probes_the_known_bypasses():
-    assert await selfcheck._static() == ("pass", "")
-
-
-def _raw(code: str) -> dict:
-    """The sandbox runner given code directly — past the KG's static check, to test the runner's own wall."""
-    import subprocess
-    head = 'NAME = "t"\nDESCRIPTION = "x"\nPARAMS = {}\n'
-    out = subprocess.run(["docker", "run", "--rm", "-i", "--read-only", "--cap-drop", "ALL", "--network", "none",
-                          sensors.IMAGE], input=json.dumps({"code": head + code, "params": {}}).encode(),
-                         capture_output=True, timeout=60)
-    return json.loads(out.stdout.decode().strip().splitlines()[-1])
-
-
-@pytest.mark.sandbox
-@pytest.mark.parametrize("code,error", [
-    ("def run():\n    return {'x': __builtins__['__import__']('socket').gethostname()}", "not allowed"),
-    ("def run():\n    return {'x': __import__('os').getcwd()}", "not allowed"),
-    ("def run():\n    return {'x': open('/etc/hostname').read()}", "'open' is not defined"),
-    ("import io\ndef run():\n    return {'x': io.open('/etc/hostname').read()}", "no attribute 'open'"),
-    ("import statistics\ndef run():\n    return {'x': str(statistics.sys)}", "no attribute 'sys'"),
-    ("import httpx\ndef run():\n    return {'x': str(httpx._utils)}", "no attribute '_utils'"),
-    ("def run():\n    return {'x': getattr(1, 'real')}", "'getattr' is not defined"),
-])
-async def test_sandbox_runner_has_no_way_out_even_past_the_static_check(code, error):
-    await sensors._ensure_image()
-    out = _raw(code)
-    assert not out["ok"] and error in out["error"], out
-
-
-@pytest.mark.sandbox
-async def test_sandbox_runner_still_imports_what_sensors_use():
-    await sensors._ensure_image()
-    out = _raw("import httpx, json, re, math, statistics, datetime, time, io, csv, html, zoneinfo, decimal\n"
-               "import urllib.parse\nimport xml.etree.ElementTree as ET\nfrom urllib.parse import quote\n"
-               "def run():\n    return {'q': quote('a b'), 'n': urllib.parse.urlsplit('https://x.com/').netloc,\n"
-               "            'x': ET.fromstring('<a>1</a>').text, 's': io.StringIO('z').read(),\n"
-               "            'm': statistics.median([1, 2, 3]), 'c': httpx.Client is not None}")
-    assert out == {"ok": True, "result": {"q": "a%20b", "n": "x.com", "x": "1", "s": "z", "m": 2, "c": True}}, out
-
-
-@pytest.mark.sandbox
-async def test_sandbox_refuses_forbidden_code_without_running_it():
-    out = await sensors.run_code(_module("    import os\n    return {'x': os.listdir('/')}"), {"url": "x"})
-    assert not out["ok"] and "not allowed" in out["error"]
-
-
-@pytest.mark.sandbox
-async def test_sandbox_masks_secrets(monkeypatch):
-    monkeypatch.setenv("SENSOR_SECRETS", "TEST_SECRET_KEY")
-    monkeypatch.setenv("TEST_SECRET_KEY", "s3cr3t-value-123")
-    monkeypatch.setattr(accounts, "trusted", lambda domain: True)   # keys only for a named, trusted domain
-    code = _module("    return {'leak': secret('TEST_SECRET_KEY')}").replace(
-        'PARAMS =', 'SECRETS = ["TEST_SECRET_KEY"]\nPARAMS =')
-    out = await sensors.run_code(code, {"url": "x"}, "trusted_test")
-    assert out["ok"] and out["result"] == {"leak": "***"}, out
-
-
-@pytest.mark.sandbox
-@pytest.mark.slow
-async def test_sandbox_enforces_robots_txt():
-    out = await sensors.probe("https://query1.finance.yahoo.com/v8/finance/chart/NVDA")   # disallowed for bots
-    assert not out["ok"] and "robots.txt" in out["error"]
-
-
-# ── Running services ─────────────────────────────────────────────────────────────────────────────────────────────
 
 @pytest.mark.live
 @pytest.mark.parametrize("service,method,path", [

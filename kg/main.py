@@ -11,7 +11,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.transport_security import TransportSecuritySettings
 
-from api.actions import router as actions_router
 from api.auth import router as auth_router
 from api.chat import router as chat_router
 from api.learning import router as learning_router
@@ -21,14 +20,12 @@ from api.entities import router as entities_router
 from api import mcp as kg_mcp
 from api.graph import router as graph_router
 from api.ontology import router as ontology_router
-from api.playbooks import router as playbooks_router
 from api.pipeline import router as pipeline_router
 from api.query import router as query_router
 from api.reports import router as reports_router
 from api.reviews import router as reviews_router
-from api.sensors import router as sensors_router
 from api.system import router as system_router
-from core import accounts, auth, crew, playbooks, tracing
+from core import accounts, auth, crew, tracing
 from core.database import get_db
 
 
@@ -68,10 +65,7 @@ async def lifespan(app: FastAPI):
         print("[KG] tracing to LangFuse", flush=True)
     app.state.db = kg_mcp.db = await get_db()
     await accounts.setup(app.state.db)
-    # Live playbook triggers: sensors checked around the clock (SENSOR_WATCH=off disables it).
     db = app.state.db
-    watch = (asyncio.create_task(supervised("trigger watch", lambda: playbooks.watch_loop(db)))
-             if playbooks.WATCH else None)
     # The Head's team: tasks and questions queued for the agents, reports back on threads.
     team = asyncio.create_task(supervised("crew worker", lambda: crew.work_loop(db)))
     # The review queue is the Head's: it decides what waits there every HEAD_REVIEW_EVERY_MINUTES (0: nightly only).
@@ -83,8 +77,6 @@ async def lifespan(app: FastAPI):
         for server in kg_mcp.servers.values():
             await stack.enter_async_context(server.session_manager.run())
         yield
-    if watch:
-        watch.cancel()
     team.cancel()
     if reviews:
         reviews.cancel()
@@ -119,9 +111,6 @@ app.include_router(ontology_router)
 app.include_router(entities_router)
 app.include_router(reviews_router)
 app.include_router(reports_router)
-app.include_router(actions_router)
-app.include_router(playbooks_router)
-app.include_router(sensors_router)
 app.include_router(crew_router)
 app.include_router(chat_router)
 app.include_router(learning_router)

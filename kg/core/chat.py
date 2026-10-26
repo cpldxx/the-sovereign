@@ -2,7 +2,7 @@
 another browser or a full local storage loses nothing.
 
     ChatTurn  uid, user (the person's account uid), role (user | assistant), content, steps (JSON: what the Head did
-              on the way — its words before a tool, the tools, the actions it took), status (pending | done | error),
+              on the way — its words before a tool, the tools it used), status (pending | done | error),
               n (milliseconds: the order), created_at
 
 Hermes writes both sides of a turn as it happens: the question, then a pending answer it completes when the Head is

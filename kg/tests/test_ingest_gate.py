@@ -1,5 +1,5 @@
 """The graph holds facts: an entity is stored only when a fact about it survives, and entities left without any
-fact are pruned — except those a pending review or a playbook still refers to. Stand-in agents, real database."""
+fact are pruned — except those a pending review still refers to. Stand-in agents, real database."""
 
 import secrets
 

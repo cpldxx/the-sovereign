@@ -92,7 +92,7 @@ def _chat_close(domain: str, handle: tuple[str, str] | None, content: str, steps
 
 
 class _Steps:
-    """What the Head did on the way, as the Ask panel shows it: its words before a tool, the tools, the actions."""
+    """What the Head did on the way, as the Ask panel shows it: its words before a tool, and the tools."""
 
     def __init__(self) -> None:
         self.steps: list[dict] = []
@@ -110,18 +110,11 @@ class _Steps:
             self.said = ""
             args = e["args"] if isinstance(e["args"], dict) else {}
             self.steps.append({"id": e["id"], "name": e["name"], "done": False,
-                               "args": {k: str(args[k])[:200] for k in ("query", "raw_text", "action") if k in args}})
+                               "args": {k: str(args[k])[:200] for k in ("query", "raw_text", "question") if k in args}})
         elif e["type"] == "tool_end":
             for s in self.steps:
                 if s["id"] == e["id"]:
                     s["done"] = True
-                    if e["name"] == "propose_action":
-                        try:
-                            p = json.loads(e["result"])
-                            t = (p.get("params") or {}).get("title") or (p.get("params") or {}).get("message") or ""
-                            s["outcome"] = {"action": p["action"], "status": p["status"], "title": str(t)}
-                        except (ValueError, KeyError, TypeError, AttributeError):
-                            pass
 
 
 def _user() -> str | None:
@@ -174,7 +167,7 @@ async def ask_stream(domain_name: str, request: AskRequest):
     user = _user()
     handle = await asyncio.to_thread(_chat_open, domain_name, user, request.message)
     log = _Steps()
-    # Stop (POST …/ask/stop) stops the Head: until 2026-10-14 the turn ran on in its thread — its ingests, proposals,
+    # Stop (POST …/ask/stop) stops the Head: until 2026-10-14 the turn ran on in its thread — its ingests,
     # review decisions and tasks still happened. A closed stream does NOT stop it: a reload, another domain or a
     # closed tab must still get the answer (user, 2026-10-13: "messages must survive a reload"; the page picks up a
     # pending answer from the KG).

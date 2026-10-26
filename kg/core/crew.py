@@ -3,15 +3,13 @@
     Head → agent   assign(agent, task, inputs): a task on a thread, its inputs checked against the task's model;
                    ask(agent, question): a question, answered from what that agent knows right now (its desk)
     agent → Head   a finished task is reported on its thread and the Head is woken to read it and decide (HEAD_WAKE);
-                   so is news the Head must decide on — a playbook that fired (Watcher), an action the user confirmed
-                   and what it returned (Operator): report(). Other news (the morning report) is a notice.
-    acting         only the Head decides to act; the Operator runs the action and reports back. Nobody else acts.
+                   an agent's own news (the morning report is ready) is a notice
     the graph      gets FACTS only. Findings are stored through the pipeline — extracted, then validated against
                    their source — by the Head's ingest_data or a research / learn task; a conversation never is.
 
 Threads and messages live in the domain's database (Thread, Message), so they follow the domain's access rules and
 the UI shows who asked whom what, and what came back. One queue for every domain, worked one message at a time (the
-agents share one local model); long jobs (a scout, a research mission) run in the background and report when done.
+agents share one local model); long jobs (a research mission, a relink) run in the background and report when done.
 A restart re-queues what was waiting and reports what it interrupted.
 
 Runaway guard: one thread wakes the Head at most MAX_WAKES times and a domain at most WAKES_PER_HOUR times an hour;
@@ -38,7 +36,7 @@ from pydantic_ai import Agent
 
 from agents.ontologist import generate_ontology
 from agents.validator import validate
-from core import actions, activity, auth, catalog, coding, digest, kg, playbooks, sensors
+from core import activity, auth, digest, kg, learning
 from core import database as kgdb
 from core.database import ArcadeDB, now
 from core.llm import model_for, model_settings
@@ -223,31 +221,6 @@ async def _investigate(db: ArcadeDB, domain: str, x: Investigate) -> Outcome:
                    f"{(j.get('report') or '').strip()[:1500]}", {"job": job["id"], "summary": summary})
 
 
-class SensorNeed(BaseModel):
-    need: str = Field(min_length=8, description="The recurring live-data need, e.g. 'latest price of a stock ticker'")
-
-
-async def _sensor_job(db: ArcadeDB, domain: str, need: str, backend: str) -> Outcome:
-    j = coding.submit(db, domain, need, backend=backend)
-
-    async def check():
-        return coding.job(j["id"])
-    j = await _poll(check, lambda s: s["status"] in ("done", "failed"))
-    if j["status"] != "done":
-        return Outcome(f"No sensor for “{need}”: {j.get('error') or j['status']}", {"request": j.get("id")}, ok=False)
-    what = j.get("note") or (f"sensor {j['sensor']} stored" if j.get("sensor") else "done")
-    return Outcome(f"Sensor request “{need}”: {what}", {"request": j["id"], "sensor": j.get("sensor"),
-                                                       "seconds": j.get("seconds")})
-
-
-async def _find_sources(db: ArcadeDB, domain: str, x: SensorNeed) -> Outcome:
-    return await _sensor_job(db, domain, x.need, "scout")
-
-
-async def _write_sensor(db: ArcadeDB, domain: str, x: SensorNeed) -> Outcome:
-    return await _sensor_job(db, domain, x.need, "builtin")
-
-
 class Learn(BaseModel):
     text: str = Field(min_length=40, description="The source text to learn from (an article, notes, a finding)")
     source: str = Field("head", description="Where it came from: a URL or a short label")
@@ -325,50 +298,21 @@ async def _relink(db: ArcadeDB, domain: str, x: Nothing) -> Outcome:
                    {**{k: r[k] for k in ("statements", "proposed", "added", "skipped")}, "facts": r["facts"][:40]})
 
 
-async def _refresh_playbooks(db: ArcadeDB, domain: str, x: Nothing) -> Outcome:
-    counts = await playbooks.refresh(db, domain)
-    active = await playbooks.list_playbooks(db, domain)
-    return Outcome(f"Playbooks rewritten from the graph: {counts}. Active now: "
-                   + "; ".join(p.get("name") or p["uid"] for p in active[:12]), counts)
-
-
 class Since(BaseModel):
     hours: int = Field(24, ge=1, le=720, description="How far back to look")
 
 
-async def _watch(db: ArcadeDB, domain: str, x: Since) -> Outcome:
-    since = (datetime.now(timezone.utc) - timedelta(hours=x.hours)).isoformat(timespec="seconds")
-    try:   # beside the nightly cycle it would evaluate the same changes again and report them twice
-        fired, evaluated = await playbooks.check_now(db, domain, since)
-    except RuntimeError as e:
-        return Outcome(f"{e} — it reports what fires; check again when it is done.", ok=False)
-    reported = evaluated.get("reported", []) + fired
-    return Outcome(f"Checked {evaluated.get('evaluated', 0)} playbooks against the last {x.hours} h and the live "
-                   f"triggers: {len(reported)} fired and reported to you" + ("" if not reported else " — " + "; ".join(
-                       str(p.get("playbook") or p.get("action")) for p in reported[:8])),
-                   {"reported": reported[:20]})
+class Plan(BaseModel):
+    n: int = Field(3, ge=1, le=5, description="How many research questions")
 
 
-class RunAction(BaseModel):
-    action: str = Field(description="An action from the catalog (list_actions)")
-    params: dict = Field(default_factory=dict, description="Its parameters")
-    rationale: str = Field("", description="Why — the facts it rests on, with their weights")
-    evidence: list[str] = Field(default_factory=list, description="uids of those facts")
-
-
-async def _run_action(db: ArcadeDB, domain: str, x: RunAction) -> Outcome:
-    # The same repair and scrub as MCP propose_action (this task skipped both before 2026-10-14).
-    params, rationale, evidence = await actions.tidy_request(db, domain, x.action, x.params, x.rationale, x.evidence)
-    try:
-        p = await actions.propose(db, domain, x.action, params, rationale, evidence, source="head")
-    except actions.ActionError as e:
-        return Outcome(str(e), ok=False)
-    if p["status"] == "proposed":
-        return Outcome(f"{x.action} waits for the user's confirmation in the Actions tab (proposal {p['uid']}); I'll "
-                       f"report what it returns once it has run.", {"proposal": p["uid"], "status": p["status"]})
-    return Outcome(f"{x.action} {p['status']}: {json.dumps(p.get('result'), ensure_ascii=False)[:1500]}",
-                   {"proposal": p["uid"], "status": p["status"], "result": p.get("result")},
-                   ok=p["status"] == "executed")
+async def _plan(db: ArcadeDB, domain: str, x: Plan) -> Outcome:
+    out = await learning.questions(db, domain, x.n)
+    qs = out["questions"]
+    if not qs:
+        return Outcome("Nothing stands out that the graph should learn next.", out)
+    return Outcome("What the graph should learn next — have the Researcher investigate them:\n"
+                   + "\n".join(f"- {q['question']} ({q['why']})" for q in qs), out)
 
 
 async def _summarize(db: ArcadeDB, domain: str, x: Since) -> Outcome:
@@ -393,26 +337,6 @@ async def _desk_research(db: ArcadeDB, domain: str) -> str:
     return "Recent research jobs:\n" + "\n".join(
         f"- {j.get('created_at', '')[:16]} {j.get('mode')} [{j.get('status')}] {j.get('question') or ''} "
         f"→ {j.get('summary') or ''}" for j in jobs) if jobs else "No research jobs yet."
-
-
-async def _desk_scout(db: ArcadeDB, domain: str) -> str:
-    lines = ["Sensors (groups of sources):"]
-    for g in await sensors.groups(db, domain):
-        srcs = ", ".join(f"{s['host']}({'ok' if s['last_ok'] else 'failing' if s['last_ok'] is False else 'new'}"
-                         + (", resting" if s.get("cooldown_until") else "") + ")" for s in g["sources"][:10])
-        lines.append(f"- {g['name']}: {g['working']}/{len(g['sources'])} working — {srcs}")
-    jobs = coding.jobs(domain)[:6]
-    lines.append("Recent sensor requests:" if jobs else "No sensor requests since the last restart.")
-    lines += [f"- {j['need']} [{j['status']}, {j['backend']}] {j.get('note') or j.get('error') or ''}"[:300] for j in jobs]
-    lines.append(f"Source catalog (shared): {catalog.stats()}")
-    return "\n".join(lines)
-
-
-async def _desk_coder(db: ArcadeDB, domain: str) -> str:
-    jobs = [j for j in coding.jobs(domain) if j["backend"] != "scout"][:6]
-    return "Sensors I wrote (since the last restart):\n" + "\n".join(
-        f"- {j['need']} [{j['status']}] {j.get('sensor') or j.get('error') or ''}"[:300] for j in jobs) \
-        if jobs else "I haven't written a sensor since the last restart; the Scout is the default."
 
 
 async def _desk_extractor(db: ArcadeDB, domain: str) -> str:
@@ -460,31 +384,11 @@ async def _desk_ontologist(db: ArcadeDB, domain: str) -> str:
 
 
 async def _desk_strategist(db: ArcadeDB, domain: str) -> str:
-    pbs = await playbooks.list_playbooks(db, domain)
-    return "Active playbooks:\n" + "\n".join(
-        f"- {p.get('name')}: when {p.get('situation') or '…'} → {p.get('action')}"
-        + (f" [live trigger: {str(p['trigger'])[:120]}]" if p.get("trigger") else "")
-        for p in pbs[:20]) if pbs else "No playbooks yet."
-
-
-async def _desk_watcher(db: ArcadeDB, domain: str) -> str:
-    pbs = await playbooks.list_playbooks(db, domain)
-    fired = [p for p in pbs if p.get("last_fired_at")]
-    return ("Playbooks that fired (each reported to the Head, who decides): "
-            + (", ".join(f"{p.get('name')} at {p['last_fired_at'][:16]}" for p in fired) or "none yet")
-            + "\nLive triggers: " + (", ".join(f"{p.get('name')} — last read {p.get('trigger_value')}"
-                                               for p in pbs if p.get("trigger")) or "none"))
-
-
-async def _desk_operator(db: ArcadeDB, domain: str) -> str:
-    cat = await actions.catalog(db, domain)
-    props = await actions.list_proposals(db, domain, limit=12)
-    return ("Actions I run when the Head says so:\n" + "\n".join(
-                f"- {a['name']}: {a['description']} [{'asks the user first' if a['confirm'] else 'runs at once'}]"
-                for a in cat)
-            + "\nRecent runs:\n" + ("\n".join(f"- {p.get('created_at', '')[:16]} {p.get('action')} [{p.get('status')}] "
-                                             f"{json.dumps(p.get('result'), ensure_ascii=False)[:160] if p.get('result') else ''}"
-                                             for p in props) or "none yet"))
+    g = await learning.gaps(db, domain)
+    last = await learning.last_cycle(db, domain) or {}
+    return ("What the graph is unsure or silent about:\n" + learning.gap_text(g)
+            + "\nQuestions researched in the last learning cycle: "
+            + ("; ".join(q["question"] for q in last.get("questions", [])) or "none yet"))
 
 
 async def _desk_summarizer(db: ArcadeDB, domain: str) -> str:
@@ -508,12 +412,6 @@ ROSTER: dict[str, Member] = {m.name: m for m in [
     _member("research", "Researcher", "reads the web for a question and stores what each page states (DeerFlow)",
             _desk_research, Task("investigate", "Research a question on the web; every page read is learned into "
                                  "the graph (minutes)", Investigate, _investigate, background=True)),
-    _member("scout", "Scout", "finds live-data sources for a need and keeps every one that works",
-            _desk_scout, Task("find_sources", "Find sources for a recurring live-data need and build a sensor from "
-                              "them (10-20 min)", SensorNeed, _find_sources, background=True)),
-    _member("coder", "Coder", "writes a single-source sensor module (the Scout's alternative)",
-            _desk_coder, Task("write_sensor", "Write one sensor module for a need (minutes)", SensorNeed,
-                              _write_sensor, background=True)),
     _member("extractor", "Extractor", "turns source text into entities and facts — the start of the learning "
             "pipeline (then Validator, Resolver, Linker)",
             _desk_extractor, Task("learn", "Learn a text into the graph through the whole pipeline: extract, "
@@ -531,17 +429,10 @@ ROSTER: dict[str, Member] = {m.name: m for m in [
     _member("ontologist", "Ontologist", "designs the domain's grammar: its entity types and relations",
             _desk_ontologist, Task("propose", "Propose an ontology from recent sources (not applied)", Propose,
                                    _propose)),
-    _member("strategist", "Strategist", "turns what the graph knows into playbooks (if this happens, do that) and "
-            "decides what the graph should learn next from what it is unsure or silent about",
-            _desk_strategist, Task("refresh_playbooks", "Rewrite the playbooks from the graph now", Nothing,
-                                   _refresh_playbooks)),
-    _member("watcher", "Watcher", "checks new knowledge and live triggers against the playbooks and reports what fired "
-            "to the Head — it never acts itself", _desk_watcher,
-            Task("check_now", "Check the playbooks against recent changes and live triggers now", Since, _watch)),
-    _member("operator", "Operator", "runs an action — built-in, or an API the user connected (a simulation, a "
-            "webhook) — when the Head says so, and reports what came back", _desk_operator,
-            Task("run", "Run one action from the catalog: the result is reported back (external ones wait for the "
-                 "user's confirmation unless the user marked them auto)", RunAction, _run_action)),
+    _member("strategist", "Strategist", "decides what the graph should learn next from what it is unsure or silent "
+            "about — facts on one weak source, topics gone quiet, questions it could not answer",
+            _desk_strategist, Task("plan", "Pick the research questions that would close the graph's biggest gaps",
+                                   Plan, _plan)),
     _member("summarizer", "Summarizer", "rewrites entity summaries from their current facts",
             _desk_summarizer, Task("refresh", "Refresh the summaries of entities that changed", Since, _summarize)),
     _member("reporter", "Reporter", "writes the daily briefing of what changed",
@@ -650,8 +541,8 @@ async def notify(db: ArcadeDB, domain: str, agent: str, text: str, data: dict | 
 
 
 async def report(db: ArcadeDB, domain: str, agent: str, title: str, text: str, data: dict | None = None) -> dict:
-    """An agent's news the Head must decide on (a playbook fired, an action ran), on its own thread; the Head is
-    woken to read it — within the runaway guard, otherwise it waits in the inbox."""
+    """An agent's news the Head must decide on, on its own thread; the Head is woken to read it — within the
+    runaway guard, otherwise it waits in the inbox."""
     member = _member_of(agent)
     uid = await _open(db, domain, member.name, f"{member.title}: {title}"[:160], member.name, None)
     msg = await _post(db, domain, uid, member.name, HEAD, "report", text, data)
@@ -661,23 +552,6 @@ async def report(db: ArcadeDB, domain: str, agent: str, title: str, text: str, d
         _background.add(task)
         task.add_done_callback(_background.discard)
     return msg
-
-
-async def action_outcome(db: ArcadeDB, domain: str, proposal: dict) -> None:
-    """The user decided an action the Head proposed: the Operator tells the Head — what it returned wakes the Head
-    (a simulation's result is something to act on); a declined one is a notice."""
-    if proposal.get("source") != HEAD:
-        return
-    name = proposal["action"]
-    if proposal["status"] == "rejected":
-        note = f": {proposal['note']}" if proposal.get("note") else ""
-        await notify(db, domain, "operator", f"The user declined {name}{note}", {"proposal": proposal["uid"]})
-        return
-    result = json.dumps(proposal.get("result"), ensure_ascii=False)[:2000]
-    await report(db, domain, "operator", f"{name} {proposal['status']}",
-                 f"The user confirmed {name}({json.dumps(proposal.get('params'), ensure_ascii=False)[:400]}); it "
-                 f"{proposal['status']}. What came back: {result}",
-                 {"proposal": proposal["uid"], "status": proposal["status"], "result": proposal.get("result")})
 
 
 async def inbox(db: ArcadeDB, domain: str, mark_read: bool = True, limit: int = 20) -> list[dict]:
@@ -905,8 +779,8 @@ async def _wake_once(db: ArcadeDB, domain: str, thread_uid: str) -> bool:
 
 async def _waiting_report(db: ArcadeDB, domain: str) -> str | None:
     """The oldest thread with an unread report for the Head that may still wake it — any thread: a teammate's report
-    on a task the Head gave, a playbook that fired (Watcher), an action's outcome (Operator). (Only threads the Head
-    opened counted before 2026-10-14: a Watcher report that lost the race for the wake was never woken again.)"""
+    on a task the Head gave, or news an agent reported. (Only threads the Head opened counted before 2026-10-14: a
+    report that lost the race for the wake was never woken again.)"""
     seen: set[str] = set()
     for r in await kgdb.find_docs(db, domain, "Message", (), "recipient = :h AND status = :s AND kind = :k",
                                   order="created_at ASC", limit=100, h=HEAD, s=UNREAD, k="report"):

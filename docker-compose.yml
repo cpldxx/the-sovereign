@@ -197,11 +197,9 @@ services:
       SOVEREIGN_HERMES_URL: http://hermes:8090     # the crew wakes the Head when a teammate reports
       SOVEREIGN_TIMEZONE: ${SOVEREIGN_TIMEZONE:-}       # learning cycles run in this timezone until set in the UI
       SOVEREIGN_DOMAINS_DIR: /data/domains
-      SCOUT_CATALOG: /data/scout-catalog.json
       LANGFUSE_BASE_URL: http://langfuse-web:3000
     volumes:
       - ./data/kg:/data
-      - /var/run/docker.sock:/var/run/docker.sock   # sensor sandboxes run as sibling containers
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on: [arcadedb]
     restart: unless-stopped

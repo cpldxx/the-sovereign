@@ -1,10 +1,9 @@
 """Shared fixtures. Tests that need something running skip themselves when it isn't:
-    db       ArcadeDB                  sandbox  Docker + the sensor sandbox image
-    live     the four services         slow     the local model / the internet
+    db       ArcadeDB                  live     the four services
+    slow     the local model / the internet
 `./sovereign test` runs everything but slow; `./sovereign test all` runs everything."""
 
 import os
-import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -41,15 +40,8 @@ def _arcadedb() -> bool:
         return False
 
 
-def _docker() -> bool:
-    try:
-        return subprocess.run(["docker", "info"], capture_output=True, timeout=90).returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
 def pytest_collection_modifyitems(config, items):
-    checks = {"db": _arcadedb, "sandbox": _docker, "live": lambda: all(_up(u) for u in URLS.values())}
+    checks = {"db": _arcadedb, "live": lambda: all(_up(u) for u in URLS.values())}
     state = {}
     for item in items:
         for mark, check in checks.items():

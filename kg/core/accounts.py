@@ -10,8 +10,6 @@ Kept in their own ArcadeDB database (SYSTEM_DB), apart from every domain's graph
 Sign-up (SIGNUP): "invite" (default) — an invite code from an admin; "open" — anyone. The very first account needs
 neither: it becomes the admin and the owner of every domain that existed before accounts did.
 Sharing adds an existing account to a domain by email (no email is ever sent; invites are links you pass on).
-Trusted domains — owned by an admin — may use the operator's resources: the OpenHands Coder (it drives Docker) and
-the API keys in SENSOR_SECRETS. Everyone else's sensors are written by the built-in Coder and run without them.
 """
 
 import asyncio
@@ -77,7 +75,6 @@ class AccountError(ValueError):
 _db: ArcadeDB | None = None
 _signup_lock = asyncio.Lock()
 _principals: dict[str, tuple[Principal | None, float]] = {}   # token hash → principal
-_trusted: set[str] = set()                                    # domains owned by an admin
 
 
 async def setup(db: ArcadeDB) -> None:
@@ -94,7 +91,6 @@ async def setup(db: ArcadeDB) -> None:
     if not await db.exists(SYSTEM_DB):
         await db.server(f"create database {SYSTEM_DB}")
     await db.command(SYSTEM_DB, "sqlscript", _SCHEMA)
-    await _load_trusted()
     auth.use(principal)
 
 
@@ -267,7 +263,6 @@ async def signup(email: str, password: str, name: str = "", invite: str = "", cl
             await _sql("UPDATE Invite SET used_by = :u WHERE uid = :uid", u=account["uid"], uid=invite_uid)
     if first:
         await _claim_unowned(account["uid"])
-        await _load_trusted()
     token, _ = await _issue(account["uid"], "browser")
     return _public(account), token
 
@@ -391,7 +386,6 @@ async def add_member(domain: str, user_uid: str, role: str, added_by: str) -> No
         await _insert("Member", {"domain": domain, "user_uid": user_uid, "role": role, "added_by": added_by,
                                  "created_at": now()})
     _forget(user_uid)
-    await _load_trusted()
 
 
 async def share(domain: str, email: str, role: str, by: str) -> list[dict]:
@@ -409,7 +403,6 @@ async def remove_member(domain: str, user_uid: str) -> None:
     await _keep_an_owner(domain, user_uid)
     await _sql("DELETE FROM Member WHERE domain = :d AND user_uid = :u", d=domain, u=user_uid)
     _forget(user_uid)
-    await _load_trusted()
 
 
 async def _keep_an_owner(domain: str, losing: str) -> None:
@@ -423,21 +416,3 @@ async def forget_domain(domain: str) -> None:
     """A deleted domain's memberships."""
     await _sql("DELETE FROM Member WHERE domain = :d", d=domain)
     _forget()
-    await _load_trusted()
-
-
-# ── Trust ──────────────────────────────────────────────────────────────────
-
-_open_install = True   # no account yet (the first one is always an admin): everything is the operator's
-
-
-async def _load_trusted() -> None:
-    global _trusted, _open_install
-    admins = [r["uid"] for r in await _sql("SELECT uid FROM Account WHERE admin = true")]
-    rows = await _sql("SELECT domain FROM Member WHERE `role` = 'owner' AND user_uid IN :a", a=admins) if admins else []
-    _trusted, _open_install = {r["domain"] for r in rows}, not admins
-
-
-def trusted(domain: str) -> bool:
-    """Owned by an admin: may use the operator's API keys and the OpenHands Coder."""
-    return _open_install or domain in _trusted

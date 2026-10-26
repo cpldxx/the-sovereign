@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Code2, Crown, Eye, FileText, GitMerge, Globe, Link2, Newspaper, Radar, ScanText, Send, Shapes, ShieldCheck, Target, User,
+  Crown, FileText, GitMerge, Globe, Link2, Newspaper, ScanText, Shapes, ShieldCheck, Target, User,
   X, type LucideIcon,
 } from 'lucide-react';
 import { kg, research, type ActivityEvent, type TeamAgent } from '../lib/api';
@@ -23,14 +23,12 @@ const NODE_R = 21;
 const TEAMS: { label: string; agents: string[]; caption?: number }[] = [
   // caption: where along its span a team is named (default the middle); Learning's steep end holds agents' status
   { label: 'Learning', agents: ['research', 'extractor', 'validator', 'resolver', 'linker', 'ontologist'], caption: 0.75 },
-  { label: 'Live data', agents: ['scout', 'coder'] },
-  { label: 'Decisions', agents: ['strategist', 'watcher', 'operator'] },
+  { label: 'Planning', agents: ['strategist'] },
   { label: 'Briefing', agents: ['summarizer', 'reporter'] },
 ];
 const ICON: Record<string, LucideIcon> = {
   head: Crown, user: User, research: Globe, extractor: ScanText, validator: ShieldCheck, resolver: GitMerge,
-  linker: Link2, ontologist: Shapes, scout: Radar, coder: Code2, strategist: Target, watcher: Eye,
-  operator: Send, summarizer: FileText, reporter: Newspaper,
+  linker: Link2, ontologist: Shapes, strategist: Target, summarizer: FileText, reporter: Newspaper,
 };
 // The graphite scale (index.css) — SVG attributes take no CSS variables.
 const C = { bg: '#0a0a0a', node: '#101010', line: '#1e1e1e', line2: '#2e2e2e', edge: '#3a3a3a',

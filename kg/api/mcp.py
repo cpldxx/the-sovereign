@@ -5,10 +5,9 @@ on the agent side. Every tool calls the same `core` functions the REST routes us
 
 Each role gets its own endpoint that serves only that role's tools — what an agent may do is decided by
 where it connects, not by its prompt:
-    head      /mcp           everything: writes, ontology changes, review decisions, action proposals
-    readonly  /mcp/readonly  reading the graph, reports, playbooks, actions and sensors — for sub-agents and
-                             external MCP clients (e.g. a desktop assistant pointed at your graph)
-No role can confirm or execute an action: that is the user's call, through the REST API / UI.
+    head      /mcp           everything: writes, ontology changes, review decisions, research missions
+    readonly  /mcp/readonly  reading the graph, reports and research — for sub-agents and external MCP clients
+                             (e.g. a desktop assistant pointed at your graph)
 
 Every call is checked against its caller (auth.py): a person's API token reaches their own domains — /mcp needs
 editor there, /mcp/readonly viewer — and Hermes' per-domain Head connections reach only their one domain.
@@ -30,7 +29,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import actions, activity, auth, crew, digest, kg, playbooks, sensors
+from core import activity, auth, crew, digest, kg
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -76,10 +75,9 @@ _caller: contextvars.ContextVar[tuple[auth.Principal, str]] = contextvars.Contex
 
 
 # Which agent a tool call reaches, for the live agent view (the rest read or write the graph itself).
-_TOOL_AGENT = {"ingest_data": "extractor", "list_sensors": "scout", "read_sensor": "scout", "list_research": "research",
-               "research_status": "research", "list_playbooks": "strategist", "list_proposals": "watcher",
-               "propose_action": "operator", "daily_report": "reporter", "list_reviews": "validator",
-               "resolve_review": "validator", "update_ontology": "ontologist", "get_ontology": "ontologist"}
+_TOOL_AGENT = {"ingest_data": "extractor", "list_research": "research", "research_status": "research",
+               "daily_report": "reporter", "list_reviews": "validator", "resolve_review": "validator",
+               "update_ontology": "ontologist", "get_ontology": "ontologist"}
 
 
 def _guarded(fn: Callable, need: str) -> Callable:
@@ -262,52 +260,6 @@ async def daily_report(domain: str) -> dict:
     return {"report": reports[0], "generating": digest.running(domain)}
 
 
-@tool("readonly")
-async def list_actions(domain: str) -> list[dict]:
-    """What your Operator can run: built-in actions (alert, draft, research — they run at once) and the APIs the
-    user connected (webhooks — they run after the user confirms, or at once when marked auto, e.g. a
-    simulation). Each with its parameters."""
-    _require(domain)
-    return await actions.catalog(db, domain)
-
-
-@tool("readonly")
-async def list_playbooks(domain: str) -> list[dict]:
-    """The domain's playbooks: situations worth acting on, each with the entities it watches, the prepared
-    response and action, and the facts behind it. Written every night from the graph; a playbook that fires is
-    reported to you with the action it calls for, and you decide. Check them when deciding what to do."""
-    _require(domain)
-    return await playbooks.list_playbooks(db, domain)
-
-
-@tool()
-async def propose_action(domain: str, action: str, params: dict | None = None, rationale: str = "",
-                         evidence: list[str] | None = None) -> dict:
-    """Have your Operator run an action from the catalog (list_actions). `rationale`: why, grounded in the graph —
-    cite facts with their weight; `evidence`: the uids of those facts. Internal actions and connectors the user
-    marked auto run at once and return their result; other external actions are recorded with a dry-run preview
-    and wait for the user's confirmation in the Actions tab — the Operator reports to you once one has run. Never
-    say one was done unless its status is "executed"."""
-    _require(domain)
-    # A local model tucks the rationale or the evidence into params, and copies uids into what the user reads.
-    params, rationale, evidence = await actions.tidy_request(db, domain, action, params, rationale, evidence)
-    try:
-        with activity.working(domain, "operator", action):
-            p = await actions.propose(db, domain, action, params, rationale, evidence, source="head")
-    except actions.ActionError as e:
-        activity.event(domain, "operator", "head", "answer", f"{action}: {e}")
-        raise ToolError(str(e)) from e
-    activity.event(domain, "operator", "head", "report", f"{action} {p['status']}")
-    return p
-
-
-@tool("readonly")
-async def list_proposals(domain: str, status: str = "proposed") -> list[dict]:
-    """Proposed actions. status: "proposed" (waiting for the user), "executed", "rejected", "failed", "expired"."""
-    _require(domain)
-    return await actions.list_proposals(db, domain, status, 30)
-
-
 # ── Senses: the world right now (the graph can be a day old) ──────────────
 
 # web_search and read_webpage take no domain: without a check, any signed-in account — even one with no domain —
@@ -343,35 +295,10 @@ async def web_search(query: str, recent: bool = False) -> list[dict]:
 async def read_webpage(url: str) -> dict:
     """Read one public web page right now, as text: it is opened in a real browser, so pages built by JavaScript work
     too (robots.txt respected; sites that refuse automated visitors can't be read — try another site). Use it for
-    live data no sensor covers: a quote page, an official announcement, a status page. Nothing is stored —
+    what is true now: a quote page, an official announcement, a status page. Nothing is stored —
     ingest_data it if it is worth keeping."""
     _proxy_allowed()
     return await _research("POST", "/fetch", json={"url": url, "max_chars": 12000}, timeout=120)
-
-
-@tool("readonly")
-async def list_sensors(domain: str) -> list[dict]:
-    """The domain's live-data sensors: name, what it returns, its parameters, and how many independent sources
-    (APIs and web pages) back it — reading one falls back from source to source by itself."""
-    _require(domain)
-    return [{"name": g["name"], "description": g["description"], "params": g["params"],
-             "sources": f"{g['working']} working of {len(g['sources'])}", "last_run_at": g["last_run_at"]}
-            for g in await sensors.groups(db, domain)]
-
-
-@tool("readonly")
-async def read_sensor(domain: str, name: str, params: dict | None = None, verify_field: str | None = None) -> dict:
-    """Read a live-data sensor now (a few seconds; its best working source answers, the next one if that fails).
-    Check live data right before acting. `verify_field`: also read a second source and compare that field — do it
-    before acting on a number."""
-    _require(domain)
-    try:
-        out = await sensors.read(db, domain, name, params or {}, verify_field)
-    except sensors.SensorError as e:
-        raise ToolError(str(e)) from e
-    if out.get("ok"):
-        out["result"] = sensors.clip(out["result"])
-    return out
 
 
 @tool("readonly")
@@ -414,8 +341,8 @@ async def assign_task(domain: str, agent: str, task: str, inputs: dict | str | N
                       thread: str | None = None) -> dict:
     """Give a teammate work. `task` is the task's name only (e.g. "check"); its fields go in `inputs` as an object
     (e.g. {"claims": ["…"], "source_text": "…"}) — list_agents shows every task's inputs. It is queued; the agent
-    reports on the thread when done and you are woken to read the report. Long tasks (a research mission, finding
-    sensor sources) take minutes: tell the user it started — don't wait. `thread`: continue an earlier one."""
+    reports on the thread when done and you are woken to read the report. Long tasks (a research mission, a
+    relink) take minutes: tell the user it started — don't wait. `thread`: continue an earlier one."""
     _require(domain)
     try:
         return await crew.assign(db, domain, agent, task, inputs, thread)
@@ -425,8 +352,8 @@ async def assign_task(domain: str, agent: str, task: str, inputs: dict | str | N
 
 @tool()
 async def ask_agent(domain: str, agent: str, question: str, thread: str | None = None) -> dict:
-    """Ask a teammate a question — e.g. the Scout why a sensor fails, the Validator what it rejected lately, the
-    Strategist which playbooks exist. It answers from what it knows right now; waits up to 2 minutes, otherwise
+    """Ask a teammate a question — e.g. the Validator what it rejected lately, the Strategist what the graph is
+    unsure about, the Researcher which sources it read. It answers from what it knows right now; waits up to 2 minutes, otherwise
     the answer arrives in your inbox. `thread`: a follow-up in an earlier conversation."""
     _require(domain)
     try:

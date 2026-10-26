@@ -26,7 +26,7 @@ THINKING = os.getenv("LLM_THINKING", "false").strip().lower() in ("1", "true", "
 # Linker on recorded inputs, two runs agreed on 7/23 decisions at the model's default and 10/20 at 0.1.
 DECISION_TEMPERATURE = float(os.getenv("LLM_DECISION_TEMPERATURE", "0.1"))
 # A local model now and then writes a broken tool call and Ollama answers 500 ("XML syntax error on line 14: element
-# <function> closed by </parameter>") — one of those stopped a whole sensor search. The same model is asked again.
+# <function> closed by </parameter>") — one of those stopped a whole agent run. The same model is asked again.
 MODEL_RETRIES = int(os.getenv("LLM_MODEL_RETRIES", "2"))
 
 

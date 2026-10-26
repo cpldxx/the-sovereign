@@ -3,9 +3,9 @@ import { Loader2, X } from 'lucide-react';
 import { kg, type Member, type Role, type User } from '../lib/api';
 
 const ROLE_HINT: Record<Role, string> = {
-  viewer: 'reads the graph, reports and actions; asks the Head (read-only tools)',
-  editor: 'also ingests, researches, reviews, edits the ontology and confirms actions',
-  owner: 'also shares the domain, configures webhooks and deletes it',
+  viewer: 'reads the graph and reports; asks the Head (read-only tools)',
+  editor: 'also ingests, researches, reviews and edits the ontology',
+  owner: 'also shares the domain and deletes it',
 };
 const ROLES: Role[] = ['viewer', 'editor', 'owner'];
 
@@ -48,7 +48,7 @@ export function MembersDialog({ domain, me, role, onClose, onLeft }: {
           <h2 className="text-sm font-medium">Members of <span className="font-mono">{domain}</span></h2>
           <button onClick={onClose} className="text-faint hover:text-ink"><X size={16} /></button>
         </div>
-        <p className="mb-4 text-[11px] text-faint">Everyone here sees the same graph, reports, playbooks and actions.</p>
+        <p className="mb-4 text-[11px] text-faint">Everyone here sees the same graph, reports and research.</p>
 
         <ul className="mb-4 space-y-1.5">
           {members === null && <li className="text-xs text-faint">Loading…</li>}

@@ -42,9 +42,6 @@ async def test_a_merge_keeps_each_fact_whole_and_points_reviews_at_the_survivor(
     same = await kgdb.add_review(db, d, "merge", "same?", {"entity_uid": "e_keep", "entity_name": "TSMC",
                                                            "candidate_uid": "e_dup", "candidate_name": "TSMC Ltd"})
     applying = await kgdb.add_review(db, d, "merge", "same?", {"entity_uid": "e_dup", "candidate_uid": "e_keep"})
-    pb = await kgdb.insert_doc(db, d, "Playbook", {"name": "TSMC sold out", "status": "active", "watch": [
-        {"uid": "e_dup", "name": "TSMC Ltd"}, {"uid": "e_keep", "name": "TSMC"}, {"uid": "e_x", "name": "Nvidia"}]},
-        ("watch",))
 
     await kgdb.merge_entities(db, d, "e_dup", "e_keep")
 
@@ -59,8 +56,6 @@ async def test_a_merge_keeps_each_fact_whole_and_points_reviews_at_the_survivor(
     assert (p["source_uid"], p["source_name"]) == ("e_keep", "TSMC")
     assert (await kgdb.get_review(db, d, same))["status"] == "approved"     # nothing left to merge
     assert (await kgdb.get_review(db, d, applying))["status"] == "pending"  # its decider closes it
-    watch = (await kgdb.get_doc(db, d, "Playbook", pb["uid"], ("watch",)))["watch"]
-    assert [w["uid"] for w in watch] == ["e_keep", "e_x"]                   # watches the survivor, once
 
 
 @pytest.mark.db
@@ -123,17 +118,12 @@ async def test_a_review_is_decided_once_and_the_queue_pages(scratch):
 
 
 @pytest.mark.db
-async def test_nested_review_values_and_active_playbooks_are_referenced(scratch):
+async def test_nested_review_values_are_referenced(scratch):
     db, d = scratch
     await kgdb.add_review(db, d, "link", "?", {"fact_uid": "f_new", "supersedes": ["f_old"],
                                                "existing": [{"uid": "f_ex", "relation": "uses"}]})
-    await kgdb.insert_doc(db, d, "Playbook", {"status": "active", "evidence": ["f_ev"], "watch": [{"uid": "e_w"}]},
-                          ("watch", "evidence"))
-    await kgdb.insert_doc(db, d, "Playbook", {"status": "retired", "evidence": ["f_dead"], "watch": [{"uid": "e_dead"}]},
-                          ("watch", "evidence"))
     keep = await kgdb.referenced(db, d)
-    assert {"f_new", "f_old", "f_ex", "f_ev", "e_w"} <= keep
-    assert not {"f_dead", "e_dead"} & keep
+    assert {"f_new", "f_old", "f_ex"} <= keep
 
 
 # ── Episodes ───────────────────────────────────────────────────────────────

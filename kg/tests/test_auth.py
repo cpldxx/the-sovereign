@@ -18,16 +18,11 @@ ORIGIN = auth.ORIGINS[0]
     ("GET", "/graph/a", ("a", "viewer")),
     ("POST", "/domains/a/query", ("a", "viewer")),
     ("POST", "/domains/a/ask/stream", ("a", "viewer")),
-    ("POST", "/domains/a/sensors/x/read", ("a", "viewer")),
     ("POST", "/domains/a/sources", ("a", "viewer")),          # which URLs are already read: a lookup
     ("POST", "/domains/a/ingest", ("a", "editor")),
     ("POST", "/domains/a/research", ("a", "editor")),
-    ("POST", "/domains/a/proposals/p1", ("a", "editor")),
-    ("POST", "/domains/a/sensors/check", ("a", "editor")),
     ("DELETE", "/domains/a", ("a", "owner")),
     ("PUT", "/domains/a/members", ("a", "owner")),
-    ("POST", "/domains/a/actions", ("a", "owner")),
-    ("DELETE", "/domains/a/actions/hook", ("a", "owner")),
     ("DELETE", "/domains/a/members/u1", ("a", "viewer")),   # leaving; the handler checks whose
     ("GET", "/domains", None),
     ("GET", "/auth/me", None),

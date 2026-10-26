@@ -398,152 +398,6 @@ export interface Report {
   };
 }
 
-export interface ActionParam {
-  name: string;
-  type: 'string' | 'number' | 'integer' | 'boolean';
-  description: string;
-  required: boolean;
-}
-
-/** Something a domain can do: built-in (runs at once) or a connected API (asks you first, unless marked auto). */
-export interface ActionDef {
-  name: string;
-  kind: 'builtin' | 'webhook';
-  risk: 'internal' | 'external';
-  confirm: boolean;
-  auto?: boolean;   // a connector the Head may run without asking (no real-world effect)
-  description: string;
-  params: ActionParam[];
-  dry_run?: boolean;
-  url?: string;
-  uid?: string;
-}
-
-export type ProposalStatus = 'proposed' | 'executing' | 'executed' | 'rejected' | 'failed' | 'expired';
-
-export interface Proposal {
-  uid: string;
-  action: string;
-  params: Record<string, unknown>;
-  rationale: string;
-  evidence: string[];
-  source: 'head' | 'playbook' | 'user';
-  playbook_uid: string | null;
-  risk: 'internal' | 'external';
-  status: ProposalStatus;
-  preview: string;
-  result: Record<string, unknown> | null;
-  created_at: string;
-  expires_at: string;
-  decided_at?: string;
-  executed_at?: string;
-  note?: string;
-}
-
-/** A pre-computed "if this happens, do that" rule written from the graph. */
-export interface Playbook {
-  uid: string;
-  name: string;
-  situation: string;
-  watch: { uid: string; name: string }[];
-  response: string;
-  action: string;
-  evidence: string[];
-  status: 'active' | 'retired';
-  fired: number;
-  last_fired_at: string | null;
-  /** Live condition on a sensor, checked around the clock. */
-  trigger?: { sensor: string; params: Record<string, unknown>; field: string; op: string; value: number; every_minutes: number } | null;
-  trigger_value?: number | null;
-  trigger_checked_at?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
-/** A live-data tool written by the Coder Agent; runs in a sandbox. */
-export interface Sensor {
-  uid: string;
-  name: string;
-  description: string;
-  params: Record<string, { type: string; description: string; example: unknown }>;
-  need: string;
-  author: string;
-  status: 'active' | 'failed';
-  sample: string;
-  tested_at: string;
-  last_run_at: string | null;
-  last_ok: boolean;
-  code?: string;
-  group?: string;
-  kind?: 'api' | 'page';
-  host?: string;
-}
-
-/** One source of a sensor: an API or a web page opened in a browser. */
-export interface SensorSource {
-  name: string;
-  host: string;
-  kind: 'api' | 'page' | 'extract' | 'search';  // extract: read by the model; search: live search (no source yet)
-  last_ok: boolean | null;
-  score: number;
-  avg_seconds: number | null;
-  last_error: string | null;
-  author: string;
-  cooldown_until: string | null;  // resting after the site refused us (bot protection, robots.txt)
-}
-
-/** A sensor as agents see it: one need, read from its best working source. */
-export interface SensorGroup {
-  name: string;
-  description: string;
-  params: Record<string, { type: string; description: string; example: unknown }>;
-  need: string;
-  last_ok: boolean;
-  last_run_at: string | null;
-  working: number;
-  sources: SensorSource[];
-}
-
-/** A candidate source the Scout tried, and what happened. */
-export interface ScoutCandidate {
-  host: string;
-  kind: 'api' | 'page';
-  url: string;
-  outcome: string;
-  seconds?: number;
-  value?: Record<string, unknown>;
-}
-
-export interface SensorRequest {
-  id: string;
-  domain: string;
-  need: string;
-  backend: string;  // scout | builtin | openhands | openhands→builtin (fell back)
-  status: 'queued' | 'planning' | 'collecting' | 'probing' | 'coding' | 'testing' | 'done' | 'failed';
-  group?: string | null;
-  candidates?: ScoutCandidate[];
-  sources?: number | null;
-  created_at: string;
-  finished_at: string | null;
-  seconds: number | null;
-  sensor: string | null;
-  note: string;
-  error: string;
-  log: string[];
-  result: string | null;
-}
-
-export interface SensorReading {
-  sensor: string;
-  source?: string;
-  params: Record<string, unknown>;
-  read_at: string;
-  ok: boolean;
-  result?: unknown;
-  error?: string;
-  failed_sources?: { source: string; error: string }[];
-}
-
 export interface Turn {
   role: 'user' | 'assistant';
   content: string;
@@ -699,40 +553,6 @@ export const kg = {
 
   createReport: (id: string, hours = 24) => request<unknown>(KG_API, `${d(id)}/reports`, json({ hours })),
 
-  actions: (id: string) => request<{ actions: ActionDef[] }>(KG_API, `${d(id)}/actions`).then(r => r.actions),
-
-  addAction: (id: string, action: { name: string; description: string; url: string; params: ActionParam[]; dry_run: boolean; auto: boolean }) =>
-    request<unknown>(KG_API, `${d(id)}/actions`, json(action)),
-
-  removeAction: (id: string, name: string) =>
-    request<unknown>(KG_API, `${d(id)}/actions/${encodeURIComponent(name)}`, { method: 'DELETE' }),
-
-  proposals: (id: string, status?: ProposalStatus, limit = 50) =>
-    request<{ proposals: Proposal[] }>(KG_API, `${d(id)}/proposals?limit=${limit}${status ? `&status=${status}` : ''}`)
-      .then(r => r.proposals),
-
-  decideProposal: (id: string, uid: string, approve: boolean, note = '') =>
-    request<Proposal>(KG_API, `${d(id)}/proposals/${encodeURIComponent(uid)}`, json({ approve, note })),
-
-  playbooks: (id: string) =>
-    request<{ playbooks: Playbook[]; running: boolean }>(KG_API, `${d(id)}/playbooks`),
-
-  runPlaybooks: (id: string) => request<unknown>(KG_API, `${d(id)}/playbooks/cycle`, json({ hours: 24 })),
-
-  sensors: (id: string) =>
-    request<{ groups: SensorGroup[]; sensors: Sensor[]; requests: SensorRequest[] }>(KG_API, `${d(id)}/sensors`),
-
-  sensor: (id: string, name: string) => request<Sensor>(KG_API, `${d(id)}/sensors/${encodeURIComponent(name)}`),
-
-  readSensor: (id: string, name: string, params: Record<string, unknown>) =>
-    request<SensorReading>(KG_API, `${d(id)}/sensors/${encodeURIComponent(name)}/read`, json({ params })),
-
-  removeSensor: (id: string, name: string) =>
-    request<unknown>(KG_API, `${d(id)}/sensors/${encodeURIComponent(name)}`, { method: 'DELETE' }),
-
-  requestSensor: (id: string, need: string, backend?: 'scout' | 'builtin' | 'openhands', group?: string) =>
-    request<SensorRequest>(KG_API, `${d(id)}/sensors`, json({ need, backend, group })),
-
   team: (id: string) => request<{ agents: TeamAgent[]; unread: number }>(KG_API, `${d(id)}/team`),
 
   threads: (id: string, agent?: string) =>
@@ -762,10 +582,6 @@ export const kg = {
   importChat: (id: string, turns: unknown[]) =>
     request<{ imported: number }>(KG_API, `${d(id)}/chat/import`, json({ turns })),
 
-  retirePlaybook: (id: string, uid: string) =>
-    request<unknown>(KG_API, `${d(id)}/playbooks/${encodeURIComponent(uid)}`, {
-      method: 'PATCH', body: JSON.stringify({ status: 'retired' }),
-    }),
 };
 
 // ── Research (DeerFlow) ─────────────────────────────────────────────────────

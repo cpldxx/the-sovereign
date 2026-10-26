@@ -9,7 +9,7 @@ Principals
              so no prompt can talk a Head into another tenant's graph).
 
 Roles per domain: viewer < editor < owner. What a request needs follows from its path and method (`needed`): reads
-need viewer, writes editor; sharing, webhooks and deleting the domain need owner. A domain the caller has no role in
+need viewer, writes editor; sharing and deleting the domain need owner. A domain the caller has no role in
 answers 404, as if it didn't exist.
 
 The KG resolves tokens against its account store (`use(...)`). Hermes and Research ask the KG (/auth/me) and cache
@@ -79,14 +79,13 @@ def headers(domain: str | None = None) -> dict:
 # ── What a request needs ───────────────────────────────────────────────────
 
 _DOMAIN_PATH = re.compile(r"^/(?:domains|graph)/(?P<domain>[^/]+)(?P<rest>/.*)?$")
-_READ_POSTS = re.compile(r"^/(?:query|ask|ask/stream|sensors/[^/]+/read|sources)$")   # POSTs that only read
+_READ_POSTS = re.compile(r"^/(?:query|ask|ask/stream|sources)$")   # POSTs that only read
 # Leaving a domain, and your own conversation with its Head (the handlers check whose; Hermes' ask/stop stops only
 # the caller's own turns).
 _ANY_MEMBER = (("DELETE", re.compile(r"^/members/[^/]+$")), ("POST", re.compile(r"^/chat(?:/import)?$")),
                ("PATCH", re.compile(r"^/chat/[^/]+$")), ("DELETE", re.compile(r"^/chat$")),
                ("POST", re.compile(r"^/ask/stop$")))
-_OWNER = (("DELETE", re.compile(r"^$")), ("PUT", re.compile(r"^/members$")),
-          ("POST", re.compile(r"^/actions$")), ("DELETE", re.compile(r"^/actions/[^/]+$")))
+_OWNER = (("DELETE", re.compile(r"^$")), ("PUT", re.compile(r"^/members$")))
 
 
 def needed(method: str, path: str) -> tuple[str, str] | None:

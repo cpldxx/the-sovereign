@@ -9,8 +9,8 @@ router = APIRouter(prefix="/system", tags=["system"])
 
 @router.post("/selfcheck")
 async def run_selfcheck(req: Request, alert: bool = True):
-    """Check the safeguards on the running system (sandbox egress, robots.txt, webhooks, auth, domain scope); a
-    failure becomes a critical alert in every domain. Runs every night before research."""
+    """Check the safeguards on the running system (robots.txt, auth, domain scope); a failure is left in the Head's
+    inbox in every domain. Runs once a day."""
     principal = auth.current.get()
     if principal.kind != "service" and not (principal.user or {}).get("admin"):
         raise HTTPException(status_code=403, detail="Only for the services or an admin")

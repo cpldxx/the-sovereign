@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, Bell, Check, Hourglass, Loader2, Mic, MicOff, Paperclip, Send, Square, Trash2, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { AudioLines, Check, Loader2, Mic, MicOff, Paperclip, Send, Square, Trash2, Volume2, VolumeX, Wrench, X } from 'lucide-react';
 import { hermes, kg, type AgentEvent, type ChatTurn, type IngestResult, type Turn } from '../lib/api';
 import { IngestPanel } from './IngestPanel';
 import { Markdown } from '../components/Markdown';
@@ -31,19 +31,6 @@ interface Step {
   args: unknown;
   done: boolean;
   said?: string;
-  outcome?: { action: string; status: string; title: string };   // an action the Operator ran or holds for you
-}
-
-/** The proposal a propose_action call returned, if the result is one. */
-function actionOutcome(result: string): Step['outcome'] {
-  try {
-    const p = JSON.parse(result);
-    if (!p?.action || !p?.status) return undefined;
-    const t = p.params?.title ?? p.params?.question ?? p.params?.message ?? '';
-    return { action: p.action, status: p.status, title: typeof t === 'string' ? t : '' };
-  } catch {
-    return undefined;
-  }
 }
 
 interface Message {
@@ -85,26 +72,6 @@ function argSummary(args: unknown): string {
   return typeof main === 'string' ? main.slice(0, 90) : '';
 }
 
-function Outcome({ o, onOpen }: { o: NonNullable<Step['outcome']>; onOpen?: () => void }) {
-  const waiting = o.status === 'proposed';
-  const where = waiting ? 'waiting for your confirmation at the top of this tab'
-    : o.action === 'alert' ? 'shown as a pop-up and in Briefing › What was done'
-    : 'its result is in Briefing › What was done';
-  return (
-    <div className="rounded border border-line-2 bg-panel px-2.5 py-1.5 text-[11px]">
-      <div className="flex items-center gap-1.5">
-        {waiting ? <Hourglass size={11} className="shrink-0 text-accent" /> : <Bell size={11} className="shrink-0 text-accent" />}
-        <span className="shrink-0 text-ink">{o.action === 'alert' && !waiting ? 'Alert sent' : `${o.action} ${o.status}`}</span>
-        {o.title && <span className="min-w-0 truncate text-dim">“{o.title}”</span>}
-      </div>
-      <div className="mt-0.5 flex items-center gap-2 pl-[17px] text-faint">
-        <span>{where}</span>
-        {!waiting && onOpen && <button onClick={onOpen} className="ml-auto shrink-0 underline hover:text-ink">open</button>}
-      </div>
-    </div>
-  );
-}
-
 /** What the Head said before a tool: a line or two, the rest on demand (a model sometimes drafts its whole answer). */
 function Said({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
@@ -117,13 +84,11 @@ function Said({ text }: { text: string }) {
   );
 }
 
-function Steps({ steps, onOpenBriefing }: { steps: Step[]; onOpenBriefing?: () => void }) {
+function Steps({ steps }: { steps: Step[] }) {
   return (
     <div className="mb-2 space-y-1">
       {steps.map(s => s.said ? (
         <Said key={s.id} text={s.said} />
-      ) : s.outcome ? (
-        <Outcome key={s.id} o={s.outcome} onOpen={onOpenBriefing} />
       ) : (
         <div key={s.id} className="flex items-center gap-1.5 text-[11px] text-faint">
           {s.done ? <Check size={11} className="text-good" /> : <Loader2 size={11} className="animate-spin text-accent" />}
@@ -136,13 +101,12 @@ function Steps({ steps, onOpenBriefing }: { steps: Step[]; onOpenBriefing?: () =
   );
 }
 
-export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, ontologyReady, onOpenBriefing }: {
+export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, ontologyReady }: {
   domain: string;
   canIngest: boolean;   // editors add sources; any member asks
   onKnowledgeChanged: () => Promise<void>;
   onHighlight: (uids: Set<string>) => void;
   ontologyReady: boolean;
-  onOpenBriefing?: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>(() => loadChat(domain));
   const [attaching, setAttaching] = useState(false);   // a source pasted in: the pipeline learns it, the chat notes it
@@ -247,7 +211,6 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
           const s = collected.find(x => x.id === e.id);
           if (s) {
             s.done = true;
-            if (e.name === 'propose_action') s.outcome = actionOutcome(e.result);
           }
           setSteps([...collected]);
           // Light up what the agent read (query) or stored (ingest) in the graph.
@@ -355,19 +318,16 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
     lastAnswerAt.current = Date.now();
   }
 
-  /** Once a day, starting voice opens with the day's briefing: the report's spoken summary and what waits for you. */
+  /** Once a day, starting voice opens with the day's briefing: the report's spoken summary. */
   async function greeting(): Promise<string | null> {
     const key = `sovereign.greeted.${domain}`;
     const today = new Date().toDateString();
     if (localStorage.getItem(key) === today) return null;
     localStorage.setItem(key, today);
-    const [reports, pending] = await Promise.all([
-      kg.reports(domain, 1).catch(() => null), kg.proposals(domain, 'proposed').catch(() => []),
-    ]);
+    const reports = await kg.reports(domain, 1).catch(() => null);
     const report = reports?.reports[0];
     const parts: string[] = [];
     if (report && Date.now() - new Date(report.created_at).getTime() < 36 * 3600_000) parts.push(report.spoken || report.headline);
-    if (pending.length) parts.push(`${pending.length} action${pending.length > 1 ? 's are' : ' is'} waiting for your confirmation.`);
     return parts.length ? parts.join(' ') : null;
   }
 
@@ -478,7 +438,7 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
             <div key={i} className="ml-8 rounded-lg bg-panel-2 px-3 py-2 text-[13px] whitespace-pre-wrap">{m.content}</div>
           ) : (
             <div key={i} className={`border-l-2 pl-3 ${m.error ? 'border-bad/60' : 'border-accent/60'}`}>
-              {m.steps && m.steps.length > 0 && <Steps steps={m.steps} onOpenBriefing={onOpenBriefing} />}
+              {m.steps && m.steps.length > 0 && <Steps steps={m.steps} />}
               {m.pending ? (
                 <p className="flex items-center gap-2 text-xs text-faint">
                   <Loader2 size={12} className="animate-spin" /> The Head is still answering — it appears here when done.
@@ -490,7 +450,7 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
 
         {busy && (
           <div className="border-l-2 border-accent/60 pl-3">
-            {steps.length > 0 && <Steps steps={steps} onOpenBriefing={onOpenBriefing} />}
+            {steps.length > 0 && <Steps steps={steps} />}
             {draft ? (
               <Markdown>{draft}</Markdown>
             ) : (

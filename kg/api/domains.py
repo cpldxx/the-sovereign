@@ -133,8 +133,8 @@ class ShareRequest(BaseModel):
 
 @router.get("/{domain_name}/members")
 async def api_members(domain_name: str):
-    """Who can use this domain, and as what: viewer (reads, asks), editor (also writes and confirms actions),
-    owner (also shares, configures webhooks, deletes)."""
+    """Who can use this domain, and as what: viewer (reads, asks), editor (also writes: ingests, researches, reviews),
+    owner (also shares, deletes)."""
     return {"members": await accounts.members(domain_name)}
 
 
@@ -164,7 +164,7 @@ async def api_unshare(domain_name: str, uid: str):
 
 @router.post("/{domain_name}/prune")
 async def api_prune(domain_name: str, req: Request, dry_run: bool = True):
-    """Entities no fact touches any more (those a pending review or a playbook refers to stay). dry_run (the
+    """Entities no fact touches any more (those a pending review refers to stay). dry_run (the
     default) only lists them; the nightly report prunes them by itself. Owner only."""
     auth.require(domain_name, "owner")
     gone = await digest.prune_entities(req.app.state.db, domain_name, dry_run)

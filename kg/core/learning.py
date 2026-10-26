@@ -8,7 +8,7 @@
     keep     the Head decides the review queue, the Linker and Summarizer tidy up (nightly report)
     forget   forget(): a fact that rested on one weak source and was never confirmed in `forget_after_days` is
              retired (invalidated, reason "forgotten: …" — still history, never an answer); an entity left with only
-             forgotten facts goes. Nothing a pending review or an active playbook relies on.
+             forgotten facts goes. Nothing a pending review relies on.
 
 Settings per domain (a Setting document "learning" in its database): when it runs (times in the user's timezone),
 how many questions it pursues per cycle, how long an unconfirmed weak fact may wait. The research service runs the
@@ -143,7 +143,7 @@ async def gaps(db: ArcadeDB, domain: str, user: str | None = None) -> dict:
             "ontology": [k for k, _ in sorted(gaps_.items(), key=lambda kv: -kv[1])[:8]]}
 
 
-def _gap_text(g: dict) -> str:
+def gap_text(g: dict) -> str:
     lines = ["Facts resting on one weak source, by entity: "
              + (", ".join(f"{w['entity']} ({w['weak_facts']})" for w in g["weak"]) or "none"),
              "Well-connected entities with nothing new for a month: "
@@ -160,7 +160,7 @@ async def questions(db: ArcadeDB, domain: str, n: int) -> dict:
     if n <= 0 or not any(g.values()):
         return {"questions": [], "gaps": g}
     description = registry.load_domain(domain)["config"].get("description") or domain
-    out = await research_questions(domain, description, _gap_text(g), n)
+    out = await research_questions(domain, description, gap_text(g), n)
     return {"questions": [q.model_dump() for q in out.questions], "gaps": g}
 
 
@@ -168,11 +168,11 @@ async def questions(db: ArcadeDB, domain: str, n: int) -> dict:
 
 async def forget(db: ArcadeDB, domain: str, days: int, dry_run: bool = False) -> dict:
     """Retire facts that rested on one weak source and were never confirmed in `days`; delete the entities left
-    with nothing but forgotten facts. Spares what a pending review or a playbook relies on."""
+    with nothing but forgotten facts. Spares what a pending review relies on."""
     if days <= 0 or not await db.exists(domain):
         return {"facts": 0, "entities": 0, "examples": []}
     before = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
-    keep = await kgdb.referenced(db, domain)   # pending reviews (nested values too), active playbooks
+    keep = await kgdb.referenced(db, domain)   # what pending reviews name (nested values too)
     rows = await db.cypher(
         domain,
         "MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE r.invalid_at IS NULL AND r.evidence <= 1 AND r.disbelief > $d "

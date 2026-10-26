@@ -29,7 +29,6 @@ asyncio_default_fixture_loop_scope = "session"
 asyncio_default_test_loop_scope = "session"
 markers = [
     "db: needs ArcadeDB (docker compose up -d)",
-    "sandbox: needs Docker and the sensor sandbox image",
     "live: needs the running services (./sovereign start)",
     "slow: calls the local model or the internet (minutes)",
 ]

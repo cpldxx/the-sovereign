@@ -102,7 +102,7 @@ def ontology_path(name: str) -> Path:
 
 
 def load_domain(name: str) -> dict:
-    """Load a domain's config and ontology. (Its live-data tools are sensors in its database.)"""
+    """Load a domain's config and ontology."""
     domain_dir = _domain_dir(name)
 
     ontology_file = domain_dir / "ontology.json"

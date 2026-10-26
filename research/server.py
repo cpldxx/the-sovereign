@@ -68,7 +68,7 @@ def _checked_on() -> str:
 
 async def _selfcheck(kg: httpx.AsyncClient) -> None:
     """The safeguards, once a local day — whatever the domains' schedules (it used to run only when some domain's
-    learning time came): a failure becomes a critical alert in every domain."""
+    learning time came): a failure is left in the Head's inbox in every domain."""
     today = datetime.now().date().isoformat()
     if _checked_on() == today:
         return
@@ -181,16 +181,14 @@ async def _cycle(d: str, slot: str) -> None:
                     summary["runs"].append(jobs.submit(d, "mission", q["question"])["id"])
         while jobs.active(d) and time.monotonic() - started < REPORT_WAIT:
             await asyncio.sleep(60)
-        # Keep and forget: live sources checked, unconfirmed weak facts retired, the Head decides the review
-        # queue — so the report shows what the graph now holds — then the briefing and the playbooks.
-        await step("sensors", "POST", f"/domains/{d}/sensors/check", lambda b: b.get("sensors"))
+        # Keep and forget: unconfirmed weak facts retired, the Head decides the review queue — so the report shows
+        # what the graph now holds — then the briefing.
         forgot = await step("forget", "POST", f"/domains/{d}/learning/forget", json={"dry_run": False})
         await step("Head reviews", "POST", f"/domains/{d}/head-review", params={"minutes": REVIEW_MINUTES})
         hours = _hours_since(previous)
         summary["reported_at"] = jobs_now()
         await step(f"report ({hours} h)", "POST", f"/domains/{d}/reports", lambda b: b.get("headline", ""),
                    json={"hours": hours, "wait": True})
-        await step("playbooks", "POST", f"/domains/{d}/playbooks/cycle", json={"hours": hours, "wait": True})
         ran = [jobs.get(j) for j in summary["runs"]]
         summary.update(
             finished_at=jobs_now(),
@@ -282,8 +280,8 @@ async def fetch_now(request: FetchRequest):
 
 @app.get("/robots")
 async def robots(url: str):
-    """Whether robots.txt lets Sovereign read this URL (and it is a public address) — sensors check API endpoints
-    with it; pages are checked by /fetch itself."""
+    """Whether robots.txt lets Sovereign read this URL (and it is a public address) — the KG's nightly self-check asks
+    it; pages are checked by /fetch itself."""
     _service_only()
     if await asyncio.to_thread(fetch.validate_public_http_url, url, allow_private_addresses=False):
         return {"allowed": False, "reason": "not a public http(s) address"}

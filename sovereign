@@ -204,8 +204,6 @@ up() {
   for m in $(printf '%s\n' "${models[@]}" | grep '^ollama:' | sed 's/^ollama://' | sort -u); do
     have "$m" || { echo "pulling model $m (once; large models take a while)…"; pull "$m"; }
   done
-  echo "building the sensor sandbox image…"
-  docker build -q -t sovereign-sandbox:5 "$ROOT/docker/sandbox" >/dev/null   # the tag in kg/core/sensors.py
   echo "building and starting the containers (the first build takes several minutes)…"
   (cd "$ROOT" && docker compose "${profiles[@]}" ${observability[@]+"${observability[@]}"} up -d --build)
   local port; port=$(env_get SOVEREIGN_PORT); port=${port:-8000}

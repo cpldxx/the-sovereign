@@ -1,10 +1,10 @@
-"""The platform around the KG: copies that must stay equal, the edge proxy, the launcher, sign-in throttling
+"""The platform around the KG: copies that must stay equal, the edge proxy, sign-in throttling
 (no services needed)."""
 
 import re
 from pathlib import Path
 
-from core import accounts, sensors
+from core import accounts
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -21,12 +21,6 @@ def test_nginx_overwrites_forwarded_for():
     conf = (ROOT / "docker/web/nginx.conf").read_text()
     assert re.search(r"proxy_set_header\s+X-Forwarded-For\s+\$remote_addr;", conf)
     assert "$proxy_add_x_forwarded_for" not in conf
-
-
-def test_launcher_builds_the_sandbox_tag_the_kg_runs():
-    """`./sovereign up` builds the image the KG's default SANDBOX_IMAGE names (a .env may override the setting)."""
-    default = re.search(r'getenv\("SANDBOX_IMAGE", "([^"]+)"\)', Path(sensors.__file__).read_text())[1]
-    assert re.findall(r"docker build .*-t (sovereign-sandbox:\S+)", (ROOT / "sovereign").read_text()) == [default]
 
 
 def test_throttle_forgets_old_keys(monkeypatch):

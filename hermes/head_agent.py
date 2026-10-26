@@ -60,7 +60,7 @@ import tools.mcp_tool as _mcp_tool  # noqa: E402
 
 # Hermes counts every tool error as a server failure and, after 3 in a row, blocks the whole KG server for 60 s.
 # A local model's argument slips (a missing field, a misplaced one) are tool errors too: measured 2026-10-13, three
-# bad propose_action calls locked the Head out of every KG tool for the rest of its turn. A really dead server still
+# bad tool calls locked the Head out of every KG tool for the rest of its turn. A really dead server still
 # trips it.
 _mcp_tool._CIRCUIT_BREAKER_THRESHOLD = 6
 _mcp_tool._CIRCUIT_BREAKER_COOLDOWN_SEC = 20.0
@@ -75,8 +75,7 @@ HEAD_THINKING = os.getenv("HEAD_THINKING", "false").strip().lower() in ("1", "tr
 # A reply that is nothing but a written-out call like `query_knowledge_graph(domain="x", ...)`.
 _TEXT_TOOL_CALL = re.compile(
     r"^\s*`*(query_knowledge_graph|get_entity|ingest_data|get_ontology|update_ontology|list_reviews|"
-    r"resolve_review|list_domains|research_status|list_research|daily_report|list_actions|"
-    r"propose_action|list_proposals|list_playbooks|list_sensors|read_sensor|web_search|read_webpage|"
+    r"resolve_review|list_domains|research_status|list_research|daily_report|web_search|read_webpage|"
     r"list_agents|assign_task|ask_agent|inbox|read_thread)"
     r"\s*\(.*\)\s*`*\s*$",
     re.S,
@@ -149,8 +148,8 @@ def _toolset_tools(toolset: str) -> list[str]:
     return registry.get_tool_names_for_toolset(toolset)
 
 
-def _domain_context(domain: str) -> tuple[str, dict, list[dict], dict]:
-    """Domain description, ontology, action catalog and team from the KG REST API."""
+def _domain_context(domain: str) -> tuple[str, dict, dict]:
+    """Domain description, ontology and team from the KG REST API."""
     with httpx.Client(base_url=KG_URL, timeout=10.0, headers=auth.headers(domain)) as client:
         r = client.get(f"/domains/{domain}")
         if r.status_code == 404:
@@ -158,13 +157,12 @@ def _domain_context(domain: str) -> tuple[str, dict, list[dict], dict]:
         r.raise_for_status()
         description = r.json()["config"].get("description") or domain
         ontology = client.get(f"/domains/{domain}/ontology").json()["ontology"]
-        actions = client.get(f"/domains/{domain}/actions").json()["actions"]
         team = client.get(f"/domains/{domain}/team").json()
-    return description, ontology, actions, team
+    return description, ontology, team
 
 
 def _team(team: dict) -> str:
-    """The roster for the prompt, like the action catalog: a local model uses what it is shown."""
+    """The roster for the prompt: a local model uses what it is shown."""
     lines = []
     for a in team.get("agents", []):
         # Shown as task name + inputs object, not as a call: written like `check(claims, …)` the model put the
@@ -177,21 +175,15 @@ def _team(team: dict) -> str:
     return "\n".join(lines)
 
 
-def _system_prompt(domain: str, description: str, ontology: dict, actions: list[dict], team: dict) -> str:
+def _system_prompt(domain: str, description: str, ontology: dict, team: dict) -> str:
     entity_types = ", ".join(ontology.get("entity_types", []))
     relation_types = ", ".join(ontology.get("relation_types", []))
-    # The catalog is in the prompt, not behind a tool call: a local model asked to "let the team know" otherwise
-    # never looks for the action that does it (measured: it wrote the message into the chat instead).
-    catalog = "\n".join(
-        f"  - {a['name']}({', '.join(p['name'] for p in a['params'])}): {a['description']}"
-        f" [{'the user confirms first' if a['confirm'] else 'runs at once'}]" for a in actions
-    )
-    return f"""You are the Head Agent of The Sovereign — an autonomous domain expert for the "{domain}" domain.
+    return f"""You are the Head Agent of The Sovereign — the lead researcher of the "{domain}" domain.
 Domain: {description}
 
-You are the CEO of a knowledge operation. You ACT through these actions — propose_action tells your Operator to
-run one, and nobody else acts:
-{catalog}
+You run a research operation: you find out what is true, keep it as checked facts with their sources, and explain
+it. You don't act in the world — no messages, orders or bookings; when asked for one, say this is a research engine
+and offer what you found instead.
 
 You lead a TEAM of agents — give them work and talk to them:
 {_team(team)}
@@ -200,8 +192,8 @@ You lead a TEAM of agents — give them work and talk to them:
   reports on a thread when it is done and you are woken to read the report and decide what follows. Long tasks
   take minutes: say you started it, don't wait. If a tool returns an error, read it and fix the call — never
   claim a connection problem the tool didn't report.
-- ask_agent(domain, agent, question) asks one of them what it knows right now (why a sensor fails, what was
-  rejected, which playbooks exist…). Use thread="…" to follow up in the same conversation.
+- ask_agent(domain, agent, question) asks one of them what it knows right now (what was rejected, which sources
+  were read, what the graph is unsure about…). Use thread="…" to follow up in the same conversation.
 - inbox(domain) holds their reports, answers and notices you haven't read{f" — {team['unread']} unread now" if team.get("unread") else ""}.
 - The graph holds FACTS only. Store what is worth keeping with ingest_data (checked against its source by the
   Validator) — never the conversation itself, never your own guesses.
@@ -219,8 +211,8 @@ How you work:
    graph has nothing relevant, say so plainly.
 2. Ground every claim in facts. Weights, evidence counts and uids are for YOU to judge how sure a fact is — the user
    never sees them: say it in words ("confirmed by three sources", "a single report", "a weak signal" for weight
-   < 0.5), name a source when it matters, and put fact uids only in a tool's `evidence` field. Use superseded facts
-   only to explain how things changed.
+   < 0.5) and name a source when it matters. Use superseded facts only to explain how things changed, and say
+   where sources disagree.
 3. When the user gives you new information worth keeping (or says "ingest this"), call ingest_data and report
    what was stored, strengthened, superseded, rejected or sent to review.
 4. Review queue: ambiguous writes wait for you (list_reviews). Decide each with resolve_review and a short
@@ -229,38 +221,24 @@ How you work:
    Use get_entity / query_knowledge_graph to check before deciding.
 5. When the graph lacks what a question needs, send the researcher: assign_task(domain, "research",
    "investigate", {{"question": …}}) reads the web and every page it reads is learned into the graph (minutes, in
-   the background; it reports back when done). Tell the user you started it. Don't wait in a loop.
-6. For "what happened / what's new / brief me", start from daily_report (written every night after research),
+   the background; it reports back when done). Tell the user you started it. Don't wait in a loop. For a broad
+   question, ask the Strategist first (assign_task(domain, "strategist", "plan", {{"n": 3}})) which questions
+   would close the graph's biggest gaps, and send the researcher on those.
+6. For "what happened / what's new / brief me", start from daily_report (written after each learning cycle),
    then drill into the graph if asked. Read it out in your own words; don't just paste it.
 7. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
    grammar cannot express it (e.g. many facts rejected for the same missing relation). Never for one fact.
-8. Acting: when the user asks you to DO something (tell / notify / send / order / create / schedule …) that an
-   action above can do, you MUST call propose_action with it — writing the message in the chat is not doing it.
-   Also act when what you find calls for it. Check the graph and the playbooks (list_playbooks: responses
-   prepared from the graph) first, then call propose_action with a rationale that cites the facts (with
-   weights) and their uids as evidence. Actions marked "runs at once" return their result (a connected
-   simulation answers right away — read it and use it). The others wait for the user to confirm them in the
-   Actions tab — say so, and never claim one was done unless its status is "executed"; the Operator reports
-   to you once it has run. You cannot confirm actions. If the knowledge is weak or stale, say so or don't act.
-   When the Watcher reports that a playbook fired, it is your call: run its action (as is, or adjusted to what
-   you know now) or let it pass, and say why. A simulation's output is your experiment, not a fact from the
-   world: store it only if it is worth keeping, as a source that says it is a simulation.
-9. Live data: the graph can be a day old. For what is true NOW (a price, today's news, a status), first read a
-   sensor (list_sensors / read_sensor — it falls back between its sources by itself; pass verify_field before
-   acting on a number). No sensor for it? Open a page that shows it with read_webpage: it is a real browser, so
-   most quote, news and official pages work — if one site refuses, try another; web_search(recent=true) finds
-   such pages. Always check right before proposing an action that depends on it. Nothing these return is stored;
-   ingest_data what is worth keeping. When the same live need keeps coming up and no sensor covers it, give the
-   Scout the need: assign_task(domain, "scout", "find_sources", {{"need": …}}).
-10. Be decisive and concrete. You act on accumulated knowledge, not on a single snapshot.
+8. What is true NOW (a price, today's news, a status) may be newer than the graph: find it with web_search
+   (recent=true) and read the page with read_webpage — a real browser, so most news, quote and official pages
+   work; if one site refuses, try another. Nothing these return is stored; ingest_data what is worth keeping.
+9. Be decisive and concrete: say what the evidence supports, how sure it is, and what is still unknown.
 
-How you write to the user (answers, and the text of alerts and drafts):
+How you write to the user:
 - In the user's language, and only that language. A question in Korean gets natural Korean from start to end —
   no Chinese characters, no Japanese, no English words where Korean has one; only proper names and product names
   stay as written (SK hynix, TSMC, HBM4).
 - No internals: no uids, weights, scores, field or tool names, JSON.
 - Call the tools you need first, then write the answer once — don't draft it before a tool call and repeat it."""
-
 
 def _unwrap(raw):
     """Tool result → parsed JSON. Hermes wraps MCP text content as {"result": "<json text>"}."""
@@ -358,9 +336,9 @@ otherwise."""
 
 READ_ONLY = """
 
-READ-ONLY: the user is a viewer of this domain. You can read the graph, reports, playbooks, proposals, sensors,
-your team's threads and the web, but you cannot change anything — no ingesting, reviews, ontology changes, tasks or
-questions for the team, or proposed actions (those tools aren't yours here). When asked for one, say that an editor
+READ-ONLY: the user is a viewer of this domain. You can read the graph, reports, your team's threads and the web,
+but you cannot change anything — no ingesting, reviews, ontology changes, or tasks and questions for the team
+(those tools aren't yours here). When asked for one, say that an editor
 of the domain has to do it."""
 
 
@@ -385,12 +363,12 @@ def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSi
                       voice: bool = False, tools: str = "head") -> AIAgent:
     """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools for that domain
     (`tools`: "head" — everything, for editors; "readonly" — for viewers)."""
-    description, ontology, actions, team = _domain_context(domain)
+    description, ontology, team = _domain_context(domain)
     toolset = connect_kg(domain, tools)
     return AIAgent(
         **_model_kwargs(),
         enabled_toolsets=[toolset],
-        ephemeral_system_prompt=(_system_prompt(domain, description, ontology, actions, team)
+        ephemeral_system_prompt=(_system_prompt(domain, description, ontology, team)
                                  + (READ_ONLY if tools == "readonly" else "") + (VOICE_MODE if voice else "")),
         max_iterations=max_iterations,
         tool_delay=0.0,
@@ -405,8 +383,7 @@ def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSi
 # The prompt asks for clean, one-language answers; these catch what a local model still lets through.
 _HANGUL = re.compile(r"[\uac00-\ud7a3]")
 _FOREIGN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")          # kana and Chinese characters
-# Uids and weights a model copied from its tools — a copy of kg/core/actions.scrub (Hermes never imports kg/; change
-# both together). Until 2026-10-14 only uids starting f_ / e_ / ep_ / thre_ / prop_ / chat_ were caught (r_, rep_,
+# Uids and weights a model copied from its tools into what a person reads. Until 2026-10-14 only uids starting f_ / e_ / ep_ / thre_ / prop_ / chat_ were caught (r_, rep_,
 # play_, sens_ … leaked) and any parenthetical naming a weight went, prose too. Uids have the KG's shape (new_uid:
 # 1-4 letters, 12 hex); a parenthetical goes only when it holds nothing but such internals.
 _UID = r"`?\b[a-z]{1,4}_[0-9a-f]{12}\b`?"

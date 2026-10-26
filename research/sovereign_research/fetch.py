@@ -117,8 +117,7 @@ async def _robots_allows(url: str) -> bool:
 
 async def robots_refusal(url: str) -> str:
     """Why robots.txt keeps us out of this URL, or "" if it doesn't. A robots.txt that couldn't be read just now is
-    worded without "robots": the KG rests a source refused by robots.txt for hours and retires it the second time
-    (core/sensors._record) — a 503 for ten minutes must not do that."""
+    worded without "robots" — a 503 for ten minutes is not a refusal."""
     parts = urlsplit(url)
     site = f"{parts.scheme}://{parts.netloc}"
     hit = _robots.get(site)

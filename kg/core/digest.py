@@ -140,8 +140,8 @@ def _plain_briefing(stats: dict) -> tuple[str, str, str]:
 
 
 async def prune_entities(db: ArcadeDB, domain: str, dry_run: bool = False) -> list[dict]:
-    """Entities no fact touches any more — except those a pending review or an active playbook still refers to
-    (the same rule as learning.forget: kgdb.referenced)."""
+    """Entities no fact touches any more — except those a pending review still refers to (the same rule as
+    learning.forget: kgdb.referenced)."""
     return await kgdb.prune_factless_entities(db, domain, await kgdb.referenced(db, domain), dry_run)
 
 

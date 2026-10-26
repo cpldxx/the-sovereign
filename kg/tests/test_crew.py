@@ -79,7 +79,7 @@ def test_the_real_roster_is_the_whole_team():
     import pkgutil
     import agents
     modules = {m.name for m in pkgutil.iter_modules(agents.__path__)}
-    # the pipeline agents are on it by name; the Scout and the Coder too; research is the DeerFlow service
+    # the pipeline agents are on it by name; research is the DeerFlow service
     assert modules <= set(crew.ROSTER) | {"__init__"}, modules - set(crew.ROSTER)
     for card in crew.roster():
         assert card["role"] and card["title"]
@@ -215,7 +215,7 @@ def test_loose_inputs_become_the_tasks_fields_and_are_still_checked():
 
 def test_an_agent_is_found_by_name_or_title():
     assert crew._member_of("The Validator").name == "validator"
-    assert crew._member_of("scout agent").name == "scout"
+    assert crew._member_of("strategist agent").name == "strategist"
     with pytest.raises(crew.CrewError):
         crew._member_of("intern")
 
@@ -263,70 +263,17 @@ def test_the_activity_feed_shows_who_works_and_what_moves():
     d = "activity_test"
     start = activity.snapshot(d)["seq"]
     with activity.working(d, "extractor", "page one"), activity.working(d, "extractor", "page two"):
-        activity.event(d, "head", "scout", "task", "find_sources: stock price")
+        activity.event(d, "head", "research", "task", "investigate: HBM supply")
         snap = activity.snapshot(d, start)
         assert snap["working"] == [{"agent": "extractor", "since": snap["working"][0]["since"],
                                     "doing": ["page one", "page two"]}]
-        assert [(e["source"], e["target"], e["kind"]) for e in snap["events"]] == [("head", "scout", "task")]
+        assert [(e["source"], e["target"], e["kind"]) for e in snap["events"]] == [("head", "research", "task")]
     after = activity.snapshot(d, snap["seq"])
     assert after["working"] == [] and after["events"] == []
 
 
 async def _quiet_desk(db, domain) -> str:
     return ""
-
-
-@pytest.fixture
-def operators(monkeypatch):
-    """The Watcher and the Operator, beside the stand-in team."""
-    monkeypatch.setitem(crew.ROSTER, "watcher", crew.Member("watcher", "Watcher", "watches playbooks", _quiet_desk))
-    monkeypatch.setitem(crew.ROSTER, "operator", crew.Member("operator", "Operator", "runs actions", _quiet_desk))
-
-
-@pytest.mark.db
-async def test_a_fired_playbook_goes_to_the_head_and_nothing_acts_on_its_own(team, operators):
-    from core import actions, playbooks
-    db, domain, woken = team
-    pb = {"uid": "pb1", "name": "HBM squeeze", "response": "warn the team"}
-    alert = {"name": "alert"}
-    out = await playbooks._escalate(db, domain, pb, alert, {"title": "HBM", "message": "prices up"},
-                                    "Playbook “HBM squeeze”: prices up 12%", ["f1"], "prices up")
-    assert out["status"] == "reported" and out["action"] == "alert"
-    assert await _until(lambda: _async(len(woken) == 1))
-    assert "playbook fired" in woken[0] and "alert(" in woken[0] and "Decide" in woken[0]
-    assert await actions.list_proposals(db, domain) == []        # the Watcher proposed nothing itself
-
-
-@pytest.mark.db
-async def test_the_operator_reports_a_confirmed_action_and_its_result_to_the_head(team, operators):
-    db, domain, woken = team
-    done = {"uid": "p1", "action": "simulate_mix", "params": {"a": "x", "b": "y"}, "status": "executed",
-            "source": "head", "result": {"status_code": 200, "response": "{\"yield\": 0.82}"}}
-    await crew.action_outcome(db, domain, done)
-    assert await _until(lambda: _async(len(woken) == 1))
-    assert "simulate_mix" in woken[0] and "0.82" in woken[0]
-    # declined: a notice, no wake; someone else's proposal: nothing
-    await crew.action_outcome(db, domain, {**done, "uid": "p2", "status": "rejected", "note": "not now"})
-    await crew.action_outcome(db, domain, {**done, "uid": "p3", "source": "user"})
-    await asyncio.sleep(0.3)
-    assert len(woken) == 1 and await crew.unread(db, domain) == 1
-
-
-@pytest.mark.db
-async def test_an_auto_connector_runs_when_the_head_says_so(db, team, monkeypatch):
-    from core import actions
-    _, domain, _ = team
-    monkeypatch.setattr(actions, "ALLOW_PRIVATE_WEBHOOKS", True)
-    await actions.add_webhook(db, domain, "simulate_mix", "Run the mixing simulation", "http://127.0.0.1:9/sim",
-                              [{"name": "first", "type": "string"}], auto=True)
-    await actions.add_webhook(db, domain, "order_parts", "Order parts", "http://127.0.0.1:9/order",
-                              [{"name": "first", "type": "string"}])
-    cat = {a["name"]: a for a in await actions.catalog(db, domain)}
-    assert cat["simulate_mix"]["confirm"] is False and cat["order_parts"]["confirm"] is True
-    ran = await actions.propose(db, domain, "simulate_mix", {"first": "x"}, "test")
-    waits = await actions.propose(db, domain, "order_parts", {"first": "x"}, "test")
-    assert ran["status"] in ("executed", "failed") and ran["decided_by"] == "auto"   # nothing listens on :9
-    assert waits["status"] == "proposed"
 
 
 @pytest.mark.db
@@ -343,20 +290,6 @@ async def test_one_review_sweep_per_domain_at_a_time(team, monkeypatch):
 
 async def _async(value):
     return value
-
-
-@pytest.mark.db
-async def test_propose_action_takes_a_rationale_tucked_into_params(db, team, monkeypatch):
-    """The local model's slip (measured 2026-10-13): rationale inside params, or none at all."""
-    from api import mcp
-    _, domain, _ = team
-    monkeypatch.setattr(mcp, "db", db)
-    monkeypatch.setattr(mcp, "_require", lambda d: None)
-    p = await mcp.propose_action(domain, "alert", {"title": "E2E", "message": "Trainium 3 is AWS-only",
-                                                               "rationale": "the graph says so", "evidence": ["f1"]})
-    assert p["status"] == "executed" and p["rationale"] == "the graph says so" and p["evidence"] == ["f1"]
-    q = await mcp.propose_action(domain, "alert", {"title": "E2E", "message": "no reason given"})
-    assert q["status"] == "executed" and q["rationale"] == "no reason given"
 
 
 @pytest.mark.db
@@ -390,17 +323,6 @@ def test_anyone_in_a_domain_may_keep_a_conversation_with_its_head():
 
 
 @pytest.mark.db
-async def test_an_alert_reads_without_uids_or_weights(db, team, monkeypatch):
-    from api import mcp
-    _, domain, _ = team
-    monkeypatch.setattr(mcp, "db", db)
-    monkeypatch.setattr(mcp, "_require", lambda d: None)
-    p = await mcp.propose_action(domain, "alert", {"title": "HBM 부족", "message":
-                                 "Micron 확인(f_fad13044abd5, weight=1.0), 2028년까지 지속, weight=0.9"}, "why", ["f_fad13044abd5"])
-    assert p["params"]["message"] == "Micron 확인, 2028년까지 지속" and p["evidence"] == ["f_fad13044abd5"]
-
-
-@pytest.mark.db
 async def test_forgetting_retires_unconfirmed_weak_facts_and_what_only_they_held(team):
     from core import learning
     db, domain, _ = team
@@ -429,12 +351,12 @@ async def test_forgetting_retires_unconfirmed_weak_facts_and_what_only_they_held
 
 @pytest.mark.db
 async def test_a_report_that_lost_the_race_for_the_wake_is_woken_after(team):
-    """A Watcher / Operator report on a thread the Head didn't open, refused while the Head was busy, gets its turn
-    once the Head is free (only Head-opened threads counted before)."""
+    """An agent's report on a thread the Head didn't open, refused while the Head was busy, gets its turn once the
+    Head is free (only Head-opened threads counted before)."""
     db, domain, woken = team
     crew._waking.add(domain)                                    # the Head is busy with another domain's turn
     try:
-        await crew.report(db, domain, "echo", "playbook fired — X", "X happened; it calls for alert(…)")
+        await crew.report(db, domain, "echo", "news — X", "X happened; decide what follows")
         await asyncio.sleep(0.3)
     finally:
         crew._waking.discard(domain)
@@ -531,130 +453,3 @@ async def test_a_background_review_sweep_runs_one_at_a_time(monkeypatch):
     await asyncio.wait_for(ran.wait(), 2)
     await asyncio.sleep(0)
     assert "rv2" not in crew._reviewing
-
-
-# ── Playbooks: live triggers, the nightly rewrite ──────────────────────────
-
-class Playbooks:
-    """Stand-ins for what check_triggers reads and writes."""
-
-    def __init__(self, monkeypatch, reading: dict, kinds: list[str]):
-        from core import playbooks, sensors
-        self.notes, self.fired = [], []
-        pb = {"uid": "play_0123456789ab", "name": "NVDA drop", "action": "alert", "evidence": [], "response": "warn",
-              "trigger": {"sensor": "quote", "params": {"symbol": "NVDA"}, "field": "change_percent", "op": "<=",
-                          "value": -5, "every_minutes": 60}}
-
-        async def list_playbooks(db, domain, status="active"):
-            return [dict(pb)]
-
-        async def read(db, domain, name, params=None, verify_field=None):
-            return reading
-
-        async def members(db, domain, name, with_code=True):
-            return [{"kind": k} for k in kinds]
-
-        async def update(db, domain, type_, uid, changes, json_fields=(), if_status=None):
-            if "trigger_checked_at" in changes:
-                self.notes.append(changes["trigger_note"])
-            return True
-
-        async def fire(db, domain, pb_, reading_, why):
-            self.fired.append(why)
-            return {"playbook": pb_["name"]}
-        monkeypatch.setattr(playbooks, "list_playbooks", list_playbooks)
-        monkeypatch.setattr(sensors, "read", read)
-        monkeypatch.setattr(sensors, "members", members)
-        monkeypatch.setattr(kgdb, "update_doc", update)
-        monkeypatch.setattr(playbooks, "_fire", fire)
-
-
-def _reading(value, **kw):
-    return {"ok": True, "result": {"change_percent": value}, "source": "a.example", **kw}
-
-
-@pytest.mark.parametrize("reading,kinds,fires,note", [
-    (_reading(-6, tier="search", confidence="one page only"), ["search"], False, "unconfirmed"),
-    (_reading(-6), ["api", "page"], False, "no second source"),
-    (_reading(-6, agreement={"other_source": "b.example", "other_value": -1.0}), ["api", "page"], False, "but"),
-    (_reading(-6, agreement={"other_source": "b.example", "other_value": -5.8}), ["api", "page"], True, None),
-    (_reading(-6), ["api"], True, "single source"),
-    (_reading(-6, tier="search", confidence="agreed by several pages"), ["search"], True, "single source"),
-    ({"ok": False, "error": "every source failed"}, ["api"], False, "read failed"),
-])
-async def test_a_live_trigger_fires_only_when_a_second_source_agrees(monkeypatch, reading, kinds, fires, note):
-    from core import playbooks
-    pb = Playbooks(monkeypatch, reading, kinds)
-    await playbooks.check_triggers(None, "d")
-    assert bool(pb.fired) is fires
-    assert (pb.notes[0] is None) if note is None else (note in pb.notes[0])
-
-
-async def test_the_watcher_does_not_evaluate_beside_the_nightly_cycle(monkeypatch):
-    from core import playbooks
-    monkeypatch.setattr(playbooks, "load_domain", lambda d: {})
-    playbooks._running.add("pbx")
-    try:
-        with pytest.raises(RuntimeError, match="running"):
-            await playbooks.check_now(None, "pbx", "2026-01-01T00:00:00+00:00")
-    finally:
-        playbooks._running.discard("pbx")
-
-
-async def test_a_trigger_without_a_live_reading_waits_for_its_meaning_check(monkeypatch):
-    from core import playbooks, sensors
-    asked = []
-
-    async def groups(db, domain):
-        return []
-
-    async def pbs(db, domain, status="active"):
-        return [{"uid": "p1", "situation": "s", "trigger": {"sensor": "q", "params": {}, "field": "price", "op": ">",
-                                                             "value": 1}, "trigger_value": None}]
-
-    async def meaning(*a):
-        asked.append(a)
-        return ""
-    monkeypatch.setattr(sensors, "groups", groups)
-    monkeypatch.setattr(playbooks, "list_playbooks", pbs)
-    monkeypatch.setattr(playbooks, "_meaning", meaning)
-    assert await playbooks.recheck_triggers(None, "d") == 0 and asked == []
-
-
-async def test_the_strategist_cannot_duplicate_or_resurrect_a_playbook(monkeypatch):
-    """A draft with no uid but an active playbook's name is that playbook; one bringing back what it retires in the
-    same answer is dropped; trigger checks (a live read + a model call) only for drafts that are written."""
-    from agents.strategist import PlaybookDraft, Playbooks as Answer, SensorTrigger
-    from core import actions as actions_mod, playbooks, sensors
-    current = [{"uid": "p_keep", "name": "HBM squeeze", "watch": [{"uid": "e_hbm", "name": "HBM"}]},
-               {"uid": "p_old", "name": "Old idea", "watch": [{"uid": "e_old", "name": "Old"}]},
-               {"uid": "p_held", "name": "Held one", "watch": [{"uid": "e_held", "name": "Held"}]}]
-    trigger = SensorTrigger(sensor="q", field="price", op=">", value=1)
-    answer = Answer(retire=["p_old"], playbooks=[
-        PlaybookDraft(name="HBM Squeeze", situation="s", watch=["HBM"], response="r", action="alert", trigger=trigger),
-        PlaybookDraft(name="Old idea again", situation="s", watch=["Old"], response="r", action="alert"),
-        PlaybookDraft(uid="p_held", name="Held one", situation="s", watch=["Held"], response="r", action="alert",
-                      trigger=trigger)])
-    writes, checked = [], []
-
-    async def returns(value):
-        return value
-    monkeypatch.setattr(playbooks, "load_domain", lambda d: {"config": {}})
-    monkeypatch.setattr(actions_mod, "catalog", lambda db, d: returns([{"name": "alert"}]))
-    monkeypatch.setattr(playbooks, "list_playbooks", lambda db, d: returns([dict(p) for p in current]))
-    monkeypatch.setattr(sensors, "groups", lambda db, d: returns([]))
-    monkeypatch.setattr(playbooks, "_context", lambda *a: returns(""))
-    monkeypatch.setattr(playbooks, "write_playbooks", lambda ctx: returns(answer))
-    monkeypatch.setattr(playbooks, "_moved", lambda db, d, pb: returns(pb["uid"] != "p_held"))
-    monkeypatch.setattr(kgdb, "entities_by_keys", lambda db, d, keys: returns(
-        [{"uid": f"e_{keys[0]}", "name": keys[0]}]))
-    monkeypatch.setattr(kgdb, "get_facts", lambda db, d, uids: returns([]))
-    monkeypatch.setattr(playbooks, "set_status", lambda db, d, uid, status: returns(writes.append(("retire", uid))))
-    monkeypatch.setattr(kgdb, "update_doc", lambda db, d, t, uid, doc, *a, **kw: returns(writes.append(("update", uid))))
-    monkeypatch.setattr(kgdb, "insert_doc", lambda db, d, t, doc, *a: returns(writes.append(("insert", doc["name"]))))
-    monkeypatch.setattr(playbooks, "_check_trigger", lambda *a: returns(checked.append(a[-1]) or (None, "no")))
-    monkeypatch.setattr(playbooks, "recheck_triggers", lambda db, d: returns(0))
-    monkeypatch.setattr(playbooks, "_add_triggers", lambda db, d, s: returns(0))
-    counts = await playbooks._refresh(None, "d")
-    assert writes == [("retire", "p_old"), ("update", "p_keep")], writes
-    assert counts["held"] == 1 and counts["created"] == 0 and len(checked) == 1

@@ -9,9 +9,7 @@ import { GraphPane } from './components/GraphPane';
 import { EntityPanel } from './components/EntityPanel';
 import { Welcome } from './components/Welcome';
 import { AskPanel } from './panels/AskPanel';
-import { PendingActions } from './panels/ActionsPanel';
-import { BriefingPanel, type BriefingView } from './panels/BriefingPanel';
-import { AlertToasts } from './components/AlertToasts';
+import { BriefingPanel } from './panels/BriefingPanel';
 import { SettingsPanel } from './panels/SettingsPanel';
 
 // Three tabs: you talk to the Head (and confirm what it wants to do), read what happened, and set things up. The rest
@@ -99,10 +97,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('head');
-  const [briefing, setBriefing] = useState<BriefingView>('report');
-  const openDone = useCallback(() => { setTab('briefing'); setBriefing('activity'); }, []);
   const [version, setVersion] = useState(0);  // bumps on every reload, so open panels refetch
-  const [pendingActions, setPendingActions] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const loadDomains = useCallback(async () => {
@@ -270,34 +265,28 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                       }`}
                     >
                       <Icon size={13} className="shrink-0" /> {label}
-                      {id === 'head' && pendingActions > 0 && (
-                        <span className="rounded-full bg-accent px-1.5 font-mono text-[9.5px] text-black" title="Waiting for your confirmation">{pendingActions}</span>
-                      )}
                     </button>
                   ))}
                 </nav>
                 <div className="min-h-0 flex-1">
                   {/* Panels stay mounted so a running chat survives tab switches. */}
                   <div className={tab === 'head' ? 'flex h-full flex-col' : 'hidden'}>
-                    <PendingActions key={active} domain={active} role={detail.role} version={version} onSelect={setSelected} onPending={setPendingActions} />
                     <div className="min-h-0 flex-1">
                       <AskPanel key={active} domain={active} canIngest={can(detail.role, 'editor')} onKnowledgeChanged={refresh} onHighlight={setHighlight}
-                        ontologyReady={detail.ontology_generated} onOpenBriefing={openDone} />
+                        ontologyReady={detail.ontology_generated} />
                     </div>
                   </div>
                   <div className={tab === 'briefing' ? 'h-full' : 'hidden'}>
-                    <BriefingPanel key={active} domain={active} role={detail.role} version={version} view={briefing} onView={setBriefing}
-                      onHighlight={setHighlight}
-                      onSelect={setSelected} onPending={setPendingActions} />
+                    <BriefingPanel key={active} domain={active} role={detail.role} version={version}
+                      onHighlight={setHighlight} onSelect={setSelected} />
                   </div>
                   <div className={tab === 'settings' ? 'h-full' : 'hidden'}>
                     <SettingsPanel key={active} domain={active} detail={detail} ontology={ontology} version={version}
-                      onSelect={setSelected} onHighlight={setHighlight} onPending={setPendingActions} onChanged={refresh}
+                      onChanged={refresh}
                       onOntologyChanged={async () => { await refresh(); await loadDomains(); }} />
                   </div>
                 </div>
               </aside>
-              <AlertToasts key={active} domain={active} onOpen={openDone} />
             </div>
           </>
         )}

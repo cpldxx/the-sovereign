@@ -11,10 +11,6 @@ One ArcadeDB database per domain:
     ReviewItem (document) uid, kind, status, summary, payload (JSON), created_at, resolved_at, resolution
     Report     (document) uid, kind, period_start, period_end, created_at, headline, briefing, spoken,
                           stats (JSON), digest (JSON)
-    Action     (document) a user-configured external action (webhook): name, description, url, params (JSON)…
-    Proposal   (document) an action someone wants taken: action, params, rationale, status, result…
-    Playbook   (document) a pre-computed "if this happens, do that" rule derived from the graph
-    Sensor     (document) a live-data tool: name, description, params, code, last run…
     ChatTurn   (document) one side of a person's conversation with the Head (core/chat.py)
     Setting    (document) a domain setting by key, e.g. "learning" (core/learning.py)
 
@@ -66,18 +62,6 @@ CREATE INDEX IF NOT EXISTS ON ReviewItem (uid) UNIQUE;
 CREATE DOCUMENT TYPE Report IF NOT EXISTS;
 CREATE PROPERTY Report.uid IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Report (uid) UNIQUE;
-CREATE DOCUMENT TYPE Action IF NOT EXISTS;
-CREATE PROPERTY Action.uid IF NOT EXISTS STRING;
-CREATE INDEX IF NOT EXISTS ON Action (uid) UNIQUE;
-CREATE DOCUMENT TYPE Proposal IF NOT EXISTS;
-CREATE PROPERTY Proposal.uid IF NOT EXISTS STRING;
-CREATE INDEX IF NOT EXISTS ON Proposal (uid) UNIQUE;
-CREATE DOCUMENT TYPE Playbook IF NOT EXISTS;
-CREATE PROPERTY Playbook.uid IF NOT EXISTS STRING;
-CREATE INDEX IF NOT EXISTS ON Playbook (uid) UNIQUE;
-CREATE DOCUMENT TYPE Sensor IF NOT EXISTS;
-CREATE PROPERTY Sensor.uid IF NOT EXISTS STRING;
-CREATE INDEX IF NOT EXISTS ON Sensor (uid) UNIQUE;
 CREATE DOCUMENT TYPE Thread IF NOT EXISTS;
 CREATE PROPERTY Thread.uid IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON Thread (uid) UNIQUE;
@@ -464,7 +448,7 @@ async def repair_name_keys(db: ArcadeDB, domain: str) -> int:
 async def prune_factless_entities(db: ArcadeDB, domain: str, keep: set[str] = frozenset(),
                                   dry_run: bool = False) -> list[dict]:
     """Delete the entities no fact touches any more (a weak fact rejected in review, a merge, older ingests that
-    stored every name) — except those in `keep` (pending reviews, playbooks). Returns what was (or would be)
+    stored every name) — except those in `keep` (pending reviews). Returns what was (or would be)
     deleted, enough to restore it: the entity's fields and the episodes that mentioned it."""
     if not await db.exists(domain):
         return []
@@ -487,7 +471,7 @@ _ENTITY_REFS = ("entity", "candidate", "source", "target")   # review payload fi
 
 async def merge_entities(db: ArcadeDB, domain: str, duplicate_uid: str, into_uid: str) -> None:
     """Fold a duplicate entity into another: names, mentions and every fact move over — each fact keeps its uid,
-    embedding and every property, so links, playbooks and reviews that cite it still find it. Pending reviews that
+    embedding and every property, so links and reviews that cite it still find it. Pending reviews that
     name the duplicate are pointed at the survivor. ValueError when the survivor is gone (the review stays)."""
     if duplicate_uid == into_uid:
         raise ValueError(f"Cannot merge {into_uid} into itself")
@@ -525,22 +509,7 @@ async def merge_entities(db: ArcadeDB, domain: str, duplicate_uid: str, into_uid
         )
     await db.cypher(domain, "MATCH (d:Entity {uid: $d}) DETACH DELETE d", d=duplicate_uid)
     await _rehome_reviews(db, domain, duplicate_uid, into[0])
-    await _rehome_playbooks(db, domain, duplicate_uid, into[0])
 
-
-async def _rehome_playbooks(db: ArcadeDB, domain: str, duplicate_uid: str, into: dict) -> None:
-    """Playbooks watching a merged-away entity watch the survivor instead — else the Watcher never sees its facts
-    again (their evidence facts keep their uids, so only `watch` needs it)."""
-    for pb in await find_docs(db, domain, "Playbook", ("watch",), limit=10000):
-        watch = pb.get("watch") or []
-        if not any(isinstance(w, dict) and w.get("uid") == duplicate_uid for w in watch):
-            continue
-        moved = []
-        for w in watch:
-            w = {"uid": into["uid"], "name": into["name"]} if w.get("uid") == duplicate_uid else w
-            if all(m.get("uid") != w.get("uid") for m in moved):
-                moved.append(w)
-        await update_doc(db, domain, "Playbook", pb["uid"], {"watch": moved}, ("watch",))
 
 
 async def _rehome_reviews(db: ArcadeDB, domain: str, duplicate_uid: str, into: dict) -> None:
@@ -734,8 +703,7 @@ async def close_review(db: ArcadeDB, domain: str, uid: str, status: str, resolut
 
 async def referenced(db: ArcadeDB, domain: str) -> set[str]:
     """Every uid something still relies on: any value, however nested, of a pending review's payload (entity and
-    fact uids, `supersedes`, `existing[].uid` …) and the evidence facts and watched entities of active playbooks.
-    Pruning and forgetting spare these."""
+    fact uids, `supersedes`, `existing[].uid` …). Pruning and forgetting spare these."""
     keep: set[str] = set()
 
     def walk(v) -> None:
@@ -749,10 +717,6 @@ async def referenced(db: ArcadeDB, domain: str) -> set[str]:
                 walk(x)
     for r in await list_reviews(db, domain, limit=100000):
         walk(r.get("payload") or {})
-    for pb in await find_docs(db, domain, "Playbook", ("watch", "evidence", "trigger"), "status = 'active'",
-                              limit=10000):
-        keep |= {u for u in pb.get("evidence") or [] if isinstance(u, str)}
-        keep |= {w["uid"] for w in pb.get("watch") or [] if isinstance(w, dict) and w.get("uid")}
     return keep
 
 
@@ -915,7 +879,7 @@ async def get_report(db: ArcadeDB, domain: str, uid: str) -> dict | None:
     return _report(rows[0], full=True) if rows else None
 
 
-# ── Documents: actions, proposals, playbooks, sensors ──────────────────────
+# ── Documents ──────────────────────────────────────────────────────────────
 # Type and column names come from code, never from input. Nested values (params, results, evidence) are
 # stored as JSON strings, like ReviewItem.payload; `json_fields` names them for encoding and decoding.
 
@@ -957,8 +921,8 @@ async def get_doc(db: ArcadeDB, domain: str, type_: str, uid: str, json_fields: 
 
 async def update_doc(db: ArcadeDB, domain: str, type_: str, uid: str, changes: dict,
                      json_fields: tuple[str, ...] = (), if_status: str | None = None) -> bool:
-    """Apply changes; with `if_status`, only while the document still has that status (atomic: a proposal
-    is executed once even if confirmed twice). True if a document changed."""
+    """Apply changes; with `if_status`, only while the document still has that status (atomic: of two
+    concurrent claims, only one changes it). True if a document changed."""
     sets = ", ".join(f"`{k}` = :set_{k}" for k in changes)  # quoted + prefixed, as in insert_doc
     cond = "uid = :uid" + (" AND status = :if_status" if if_status else "")
     params = {f"set_{k}": v for k, v in _encode(changes, json_fields).items()}
