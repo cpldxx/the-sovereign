@@ -25,7 +25,7 @@ from functools import lru_cache
 from pydantic_ai import Agent
 
 from agents.extractor import STATE, extract, relate
-from agents.linker import link
+from agents.linker import link, link_or_none
 from agents.resolver import resolve
 from agents.validator import judge
 from core import activity, sources
@@ -593,7 +593,8 @@ async def _write_chunk(db, domain, r: _Read, source, episode_uid, report: Report
         candidates = []
         for f in commit:
             f["source_uid"], f["target_uid"] = uid_of[f["source"]], uid_of[f["target"]]
-            cands = await kgdb.fact_candidates(db, domain, f["source_uid"], f["relation"], f["target_uid"])
+            cands = await kgdb.fact_candidates(db, domain, f["source_uid"], f["relation"], f["target_uid"],
+                                               f["embedding"])
             if f["embedding"]:
                 seen = {c["uid"] for c in cands}
                 cands += [c for c in await kgdb.search_facts(db, domain, f["embedding"], 5)
@@ -751,6 +752,45 @@ async def relink_states(db: ArcadeDB, domain: str, dry_run: bool = False, batch:
                             u=[st["uid"] for st, _ in part if st["uid"] not in unread])
     return {"dry_run": dry_run, "statements": len(asks), "proposed": proposed, "added": len(added),
             "skipped": dict(skipped), "facts": added}
+
+
+async def recheck_superseded(db: ArcadeDB, domain: str, dry_run: bool = False, batch: int = 10) -> dict:
+    """Supersessions asked of the Linker again — each new fact beside the facts it replaced — and the ones it makes no
+    more are undone: that old fact is valid again. Until 2026-10-28 every state of an entity was a candidate for each
+    new one, and most of what that superseded was still true (kgdb.fact_candidates). Each superseded fact is asked
+    once (`rechecked`); a batch the model fails on is asked next time. One kept as a restatement stays superseded."""
+    await kgdb.ensure_domain_db(db, domain)
+    rows = await db.cypher(domain, "MATCH ()-[r:Fact]->() WHERE r.invalid_reason STARTS WITH 'superseded by f_' "
+                                   "AND r.rechecked IS NULL RETURN r.uid AS uid, r.fact AS fact, r.invalid_reason AS why")
+    by_new: dict[str, list[dict]] = {}
+    for r in rows:
+        if m := re.match(r"superseded by (f_\w+)", r["why"]):
+            by_new.setdefault(m[1], []).append(r)
+    news = {f["uid"]: f for f in await kgdb.get_facts(db, domain, list(by_new))}
+    asks = [(news[u], olds) for u, olds in by_new.items() if u in news]
+    restored, kept, unread = [], 0, 0
+    for i in range(0, len(asks), batch):
+        part = asks[i:i + batch]
+        links = await link_or_none([{"fact": new["fact"], "candidates": olds} for new, olds in part])
+        if links is None:
+            unread += sum(len(olds) for _, olds in part)
+            continue
+        back = []
+        for (new, olds), lk in zip(part, links):
+            for old in olds:
+                if old["uid"] in lk.supersedes or old["uid"] == lk.same_as:
+                    kept += 1
+                else:
+                    back.append(old["uid"])
+                    restored.append({"uid": old["uid"], "fact": old["fact"], "was_superseded_by": new["fact"]})
+        if dry_run:
+            continue
+        await db.cypher(domain, "MATCH ()-[r:Fact]->() WHERE r.uid IN $u "
+                                "SET r.invalid_at = null, r.invalid_reason = null", u=back)
+        await db.cypher(domain, "MATCH ()-[r:Fact]->() WHERE r.uid IN $u SET r.rechecked = true",
+                        u=[old["uid"] for _, olds in part for old in olds])
+    return {"dry_run": dry_run, "superseded": len(rows), "restored": len(restored), "kept": kept,
+            "not_checked": len(rows) - len(restored) - kept, "model_failed": unread, "facts": restored}
 
 
 async def resolve_review(db: ArcadeDB, domain: str, review_uid: str, approve: bool, note: str = "") -> dict:

@@ -49,8 +49,13 @@ SYSTEM = """You are the Sovereign's Linker. For each NEW fact, compare it with i
 - same_as: the uid of an existing fact that says the same thing — a restatement, possibly worded differently
   or with a little more or less detail, but no different in substance. At most one.
 - supersedes: uids of existing facts that the new fact shows are NO LONGER TRUE — a newer value of the same
-  quantity, a changed status, a reversal, a cancelled plan.
-- Facts that are merely related, or that can both be true at once → neither.
+  quantity, a changed status, a reversal, a cancelled plan. Only when the two cannot both be true: the same
+  measure of the same thing (same period, same scope) with another value, or the same status changed. The new
+  fact must be the later one: when both are dated, one about an earlier date never supersedes one about a later date.
+- Facts that are merely related, or that can both be true at once → neither. Another measure (one quarter vs
+  six months, a share vs a count), another part, another property of the same thing is not an update:
+  "The museum opened in 1902" and "The museum holds 40,000 works" are both true. Most new facts supersede
+  nothing.
 - If you are not sure about a same_as or supersedes decision, still give it and set confident = false.
 Return one link per new fact, with its index."""
 
@@ -60,6 +65,11 @@ _agent = Agent(MODEL, name="linker", model_settings=model_settings(decisive=True
 
 async def link(items: list[dict]) -> list[Link]:
     """items: [{"fact": str, "candidates": [{"uid", "fact"}]}]. Never raises: on failure nothing links."""
+    return await link_or_none(items) or [Link(index=i) for i in range(len(items))]
+
+
+async def link_or_none(items: list[dict]) -> list[Link] | None:
+    """link — but None when the model failed, for a caller that must not take a failure for "no link"."""
     if not items:
         return []
     blocks = []
@@ -70,7 +80,7 @@ async def link(items: list[dict]) -> list[Link]:
         found = {lk.index: lk for lk in (await _agent.run("\n\n".join(blocks))).output.links}
     except Exception as e:
         print(f"[Linker] failed: {type(e).__name__}: {e}", flush=True)
-        found = {}
+        return None
     out = []
     for i, it in enumerate(items):
         allowed = {c["uid"] for c in it["candidates"]}

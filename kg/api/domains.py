@@ -180,3 +180,11 @@ async def api_relink(domain_name: str, req: Request, dry_run: bool = True, uncon
         return await kg.relink_states(req.app.state.db, domain_name, dry_run, unconnected_only=unconnected_only)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{domain_name}/recheck-superseded")
+async def api_recheck_superseded(domain_name: str, req: Request, dry_run: bool = True):
+    """Superseded facts asked of the Linker again, beside the fact that replaced them; the ones it finds still true
+    are valid again. dry_run (the default) only lists them. One model call per ten new facts. Owner only."""
+    auth.require(domain_name, "owner")
+    return await kg.recheck_superseded(req.app.state.db, domain_name, dry_run)

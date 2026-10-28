@@ -1,5 +1,6 @@
 """Ingest that fails is read again, a page read twice is one source, decisions on vanished entities wait, names are
-found as words, and a query's sources follow its facts. Stand-in agents; db tests use a throwaway domain."""
+found as words, a query's sources follow its facts, and a state is compared only with states like it. Stand-in
+agents; db tests use a throwaway domain."""
 
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -264,3 +265,44 @@ async def test_a_fact_whose_entity_vanished_while_writing_is_rejected(domain, mo
     r = await kg.ingest(db, name, TEXT, source="t")
     assert r["facts_created"] == 0 and not r["failed"]
     assert [f["reason"] for f in r["facts"] if f["status"] == "rejected"] == ["endpoint vanished"]
+
+
+# ── Supersession ───────────────────────────────────────────────────────────
+
+@pytest.mark.db
+async def test_a_state_is_compared_only_with_the_states_near_it_in_meaning(domain):
+    db, name = domain
+    for uid, n in (("e_a", "Alpha"), ("e_b", "Beta")):
+        await kgdb.create_entity(db, name, {"uid": uid, "name": n, "type": "entity", "keys": [n.lower()]}, None)
+    sold = await kgdb.create_fact(db, name, "e_a", "has_state", "e_a", "Alpha is sold out.", [1.0, 0.0, 0.0], "ep", 0.9)
+    await kgdb.create_fact(db, name, "e_a", "has_state", "e_a", "Alpha opened in 1902.", [0.0, 1.0, 0.0], "ep", 0.9)
+    enables = await kgdb.create_fact(db, name, "e_a", "enables", "e_b", "Alpha enables Beta.", None, "ep", 0.9)
+    near = await kgdb.fact_candidates(db, name, "e_a", "has_state", "e_a", [0.9, 0.2, 0.0])
+    assert [c["uid"] for c in near] == [sold]
+    assert await kgdb.fact_candidates(db, name, "e_a", "has_state", "e_a") == []
+    assert [c["uid"] for c in await kgdb.fact_candidates(db, name, "e_a", "enables", "e_b")] == [enables]
+
+
+@pytest.mark.db
+async def test_a_supersession_the_linker_makes_no_more_is_undone_once(domain, monkeypatch):
+    db, name = domain
+    await kgdb.create_entity(db, name, {"uid": "e_a", "name": "Alpha", "type": "entity", "keys": ["alpha"]}, None)
+    old = [await kgdb.create_fact(db, name, "e_a", "has_state", "e_a", t, None, "ep", 0.9)
+           for t in ("Alpha is sold out.", "Alpha opened in 1902.")]
+    new = await kgdb.create_fact(db, name, "e_a", "has_state", "e_a", "Alpha has stock again.", None, "ep", 0.9)
+    for f in old:
+        await kgdb.invalidate_fact(db, name, "has_state", f, f"superseded by {new}: Alpha has stock again.")
+    asked = []
+
+    async def link_or_none(items):
+        asked.append(items)
+        return None if len(asked) == 1 else [Link(index=0, supersedes=[old[0]])]   # the model fails the first time
+    monkeypatch.setattr(kg, "link_or_none", link_or_none)
+    r = await kg.recheck_superseded(db, name)
+    assert (r["restored"], r["model_failed"]) == (0, 2)
+    r = await kg.recheck_superseded(db, name)
+    assert sorted(c["fact"] for c in asked[1][0]["candidates"]) == ["Alpha is sold out.", "Alpha opened in 1902."]
+    assert (r["restored"], r["kept"], r["facts"][0]["fact"]) == (1, 1, "Alpha opened in 1902.")
+    valid = {f["uid"]: f["valid"] for f in await kgdb.get_facts(db, name, old)}
+    assert valid == {old[0]: False, old[1]: True}
+    assert (await kg.recheck_superseded(db, name))["superseded"] == 0 and len(asked) == 2    # each asked once

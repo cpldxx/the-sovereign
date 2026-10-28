@@ -21,6 +21,7 @@ Superseded facts are not deleted: `invalid_at` is set, and they stay visible as 
 """
 
 import json
+import math
 import os
 import re
 import uuid
@@ -41,6 +42,7 @@ DB_PASS = os.getenv("ARCADEDB_PASS", "sovereign_pass")
 
 ENTITY_INDEX = "Entity[embedding]"
 STATE = "has_state"  # built-in relation for facts about a single entity (self-loop)
+STATE_SIMILARITY = 0.55  # an entity's states this similar to a new one are compared with it (fact_candidates)
 _NON_IDENT = re.compile(r"[^A-Za-z0-9_]+")
 
 _SCHEMA = """
@@ -149,6 +151,11 @@ def _tiered(rows: list[dict]) -> list[dict]:
     for r in rows:
         r["tier"] = r.get("tier") or tier_of(r.get("source") or "")
     return rows
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
+    return sum(x * y for x, y in zip(a, b)) / norm if norm else 0.0
 
 
 def _fact(row: dict) -> dict:
@@ -409,9 +416,24 @@ async def invalidate_fact(db: ArcadeDB, domain: str, relation: str, fact_uid: st
     )
 
 
-async def fact_candidates(db: ArcadeDB, domain: str, source_uid: str, relation: str, target_uid: str) -> list[dict]:
+async def fact_candidates(db: ArcadeDB, domain: str, source_uid: str, relation: str, target_uid: str,
+                          embedding: list[float] | None = None) -> list[dict]:
     """Existing valid facts a new fact could restate or contradict: any fact between the same two
-    entities, or the same subject with the same relation (e.g. an older value of the same state)."""
+    entities, or the same subject with the same relation.
+    A state (a fact about one entity) is the exception: every statement about the entity would qualify, and the
+    Linker read a new one as the newer value of all of them — one superseded eight unrelated facts about the same
+    country (2026-10-28; 429 of the 594 supersessions in neuron_test were such). Its candidates are the entity's
+    states near it in meaning (`embedding`), the way a status and its change are ("…is sold out" / "…has stock
+    again" ~0.66; the wrongly superseded mostly below 0.55); none without an embedding."""
+    if source_uid == target_uid:
+        if not embedding:
+            return []
+        rows = await db.cypher(domain, "MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE r.invalid_at IS NULL "
+                                       f"AND a.uid = $s AND b.uid = $s RETURN {_FACT_COLUMNS}, r.embedding AS embedding",
+                               s=source_uid)
+        near = sorted(((_cosine(embedding, r.pop("embedding")), r) for r in rows if r.get("embedding")),
+                      key=lambda x: -x[0])
+        return [{**_fact(r), "similarity": round(s, 4)} for s, r in near[:8] if s >= STATE_SIMILARITY]
     rows = await db.cypher(
         domain,
         "MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE r.invalid_at IS NULL AND ("
