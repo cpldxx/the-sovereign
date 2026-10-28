@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from core import database as kgdb
-from core import kg
+from core import exam, kg
 from domains.registry import load_domain
 
 router = APIRouter(prefix="/domains", tags=["entities"])
@@ -48,6 +48,10 @@ class SourcesRequest(BaseModel):
 
 @router.post("/{domain_name}/sources")
 async def known_sources(domain_name: str, request: SourcesRequest, req: Request):
-    """Which of these URLs the graph has already read in full — research skips them. A failed read is not known."""
+    """Which of these URLs research should skip: those the graph has already read in full, and the exam's sources —
+    held out, so the graph learns the exam's answers elsewhere (core/exam.py). A failed read is not known."""
     _require(domain_name)
-    return {"known": await kg.known_sources(req.app.state.db, domain_name, request.urls)}
+    db = req.app.state.db
+    held = await exam.held_out(db, domain_name)
+    read = set(await kg.known_sources(db, domain_name, request.urls))
+    return {"known": [u for u in dict.fromkeys(request.urls) if u in read or u in held]}

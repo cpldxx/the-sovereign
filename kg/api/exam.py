@@ -37,10 +37,22 @@ async def api_sit(domain_name: str, req: Request, body: Sit | None = None):
     if body.wait:
         try:
             return await exam.take(db, domain_name, body.fresh)
-        except RuntimeError as e:
+        except exam.Busy as e:
             raise HTTPException(status_code=409, detail=str(e))
         except exam.ExamError as e:
             raise HTTPException(status_code=422, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"The exam failed: {type(e).__name__}: {e}")
     if not exam.start(db, domain_name, body.fresh):
         return {"busy": True}
     return JSONResponse({"started": True}, status_code=202)
+
+
+@router.delete("/domains/{domain_name}/exam/questions/{qid}")
+async def api_remove(domain_name: str, qid: str, req: Request):
+    """Drop a question that is off the mark: a new version of the exam without it (the score starts a new series)."""
+    auth.require(domain_name, "editor")
+    try:
+        return await exam.remove(req.app.state.db, domain_name, qid)
+    except exam.ExamError as e:
+        raise HTTPException(status_code=422, detail=str(e))

@@ -324,6 +324,8 @@ async def exam_results(domain: str) -> dict:
             "sittings": len(same), "answered": run["answered"], "partial": run["partial"], "open": run["open"],
             "cores": [{k: c[k] for k in ("question", "score", "status")} for c in run["cores"]],
             "open_questions": [x["question"] for x in run["items"] if x["points"] == 0][:10],
+            "contradicted": [{"question": x["question"], "source_says": x.get("reference"), "graph_says": x["answer"]}
+                             for x in run["items"] if x.get("conflict")][:5],
             "running": exam.running(domain)}
 
 

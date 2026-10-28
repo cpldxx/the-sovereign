@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronRight, Circle, CircleDot, Loader2, Play } from 'lucide-react';
+import { Check, ChevronDown, ChevronRight, Circle, CircleDashed, CircleDot, ExternalLink, Loader2, Play, TriangleAlert, X } from 'lucide-react';
 import { kg, type ExamCore, type ExamItem, type ExamSitting, type ExamState } from '../lib/api';
 
 const day = (iso: string) => new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric' });
@@ -84,7 +84,10 @@ const STATUS = {
   answered: { icon: Check, label: 'answered' },
   partial: { icon: CircleDot, label: 'partial' },
   open: { icon: Circle, label: 'open' },
+  unset: { icon: CircleDashed, label: 'no source' },
 } as const;
+
+const host = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
 
 function Points({ points }: { points: ExamItem['points'] }) {
   return (
@@ -94,38 +97,61 @@ function Points({ points }: { points: ExamItem['points'] }) {
   );
 }
 
-/** One core question: its score as a bar, its state in words, and — opened — each exam question with the graph's answer. */
-function Core({ core, items }: { core: ExamCore; items: ExamItem[] }) {
+/** One core question: its score as a bar, its state in words, and — opened — each exam question: the answer its
+ * source gives, and what the graph answers. */
+function Core({ core, items, onRemove }: { core: ExamCore; items: ExamItem[]; onRemove?: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const { icon: Icon, label } = STATUS[core.status];
   return (
     <li className="space-y-1.5">
-      <button onClick={() => setOpen(o => !o)} className="flex w-full items-start gap-2 text-left">
-        {open ? <ChevronDown size={12} className="mt-0.5 shrink-0 text-faint" /> : <ChevronRight size={12} className="mt-0.5 shrink-0 text-faint" />}
+      <button onClick={() => setOpen(o => !o)} disabled={!items.length} className="flex w-full items-start gap-2 text-left">
+        {!items.length ? <span className="w-3 shrink-0" />
+          : open ? <ChevronDown size={12} className="mt-0.5 shrink-0 text-faint" /> : <ChevronRight size={12} className="mt-0.5 shrink-0 text-faint" />}
         <span className="min-w-0 flex-1 space-y-1">
           <span className="block leading-snug text-ink">{core.question}</span>
-          <span className="flex items-center gap-2">
-            <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-line">
-              <span className="block h-1.5 rounded-full bg-accent" style={{ width: `${core.score}%` }} />
+          {core.score === null ? (
+            <span className="block text-[10.5px] text-faint">No authoritative source was found to write its questions from yet — the next set of questions tries again.</span>
+          ) : (
+            <span className="flex items-center gap-2">
+              <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-line">
+                <span className="block h-1.5 rounded-full bg-accent" style={{ width: `${core.score}%` }} />
+              </span>
+              <span className="w-7 text-right font-mono text-[11px] text-ink">{core.score}</span>
+              <span className="flex w-[72px] items-center gap-1 text-[10.5px] text-dim"><Icon size={11} />{label}</span>
             </span>
-            <span className="w-7 text-right font-mono text-[11px] text-ink">{core.score}</span>
-            <span className="flex w-[72px] items-center gap-1 text-[10.5px] text-dim"><Icon size={11} />{label}</span>
-          </span>
+          )}
         </span>
       </button>
       {open && (
-        <ul className="space-y-2 pl-5">
+        <ul className="space-y-2.5 pl-5">
           {items.map(x => (
             <li key={x.id} className="flex gap-2">
               <Points points={x.points} />
-              <div className="min-w-0 space-y-0.5">
+              <div className="min-w-0 flex-1 space-y-0.5">
                 <p className="leading-snug text-dim">
                   {x.tier && <span className="mr-1.5 font-mono text-[9.5px] tracking-wider text-faint uppercase">{x.tier}</span>}{x.question}
                 </p>
-                <p className="text-[11.5px] leading-snug text-faint">{x.answer}
+                {x.reference && (
+                  <p className="text-[11.5px] leading-snug text-faint">
+                    <span className="text-dim">Source says:</span> {x.reference}
+                    {x.source && (
+                      <a href={x.source.url} target="_blank" rel="noreferrer" title={x.source.title || x.source.url}
+                        className="ml-1 inline-flex items-center gap-0.5 underline hover:text-ink">{host(x.source.url)}<ExternalLink size={9} /></a>
+                    )}
+                  </p>
+                )}
+                <p className="text-[11.5px] leading-snug text-faint">
+                  <span className="text-dim">Graph says:</span> {x.answer}
                   {x.points > 0 && x.sources > 0 && <span> · {x.sources} source{x.sources === 1 ? '' : 's'}{x.well_sourced ? ', confirmed' : ''}</span>}
                 </p>
+                {x.conflict && (
+                  <p className="flex items-center gap-1 text-[10.5px] text-ink"><TriangleAlert size={11} /> The graph contradicts the source — worth a look</p>
+                )}
               </div>
+              {onRemove && (
+                <button onClick={() => { if (confirm('Drop this question from the exam? The score starts a new series.')) onRemove(x.id); }}
+                  className="h-fit shrink-0 rounded p-0.5 text-faint hover:text-ink" title="Drop this question (off the mark)"><X size={11} /></button>
+              )}
             </li>
           ))}
         </ul>
@@ -172,6 +198,15 @@ export function GrowthPanel({ domain, editable, version }: { domain: string; edi
     }
   }
 
+  async function remove(qid: string) {
+    try {
+      await kg.removeExamQuestion(domain, qid);
+      await take();   // the new version's first sitting: its score starts the new series
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
   if (!state) return <div className="p-4 text-xs text-faint">{error ?? 'Loading…'}</div>;
   const run = state.latest;
   const current = run ? state.history.filter(h => h.version === run.version) : [];
@@ -182,8 +217,9 @@ export function GrowthPanel({ domain, editable, version }: { domain: string; edi
   return (
     <div className="h-full space-y-5 overflow-y-auto p-4 text-[12px]">
       <p className="leading-snug text-dim">
-        How much of your research charter this domain can answer. After every learning cycle it sits an exam drawn from
-        the charter and answers each question from the knowledge graph alone — what the model knows by itself earns nothing.
+        How much of your research charter this domain can answer. Its exam is written from authoritative sources — papers,
+        official documents — that research never reads, and after every learning cycle the graph answers it from its own
+        facts alone: what the model knows by itself earns nothing.
       </p>
       {error && <p className="text-xs text-bad">{error}</p>}
 
@@ -192,7 +228,8 @@ export function GrowthPanel({ domain, editable, version }: { domain: string; edi
           <p className="text-ink">{state.running ? 'Taking the first exam…' : 'No exam yet.'}</p>
           <p className="text-dim">{state.exam || state.running
             ? 'The first sitting is the baseline: what the graph knows before research builds on it.'
-            : 'The exam is drawn from the research charter (Settings › Charter). Once it exists, the exam is taken after each learning cycle.'}</p>
+            : 'The exam is drawn from the research charter (Settings › Charter). Once it exists, the exam is taken after each learning cycle.'}
+            {' '}Writing it means finding and reading a source for each core question: several minutes with a local model.</p>
           {editable && !state.running && (
             <button onClick={() => void take()} disabled={starting} className="flex items-center gap-1.5 rounded-md border border-line-2 px-3 py-1.5 text-dim hover:text-ink disabled:opacity-50">
               {starting ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Take it now
@@ -220,6 +257,7 @@ export function GrowthPanel({ domain, editable, version }: { domain: string; edi
             </div>
             <p className="text-dim">
               {run.answered} of {run.total} questions answered · {run.partial} in part · {run.open} open
+              {!!run.conflicts && <> · {run.conflicts} contradict{run.conflicts === 1 ? 's' : ''} the source</>}
               <span className="text-faint"> — {when(run.created_at)}, from {run.graph.entities.toLocaleString()} entities and {run.graph.facts.toLocaleString()} facts</span>
             </p>
           </section>
@@ -255,7 +293,8 @@ export function GrowthPanel({ domain, editable, version }: { domain: string; edi
           <section className="space-y-2">
             <div className="font-mono text-[10px] tracking-widest text-faint uppercase">Core questions</div>
             <ol className="space-y-3">
-              {run.cores.map(c => <Core key={c.core} core={c} items={run.items.filter(x => x.core === c.core)} />)}
+              {run.cores.map(c => <Core key={c.core} core={c} items={run.items.filter(x => x.core === c.core)}
+                onRemove={editable && !state.running && run.version === state.exam?.version ? id => void remove(id) : undefined} />)}
             </ol>
             <p className="text-[10.5px] text-faint">The open questions are what the next learning cycle researches first.</p>
             {editable && !state.running && (

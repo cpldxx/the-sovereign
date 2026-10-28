@@ -160,6 +160,9 @@ export interface ExamItem {
   tier?: 'basic' | 'working' | 'deep';
   question: string;
   points: 0 | 1 | 2;
+  reference: string;     // the answer as the exam's source states it
+  source: { url: string; title: string } | null;   // held out: research never learns from it
+  conflict: boolean;     // the graph's facts contradict the reference
   answer: string;        // from the graph's facts only
   facts: string[];
   sources: number;
@@ -169,8 +172,8 @@ export interface ExamItem {
 export interface ExamCore {
   core: number;
   question: string;
-  score: number;
-  status: 'answered' | 'partial' | 'open';
+  score: number | null;   // null: no source was found to write its questions from
+  status: 'answered' | 'partial' | 'open' | 'unset';
 }
 
 export interface ExamSitting {
@@ -186,13 +189,15 @@ export interface ExamSitting {
 }
 
 export interface ExamRun extends ExamSitting {
+  conflicts?: number;
   items: ExamItem[];
   cores: ExamCore[];
   seconds: number;
 }
 
 export interface ExamState {
-  exam: { version: number; created_at: string; cores: string[]; questions: { id: string; core: number; question: string }[] } | null;
+  exam: { version: number; created_at: string; cores: string[]; unsourced?: number[];
+          questions: { id: string; core: number; tier?: string; question: string; answer?: string; source?: { url: string; title: string } }[] } | null;
   latest: ExamRun | null;
   history: ExamSitting[];   // oldest first
   running: boolean;
@@ -653,6 +658,10 @@ export const kg = {
 
   /** Take the exam now, in the background (minutes): {started} — or {busy} / {skipped} without a charter. `fresh`: new
    * questions from the same charter first (the score starts a new series). */
+  /** Drop a question that is off the mark: a new version of the exam without it. */
+  removeExamQuestion: (id: string, qid: string) =>
+    request<unknown>(KG_API, `${d(id)}/exam/questions/${encodeURIComponent(qid)}`, { method: 'DELETE' }),
+
   takeExam: (id: string, fresh = false) =>
     request<{ started?: boolean; busy?: boolean; skipped?: string }>(KG_API, `${d(id)}/exam`, json({ wait: false, fresh })),
 

@@ -271,13 +271,19 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
             → briefing
 ```
 
-- **Growth you can measure.** After every cycle the domain sits an exam drawn from the charter (a few questions per
-  core question, fixed until the charter's questions change) and answers each from the graph alone — the examiner sees
-  only the facts Graph RAG returns, so what the model knows by itself earns nothing. Briefing › Growth shows the score
-  over time and each core question's state; the questions still open are the next cycle's first research. Each
-  core question gets a basic, a working and a deep question, so the score climbs as the graph goes deeper. A local
-  model sometimes builds a question on a detail it got wrong — "Set new ones" writes fresh questions, and
-  `LLM_MODEL_EXAMINER=anthropic:<model>` lets a stronger model set and grade the exam.
+- **Growth you can measure.** The domain sits an exam after every cycle. Its questions are written from
+  authoritative sources, never from a model's memory: per core question of the charter, web searches for papers,
+  reviews and official documents, the best result read in full, and from it a basic, a working and a deep question,
+  each with its reference answer. Round trip: the Validator checks each question-and-answer against the page, and one
+  the page doesn't state is dropped — so no question rests on a detail a model made up. The exam's sources are
+  **held out** (research skips them, like a test set never trained on): the graph has to learn the answers elsewhere.
+  At each sitting the examiner writes the graph's answer from the facts Graph RAG returns — without seeing the reference,
+  so it can't leak in — then grades that answer against the reference apart (2 / 1 / 0) and flags a contradiction. Briefing › Growth shows the score over time, each core question's state and
+  every question with what its source says and what the graph says; the open ones are the next cycle's first research.
+  Off-the-mark questions can be dropped, or new ones set; `LLM_MODEL_EXAMINER=anthropic:<model>` lets a stronger model
+  write and grade it. (Methods: roundtrip-consistent question generation, Alberti et al. 2019; premise verification
+  against retrieved evidence, EMNLP 2025; claim-level checking as in DeepMind's SAFE; answering in isolation as in
+  Chain-of-Verification's factored variant.)
 - **The charter steers everything.** Research missions, the Strategist's questions, the ontology and the Head read
   it; the Head suggests an addition when you keep asking about something it lacks, and you take it or leave it
   (Settings › Charter). It stays yours to edit — or start over with a new interview.
@@ -452,8 +458,8 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - ✅ Research charter: the Head interviews you, drafts the charter, and the first deep research starts when you agree;
   every research run steers by it after that
 - ✅ Three roles: the Head, the Researcher and Learning (the learning pipeline, its steps shown as stations)
-- ✅ Growth you can measure: exam questions drawn from the charter, answered from the graph alone after every
-  cycle — a score over time, which core questions the graph can answer, and the open ones researched next
+- ✅ Growth you can measure: an exam written from held-out authoritative sources (round-trip checked), answered from
+  the graph alone after every cycle — a score over time, each core question's state, the open ones researched next
 - Source tiers: papers (OpenAlex, arXiv, PubMed) > official sources > news > blogs, weighed in every fact
 - A second layer: synthesis pages per core question — the consensus, the debates, the open questions, the key
   sources — rewritten as the graph changes
