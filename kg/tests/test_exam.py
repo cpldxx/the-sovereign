@@ -112,6 +112,21 @@ async def test_a_model_that_keeps_failing_the_language_check_is_taken_as_it_is(m
     assert v.answer == "Leqembi is an antibody." and v.facts == [1]
 
 
+async def test_a_grade_is_the_middle_of_three(monkeypatch):
+    """The same answer graded 1 in one sitting and 0 in the next (2026-10-28): one grading's slip doesn't count."""
+    grades = iter([Grade(points=1, conflict=True), Grade(points=0), Grade(points=1)])
+
+    class Agent(_Agent):
+        async def run(self, prompt):
+            if prompt.startswith("QUESTION") and "REFERENCE" not in prompt:
+                return type("Run", (), {"output": "Leqembi is an antibody [1]."})
+            return type("Run", (), {"output": next(grades)})
+    monkeypatch.setattr(exam, "Agent", Agent)
+    v = await exam._grade("d", {"question": "What is Leqembi?", "answer": "An antibody"},
+                          [{"fact": "Leqembi is an antibody."}])
+    assert (v.points, v.conflict) == (1, False)                # one grading saw a conflict: not the majority
+
+
 def test_the_graphs_answer_is_read_with_the_facts_it_cites():
     """The model answers in a sentence citing [n] — or with a "facts: [1, 8]" line (measured 2026-10-28)."""
     text = "HBM4는 스택당 2TB/s 이상이며, 인터페이스 폭은 2,048개로 두 배가 됩니다 [1][8].\n\nfacts: [1, 8]"
