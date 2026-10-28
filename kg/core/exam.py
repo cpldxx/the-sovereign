@@ -12,7 +12,10 @@
            answers elsewhere — a test set never trained on
     take   each question goes through Graph RAG (kg.query); the examiner writes the graph's answer from the facts
            found — without seeing the reference — then, apart, grades that answer against the reference: 2 answered,
-           1 in part, 0 not, and whether it contradicts it. What the model itself knows earns nothing
+           1 in part, 0 not, and whether it contradicts it. What the model itself knows earns nothing. At temperature
+           0, and a question shown the same facts as at the last sitting keeps its verdict: the score moves only when
+           the graph does (2026-10-28: one graph scored 41, 23 and 36 — and an answer the same to the byte, graded 1
+           three times, got 0 while the GPU was shared)
     score  100 × points / (2 × questions); per core question the same — open below 25, answered from 75
     loop   the open questions are the learning cycle's first gaps (learning.gaps): research goes where the score is
            lowest — and the next sitting shows whether it worked
@@ -421,6 +424,18 @@ def _status(score: int | None) -> str:
     return "answered" if score >= ANSWERED else "partial" if score >= PARTIAL else "open"
 
 
+def _evidence(q: dict, found: list[dict]) -> str:
+    """What a verdict follows from: the question, its reference and the facts shown."""
+    return hashlib.sha1(json.dumps([q["question"], q.get("answer", ""), [f["fact"] for f in found]],
+                                   ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+def _kept(item: dict, found: list[dict]) -> Verdict:
+    """The last sitting's verdict on the same evidence."""
+    return Verdict(points=item["points"], conflict=item["conflict"], answer=item["answer"],
+                   facts=[n + 1 for n, f in enumerate(found) if f["uid"] in item["facts"]])
+
+
 async def take(db: ArcadeDB, domain: str, fresh: bool = False) -> dict:
     """One sitting: every question answered from the graph alone, graded against its reference, stored. `fresh`: new
     questions first. ExamError without a charter; Busy while another sitting of the domain runs."""
@@ -430,15 +445,21 @@ async def take(db: ArcadeDB, domain: str, fresh: bool = False) -> dict:
     started = time.monotonic()
     try:
         exam = await ensure(db, domain, fresh)
+        last = await latest(db, domain)
+        before = {x["id"]: x for x in last["items"]} if last and last["version"] == exam["version"] else {}
         items = []
         for i, q in enumerate(exam["questions"]):
             found: list[dict] = []
+            evidence = ""
             try:
                 with activity.working(domain, "learning", f"exam {i + 1}/{len(exam['questions'])}"):
                     found = (await kg.query(db, domain, q["question"], 8))["facts"][:FACTS_SHOWN]
-                    v = await _grade(domain, q, found)
+                    evidence = _evidence(q, found)
+                    old = before.get(q["id"])
+                    v = _kept(old, found) if old and old.get("evidence") == evidence else await _grade(domain, q, found)
             except Exception as e:   # one question that can't be graded scores nothing; the sitting goes on
                 print(f"[Exam] {domain}: {q['id']} not graded: {type(e).__name__}: {e}"[:300], flush=True)
+                evidence = ""        # graded again next time
                 v = Verdict(answer=("채점하지 못했어요" if HANGUL.search(q["question"]) else "Not graded")
                                    + f" ({type(e).__name__})")
             cited = [found[n - 1] for n in v.facts]
@@ -446,7 +467,7 @@ async def take(db: ArcadeDB, domain: str, fresh: bool = False) -> dict:
                           "reference": q.get("answer", ""), "source": q.get("source"), "points": v.points,
                           "conflict": v.conflict, "answer": v.answer.strip(), "facts": [f["uid"] for f in cited],
                           "sources": len({s for f in cited for s in f.get("sources") or []}),
-                          "well_sourced": any((f.get("evidence") or 0) >= 2 for f in cited)})
+                          "well_sourced": any((f.get("evidence") or 0) >= 2 for f in cited), "evidence": evidence})
         cores = []
         for n, question in enumerate(exam["cores"], start=1):
             mine = [x["points"] for x in items if x["core"] == n]

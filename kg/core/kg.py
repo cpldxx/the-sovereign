@@ -829,8 +829,8 @@ async def _in_english(question: str) -> str:
     if _latin_share(question) >= 0.5:
         return ""
     if question not in _english:
-        agent = Agent(model_for("searcher"), name="search_in_english", model_settings=model_settings(decisive=True),
-                      system_prompt=IN_ENGLISH)
+        agent = Agent(model_for("searcher"), name="search_in_english", system_prompt=IN_ENGLISH,
+                      model_settings={**model_settings(), "temperature": 0.0})   # one question, one search
         try:
             english = " ".join(str((await agent.run(question)).output).split())[:500]
         except Exception as e:   # a search must not fail over its translation

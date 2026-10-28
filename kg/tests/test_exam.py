@@ -222,6 +222,31 @@ async def test_a_sitting_grades_the_graph_against_the_reference(domain):
 
 
 @pytest.mark.db
+async def test_a_question_shown_the_same_facts_keeps_its_verdict(domain, monkeypatch):
+    """Graded again only when its facts change: the score moves when the graph does, not with the model's dice."""
+    db, d = domain
+    await charter.save(db, d, CHARTER)
+    first = await exam.take(db, d)
+    asked = len(_Agent.prompts)
+    _Agent.verdicts["What kind of drug is Leqembi?"] = Verdict(points=0, answer="Unclear.", facts=[1])   # other dice
+    again = await exam.take(db, d)
+    assert len(_Agent.prompts) == asked                                        # nothing asked of the model
+    assert [(x["points"], x["answer"]) for x in again["items"]] == [(x["points"], x["answer"]) for x in first["items"]]
+    assert again["items"][0]["facts"] == ["f1"] and again["items"][0]["well_sourced"]
+
+    async def query(db_, d_, question, k):                                     # the graph learned the second answer
+        if question.startswith("How much"):
+            return {"facts": [{"uid": "f3", "fact": "Leqembi slowed decline by 27% over 18 months.", "sources": ["ep4"],
+                               "evidence": 1}]}
+        return {"facts": [{"uid": "f1", "fact": "Leqembi is an anti-amyloid antibody.", "sources": ["ep1", "ep2"],
+                           "evidence": 2}]}
+    monkeypatch.setattr(exam.kg, "query", query)
+    _Agent.verdicts["How much did Leqembi slow decline in Clarity AD?"] = Verdict(points=2, answer="27%.", facts=[1])
+    third = await exam.take(db, d)
+    assert [x["points"] for x in third["items"]] == [2, 2]          # the first kept its verdict, the second graded anew
+
+
+@pytest.mark.db
 async def test_the_exam_stays_fixed_until_the_charter_changes_or_a_question_is_dropped(domain):
     db, d = domain
     await charter.save(db, d, CHARTER)
@@ -252,10 +277,17 @@ async def test_an_exam_written_from_memory_is_set_again_from_sources(domain):
 
 
 @pytest.mark.db
-async def test_the_scores_history_reads_oldest_first_and_the_briefing_shows_the_change(domain):
+async def test_the_scores_history_reads_oldest_first_and_the_briefing_shows_the_change(domain, monkeypatch):
     db, d = domain
     await charter.save(db, d, CHARTER)
     await exam.take(db, d)
+    before = exam.kg.query
+
+    async def query(db_, d_, question, k):                       # the graph learned the second answer
+        if question.startswith("How much"):
+            return {"facts": [{"uid": "f3", "fact": "Leqembi slowed decline by 27%.", "sources": ["ep4"]}]}
+        return await before(db_, d_, question, k)
+    monkeypatch.setattr(exam.kg, "query", query)
     _Agent.verdicts["How much did Leqembi slow decline in Clarity AD?"] = Verdict(points=2, answer="27%.", facts=[1])
     await exam.take(db, d)
     assert [h["score"] for h in await exam.history(db, d)] == [50, 100]
