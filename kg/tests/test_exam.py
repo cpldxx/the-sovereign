@@ -289,6 +289,22 @@ async def test_a_question_that_cant_be_graded_scores_nothing_and_the_sitting_goe
 
 
 @pytest.mark.db
+async def test_official_sources_are_offered_before_other_sites_and_blogs_never(domain, monkeypatch):
+    db, d = domain
+
+    async def search(query):
+        return [{"title": "My take", "url": "https://medium.com/@someone/leqembi", "snippet": "I think"},
+                {"title": "Leqembi explained", "url": "https://pharma-news.example/leqembi", "snippet": "a site"},
+                {"title": "FDA approves Leqembi", "url": FDA, "snippet": "FDA news release"}]
+    monkeypatch.setattr(exam, "_search", search)
+    await charter.save(db, d, CHARTER)
+    await exam.ensure(db, d)
+    listing = next(p for system, p in _Agent.prompts if system == exam.PICK)
+    assert "[1] FDA approves Leqembi [official]" in listing and "[2] Leqembi explained [web]" in listing
+    assert "medium.com" not in listing
+
+
+@pytest.mark.db
 async def test_a_paper_comes_first_and_its_abstract_is_the_source(domain, monkeypatch):
     db, d = domain
     paper = {"title": "Lecanemab in Early Alzheimer's Disease", "url": "https://doi.org/10.1056/NEJMoa2212948",

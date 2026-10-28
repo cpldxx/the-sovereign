@@ -36,7 +36,7 @@ from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from agents.validator import validate
-from core import activity, auth, charter, kg
+from core import activity, auth, charter, kg, sources
 from core import database as kgdb
 from core.database import ArcadeDB, now
 from core.llm import HANGUL, foreign_script, model_for, model_settings
@@ -120,7 +120,8 @@ The research charter:
 
 PICK = """Pick the search results most likely to answer this question with authority: peer-reviewed papers and
 reviews, official documents (regulators, standards bodies, the companies or institutions themselves), then reputable
-press. Skip forums, listicles, ads, SEO pages and anything off the question. Give their numbers, best first."""
+press — each is marked with its kind. Skip forums, listicles, ads, SEO pages and anything off the question. Give their
+numbers, best first."""
 
 WRITE = """You write exam questions FROM THE SOURCE BELOW, for the core question "{core}" of the "{domain}" knowledge
 domain (the user wants: {goal}). Three questions, one per level:
@@ -255,24 +256,27 @@ async def held_out(db: ArcadeDB, domain: str) -> set[str]:
 
 
 async def _candidates(db: ArcadeDB, domain: str, queries: list[str]) -> list[dict]:
-    """Papers for the core question (the first search: the English one), then web results, in the engines' order —
-    and the pages the graph already read last (a held-out source should be new to it)."""
+    """Papers for the core question (the first search: the English one), then web results — by tier (official before
+    press before other sites, the engines' order within one), blogs and forums left out: a reference must have authority
+    (2026-10-28: a company blog's "HBM4 moves to hybrid bonding" stood against papers saying it keeps microbumps). The
+    pages the graph already read go last (a held-out source should be new to it)."""
     found: dict[str, dict] = {}
     try:
         for p in await _papers(queries[0]):
             venue = " · ".join(str(x) for x in (p.get("venue"), p.get("year")) if x)
             found.setdefault(p["url"], {"title": f"{p['title']} [paper{' · ' + venue if venue else ''}]", "url": p["url"],
-                                        "snippet": p.get("abstract", ""), "markdown": p["markdown"]})
+                                        "snippet": p.get("abstract", ""), "markdown": p["markdown"], "tier": "paper"})
     except httpx.HTTPError as e:
         print(f"[Exam] {domain}: paper search failed ({type(e).__name__})", flush=True)
     for q in queries[:3]:
         try:
             for r in await _search(q):
-                found.setdefault(r["url"], r)
+                found.setdefault(r["url"], {**r, "tier": sources.tier_of(r["url"])})
         except httpx.HTTPError as e:
             print(f"[Exam] {domain}: search failed ({type(e).__name__}): {q[:80]}", flush=True)
-    read = set(await kg.known_sources(db, domain, list(found)))
-    return [r for u, r in found.items() if u not in read] + [r for u, r in found.items() if u in read]
+    ranked = sorted((r for r in found.values() if r["tier"] != "blog"), key=lambda r: sources.TIERS.index(r["tier"]))
+    read = set(await kg.known_sources(db, domain, [r["url"] for r in ranked]))
+    return [r for r in ranked if r["url"] not in read] + [r for r in ranked if r["url"] in read]
 
 
 async def _from_page(domain: str, core: str, goal: str, page: dict) -> list[dict]:
@@ -318,8 +322,8 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
     """From the most authoritative of the results: the questions one page states (none if no page could be read)."""
     mine: list[dict] = []
     if results:
-        listing = "\n".join(f"[{k + 1}] {r['title']} — {r['url']}\n    {r.get('snippet', '')[:200]}"
-                            for k, r in enumerate(results[:12]))
+        listing = "\n".join(f"[{k + 1}] {r['title']}{'' if r['tier'] == 'paper' else ' [' + r['tier'] + ']'} — {r['url']}"
+                            f"\n    {r.get('snippet', '')[:200]}" for k, r in enumerate(results[:12]))
         pick = await _ask(Pick, PICK, f"QUESTION: {core}\n\nRESULTS:\n{listing}", decisive=True)
         order = [results[k - 1] for k in dict.fromkeys(pick.picks) if 1 <= k <= min(len(results), 12)]
         tried = 0
