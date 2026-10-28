@@ -26,7 +26,7 @@ from agents.extractor import STATE, extract, relate
 from agents.linker import link
 from agents.resolver import resolve
 from agents.validator import judge
-from core import activity
+from core import activity, sources
 from core import database as kgdb
 from core.database import ArcadeDB, ArcadeDBError, new_uid, now
 from core.embeddings import embed
@@ -201,11 +201,13 @@ class Report:
 
 async def ingest(
     db: ArcadeDB, domain: str, raw_text: str, source: str = "user_input",
-    title: str | None = None, content_status: str = "full",
+    title: str | None = None, content_status: str = "full", tier: str | None = None,
 ) -> dict:
     """Store a source as an Episode and grow the graph from it. Raises ValueError for unknown domains.
 
     content_status: "full" | "partial" (paywalled/truncated: facts get capped reliability).
+    tier: what kind of source (core/sources.py) — read from the URL unless the caller knows (research: "paper"); it
+    caps each fact's reliability too.
     The result says duplicate (this text was read already, or is being read: pending) or, when a model call or a
     write failed, failed + reason — the episode is then "failed" and the same text is read again next time.
     """
@@ -221,6 +223,7 @@ async def ingest(
         return {**Report(existing["uid"]).as_dict(), "duplicate": True,
                 **({"pending": True} if existing.get("status") == "pending" else {})}
     episode_uid = existing["uid"] if existing else new_uid("ep")
+    tier = sources.tier_of(source, tier)
     _active.add(episode_uid)   # before any await: a second call with the same text sees it taken
     try:
         if existing:
@@ -230,7 +233,7 @@ async def ingest(
         else:
             try:
                 await kgdb.create_episode(db, domain, {
-                    "uid": episode_uid, "source": source, "title": title or "", "content": text,
+                    "uid": episode_uid, "source": source, "title": title or "", "content": text, "tier": tier,
                     "content_status": content_status, "content_hash": digest, "created_at": now(),
                 }, status="pending")
             except ArcadeDBError:
@@ -239,7 +242,7 @@ async def ingest(
                     return {**Report(again["uid"]).as_dict(), "duplicate": True,
                             **({"pending": True} if again.get("status") == "pending" else {})}
                 raise
-        return await _ingest(db, domain, grammar, description, text, source, title, content_status, episode_uid)
+        return await _ingest(db, domain, grammar, description, text, source, title, content_status, episode_uid, tier)
     finally:
         _active.discard(episode_uid)
 
@@ -268,10 +271,12 @@ def _retry(episode: dict) -> bool:
     return datetime.now(timezone.utc) - started > PENDING_STALE
 
 
-async def _ingest(db, domain, grammar, description, text, source, title, content_status, episode_uid) -> dict:
+async def _ingest(db, domain, grammar, description, text, source, title, content_status, episode_uid,
+                  tier: str = "web") -> dict:
     report = Report(episode_uid)
     report.label = (title or source)[:100]
-    cap = PARTIAL_CAP if content_status == "partial" else 1.0
+    # A fact is trusted no more than its source: a partial read, and the kind of source (core/sources.py).
+    cap = min(PARTIAL_CAP if content_status == "partial" else 1.0, sources.cap(tier))
     start = time.perf_counter()
     with observe("ingest", input={"source": source, "title": title, "chars": len(text)},
                  metadata={"domain": domain, "episode_uid": episode_uid}, tags=[domain, "ingest"]) as obs:

@@ -29,7 +29,7 @@ from fastapi import FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
-from sovereign_research import auth, fetch, runner, search  # noqa: E402
+from sovereign_research import auth, fetch, papers, runner, search  # noqa: E402
 from sovereign_research.jobs import KG_URL, Jobs  # noqa: E402
 
 # Each domain learns on its own schedule (Settings › Learning: times in the user's timezone, kept by the KG —
@@ -302,6 +302,15 @@ async def fetch_now(request: FetchRequest):
     page = await fetch.fetch_page(request.url)
     return {"url": page.url, "title": page.title, "status": page.status, "error": page.error,
             "chars": len(page.markdown), "markdown": page.markdown[: max(0, min(request.max_chars, 50_000))]}
+
+
+@app.get("/papers")
+async def papers_now(q: str, limit: int = Query(6, ge=1, le=10)):
+    """Scholarly papers now (OpenAlex, PubMed, arXiv — papers.py): each with its whole abstract and the text a reading
+    of it gives the knowledge graph — for the KG's exam and the Head's search_papers."""
+    _service_only()
+    return {"papers": [{**papers.brief(p), "abstract": p.abstract, "markdown": p.markdown()}
+                       for p in await papers.search(q, limit)]}
 
 
 @app.get("/robots")

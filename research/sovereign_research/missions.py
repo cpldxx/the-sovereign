@@ -9,9 +9,11 @@ UPDATE_PAGES = 6
 MISSION_PAGES = 4
 
 _SOURCING = (
-    "Prefer primary and authoritative sources (official sites, filings, standards bodies, regulators, reputable "
-    "press, papers) and recent ones; skip listicles, ads, SEO pages and forums. If a page cannot be read, find the "
-    "same information on another public source — never try to get around a paywall or login."
+    "Prefer primary and authoritative sources: peer-reviewed papers and reviews first — for scientific, medical or "
+    "technical questions search them with paper_search and read the best with read_paper — then official documents "
+    "(regulators, standards bodies, the institutions and companies themselves), then reputable press; recent ones "
+    "for what is new. Skip listicles, ads, SEO pages and forums. If a page cannot be read, find the same information "
+    "on another public source — never try to get around a paywall or login."
 )
 
 
@@ -21,7 +23,7 @@ Domain: {name} — {brief}
 
 Build a well-sourced foundation. Search broadly: an overview, the main actors, ideas and methods, how they depend
 on each other, recent developments and open debates — and when the domain has core questions, make sure what you
-read can answer them. Read at least {BOOTSTRAP_PAGES} substantive pages in full with web_fetch. {_SOURCING}
+read can answer them. Read at least {BOOTSTRAP_PAGES} substantive pages in full with web_fetch, or papers with read_paper. {_SOURCING}
 
 Then write a short report (under 250 words): the main entities of this domain, how they relate, and the best
 sources to keep monitoring (as URLs)."""
@@ -49,5 +51,6 @@ def mission(name: str, brief: str, question: str) -> str:
     return f"""Research mission for the "{name}" domain ({brief}):
 {question}
 
-Search, then read the most relevant pages in full with web_fetch (at least {MISSION_PAGES}). {_SOURCING}
+Search, then read the most relevant pages in full with web_fetch, or papers with read_paper (at least {MISSION_PAGES}
+in all). {_SOURCING}
 Then answer in under 200 words, citing the pages you read."""

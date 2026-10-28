@@ -135,6 +135,9 @@ def domain(scratch, monkeypatch):
     async def fetch(url):
         return {"url": url, "title": "FDA approves Leqembi", "status": "ok", "markdown": PAGE}
 
+    async def papers(query):
+        return []
+
     async def validate(text, source, statements):
         return [type("V", (), {"supported": "disputed" not in s, "reliability": 0.9})() for s in statements]
 
@@ -150,6 +153,7 @@ def domain(scratch, monkeypatch):
         return {"facts": graph.get(question, [])}
     monkeypatch.setattr(exam, "_search", search)
     monkeypatch.setattr(exam, "_fetch", fetch)
+    monkeypatch.setattr(exam, "_papers", papers)
     monkeypatch.setattr(exam, "validate", validate)
     monkeypatch.setattr(exam.kg, "known_sources", known_sources)
     monkeypatch.setattr(exam.kg, "query", query)
@@ -263,3 +267,26 @@ async def test_a_question_that_cant_be_graded_scores_nothing_and_the_sitting_goe
     run = await exam.take(db, d)
     assert [x["points"] for x in run["items"]] == [0, 0] and run["items"][0]["answer"].startswith("Not graded")
     assert run["items"][1]["answer"] == "The graph holds nothing on this yet."
+
+
+@pytest.mark.db
+async def test_a_paper_comes_first_and_its_abstract_is_the_source(domain, monkeypatch):
+    db, d = domain
+    paper = {"title": "Lecanemab in Early Alzheimer's Disease", "url": "https://doi.org/10.1056/NEJMoa2212948",
+             "venue": "NEJM", "year": 2023, "abstract": "Lecanemab reduced amyloid…", "markdown": PAGE}
+    fetched = []
+
+    async def papers(query):
+        return [paper] if "alzheimer" in query else []
+
+    async def fetch(url):
+        fetched.append(url)
+        return {"url": url, "title": "x", "status": "ok", "markdown": PAGE}
+    monkeypatch.setattr(exam, "_papers", papers)
+    monkeypatch.setattr(exam, "_fetch", fetch)
+    await charter.save(db, d, CHARTER)
+    e = await exam.ensure(db, d)
+    listing = next(p for system, p in _Agent.prompts if system == exam.PICK)
+    assert listing.startswith("QUESTION") and "[1] Lecanemab in Early Alzheimer's Disease [paper · NEJM · 2023]" in listing
+    assert e["questions"][0]["source"]["url"] == paper["url"] and fetched == []   # picked first, never fetched
+    assert paper["url"] in await exam.held_out(db, d)                              # held out like any source

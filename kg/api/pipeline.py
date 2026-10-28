@@ -16,6 +16,8 @@ class IngestRequest(BaseModel):
     source: str = "user_input"
     title: str | None = None
     content_status: Literal["full", "partial"] = "full"
+    # What kind of source (core/sources.py) — read from `source` when not given; it caps the facts' reliability.
+    tier: Literal["paper", "official", "reference", "press", "user", "web", "blog"] | None = None
 
 
 @router.post("/{domain_name}/ingest")
@@ -32,6 +34,7 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return await kg.ingest(
-        req.app.state.db, domain_name, request.raw_text, request.source, request.title, request.content_status
+        req.app.state.db, domain_name, request.raw_text, request.source, request.title, request.content_status,
+        request.tier,
     )
 

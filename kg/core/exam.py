@@ -2,8 +2,8 @@
 
     set    from authoritative sources, never from a model's memory (2026-10-28: questions a local model wrote from
            memory rested on details it got wrong — a standard number, a product name — and could never be answered).
-           Per core question of the research charter: web searches for papers, reviews and official documents, the
-           most authoritative result read in full, and from it a basic, a working and a deep question, each with its
+           Per core question of the research charter: a search of the scholarly literature (OpenAlex, PubMed, arXiv)
+           and of the web for reviews and official documents, the most authoritative result read in full, and from it a basic, a working and a deep question, each with its
            reference answer and the statement it makes. Round trip: the Validator checks each statement against the
            page, and a question the page doesn't state is dropped (Alberti et al. 2019; premise verification against
            retrieved evidence, EMNLP 2025). Kept until the charter's questions or depth change, new ones are asked
@@ -215,6 +215,14 @@ async def _search(query: str) -> list[dict]:
     return r.json().get("results", [])
 
 
+async def _papers(query: str) -> list[dict]:
+    """Papers for a query (OpenAlex, PubMed, arXiv), each with the text a reading of it gives: no page to fetch."""
+    async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=90, headers=auth.headers()) as client:
+        r = await client.get("/papers", params={"q": query, "limit": 5})
+    r.raise_for_status()
+    return r.json().get("papers", [])
+
+
 async def _fetch(url: str) -> dict:
     async with httpx.AsyncClient(base_url=RESEARCH_URL, timeout=180, headers=auth.headers()) as client:
         r = await client.post("/fetch", json={"url": url, "max_chars": SOURCE_CHARS})
@@ -243,9 +251,16 @@ async def held_out(db: ArcadeDB, domain: str) -> set[str]:
 
 
 async def _candidates(db: ArcadeDB, domain: str, queries: list[str]) -> list[dict]:
-    """Search results for a core question, best engines' order kept, pages the graph already read last (a held-out
-    source should be new to it)."""
+    """Papers for the core question (the first search: the English one), then web results, in the engines' order —
+    and the pages the graph already read last (a held-out source should be new to it)."""
     found: dict[str, dict] = {}
+    try:
+        for p in await _papers(queries[0]):
+            venue = " · ".join(str(x) for x in (p.get("venue"), p.get("year")) if x)
+            found.setdefault(p["url"], {"title": f"{p['title']} [paper{' · ' + venue if venue else ''}]", "url": p["url"],
+                                        "snippet": p.get("abstract", ""), "markdown": p["markdown"]})
+    except httpx.HTTPError as e:
+        print(f"[Exam] {domain}: paper search failed ({type(e).__name__})", flush=True)
     for q in queries[:3]:
         try:
             for r in await _search(q):
@@ -307,11 +322,14 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
         for r in order[:3]:
             if tried >= PAGES_TRIED or mine:
                 break
-            try:
-                with activity.working(domain, "research", f"exam: reading {urlsplit(r['url']).netloc}"):
-                    page = await _fetch(r["url"])
-            except httpx.HTTPError:
-                continue
+            if r.get("markdown"):    # a paper: its abstract is the source, nothing to fetch
+                page = {"url": r["url"], "title": r["title"], "status": "full", "markdown": r["markdown"]}
+            else:
+                try:
+                    with activity.working(domain, "research", f"exam: reading {urlsplit(r['url']).netloc}"):
+                        page = await _fetch(r["url"])
+                except httpx.HTTPError:
+                    continue
             if page.get("status") == "failed" or len(page.get("markdown") or "") < MIN_PAGE:
                 continue
             tried += 1

@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 
 from core.names import name_key
 from core.ontology import normalize_type
+from core.sources import tier_of
 
 load_dotenv()
 
@@ -141,6 +142,13 @@ def edge_type(relation: str) -> str:
     if not name or name[0].isdigit():
         raise ValueError(f"Invalid relation type: {relation!r}")
     return f"rel_{name}" if name in _RESERVED else name
+
+
+def _tiered(rows: list[dict]) -> list[dict]:
+    """Episode rows with their tier — read from the URL for those stored before tiers (2026-10-28)."""
+    for r in rows:
+        r["tier"] = r.get("tier") or tier_of(r.get("source") or "")
+    return rows
 
 
 def _fact(row: dict) -> dict:
@@ -285,14 +293,14 @@ async def link_mentions(db: ArcadeDB, domain: str, episode_uid: str, entity_uids
 async def list_episodes(db: ArcadeDB, domain: str, limit: int = 50) -> list[dict]:
     if not await db.exists(domain):
         return []
-    return await db.cypher(
+    return _tiered(await db.cypher(
         domain,
         "MATCH (ep:Episode) OPTIONAL MATCH (ep)-[:MENTIONS]->(e:Entity) "
-        "RETURN ep.uid AS uid, ep.source AS source, ep.title AS title, ep.content_status AS content_status, "
+        "RETURN ep.uid AS uid, ep.source AS source, ep.title AS title, ep.content_status AS content_status, ep.tier AS tier, "
         "ep.status AS status, ep.created_at AS created_at, left(ep.content, 240) AS snippet, count(e) AS entities "
         "ORDER BY created_at DESC LIMIT $n",
         n=limit,
-    )
+    ))
 
 
 # ── Entities ───────────────────────────────────────────────────────────────
@@ -574,22 +582,22 @@ async def entity_detail(db: ArcadeDB, domain: str, uid: str) -> dict | None:
     episodes = await db.cypher(
         domain,
         "MATCH (ep:Episode)-[:MENTIONS]->(e:Entity {uid: $uid}) RETURN ep.uid AS uid, ep.source AS source, "
-        "ep.title AS title, ep.content_status AS content_status, ep.created_at AS created_at "
+        "ep.title AS title, ep.content_status AS content_status, ep.tier AS tier, ep.created_at AS created_at "
         "ORDER BY created_at DESC LIMIT 50",
         uid=uid,
     )
-    return {"entity": rows[0], "facts": [_fact(f) for f in facts], "episodes": episodes}
+    return {"entity": rows[0], "facts": [_fact(f) for f in facts], "episodes": _tiered(episodes)}
 
 
 async def get_episodes(db: ArcadeDB, domain: str, uids: list[str]) -> list[dict]:
     if not uids:
         return []
-    return await db.cypher(
+    return _tiered(await db.cypher(
         domain,
         "MATCH (ep:Episode) WHERE ep.uid IN $uids RETURN ep.uid AS uid, ep.source AS source, ep.title AS title, "
-        "ep.content_status AS content_status, ep.created_at AS created_at",
+        "ep.content_status AS content_status, ep.tier AS tier, ep.created_at AS created_at",
         uids=uids,
-    )
+    ))
 
 
 async def get_entities(db: ArcadeDB, domain: str, uids: list[str]) -> list[dict]:
@@ -738,11 +746,11 @@ async def changes_since(db: ArcadeDB, domain: str, since: str, limit: int = 300)
     episodes = await db.cypher(
         domain,
         "MATCH (ep:Episode) WHERE ep.created_at >= datetime($since) OPTIONAL MATCH (ep)-[:MENTIONS]->(e:Entity) "
-        "RETURN ep.uid AS uid, ep.source AS source, ep.title AS title, ep.content_status AS content_status, "
+        "RETURN ep.uid AS uid, ep.source AS source, ep.title AS title, ep.content_status AS content_status, ep.tier AS tier, "
         "ep.created_at AS created_at, ep.ontology_gaps AS ontology_gaps, count(e) AS entities ORDER BY created_at",
         since=since,
     )
-    for ep in episodes:
+    for ep in _tiered(episodes):
         ep["ontology_gaps"] = json.loads(ep.get("ontology_gaps") or "{}")
     entities = await db.cypher(
         domain,

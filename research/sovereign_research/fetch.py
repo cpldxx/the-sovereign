@@ -52,6 +52,7 @@ class Page:
     markdown: str
     status: str          # "full" | "partial" | "failed"
     error: str = ""
+    tier: str = ""       # what kind of source, when it is known here ("paper": read through papers.py)
 
 
 @dataclass
@@ -76,7 +77,7 @@ _next_slot: dict[str, float] = {}
 _slot_lock = threading.Lock()
 
 
-def _record(page: Page) -> None:
+def record(page: Page) -> None:
     if current is not None:
         current.add(page)
 
@@ -195,7 +196,7 @@ async def web_fetch_tool(url: str) -> str:
         url: The URL to fetch the contents of.
     """
     page = await fetch_page(url)
-    _record(page)
+    record(page)
     if page.status == "failed":
         return f"Error: could not read {url} ({page.error}). Use another source for this information."
     text = page.markdown

@@ -219,11 +219,13 @@ class Jobs:
                 "the agent found nothing to open (search engines may be rate-limiting; "
                 "try later, or set TAVILY_API_KEY / BRAVE_API_KEY in research/.env)"))
         job["pages"] = [
-            {"url": p.url, "title": p.title, "status": p.status, "error": p.error, "chars": len(p.markdown)}
+            {"url": p.url, "title": p.title, "status": p.status, "error": p.error, "chars": len(p.markdown),
+             **({"tier": p.tier} if p.tier else {})}
             for p in pages
         ]
         # Until 2026-10-14 the text lived only in memory: pages the KG couldn't take were lost with "done".
-        self._keep(job, {p.url: {"title": p.title, "status": p.status, "markdown": p.markdown} for p in readable})
+        self._keep(job, {p.url: {"title": p.title, "status": p.status, "markdown": p.markdown, "tier": p.tier}
+                         for p in readable})
         self._step(job, f"read {len(readable)} page(s), {len(pages) - len(readable)} failed")
 
         await self._ontology(job, not episodes["episodes"])
@@ -297,7 +299,7 @@ class Jobs:
                     try:
                         r = await kg.post(f"/domains/{domain}/ingest", json={
                             "raw_text": page["markdown"], "source": url, "title": page["title"],
-                            "content_status": page["status"],
+                            "content_status": page["status"], **({"tier": page["tier"]} if page.get("tier") else {}),
                         })
                         r.raise_for_status()
                         res = r.json()

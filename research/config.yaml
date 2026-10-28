@@ -32,6 +32,14 @@ tools:
   - name: web_fetch
     group: web
     use: sovereign_research.fetch:web_fetch_tool
+  # Scholarly literature: OpenAlex, arXiv, PubMed (sovereign_research/papers.py) — official APIs, abstracts and
+  # open-access full text; a paper read is learned like a page, trusted as a paper.
+  - name: paper_search
+    group: web
+    use: sovereign_research.papers:paper_search_tool
+  - name: read_paper
+    group: web
+    use: sovereign_research.papers:read_paper_tool
 
 sandbox:
   use: deerflow.sandbox.local:LocalSandboxProvider

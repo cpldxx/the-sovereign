@@ -29,7 +29,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import activity, auth, charter, crew, digest, exam, kg
+from core import activity, auth, charter, crew, digest, exam, kg, sources
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -77,7 +77,7 @@ _caller: contextvars.ContextVar[tuple[auth.Principal, str]] = contextvars.Contex
 # Which agent a tool call reaches, for the live agent view (the rest read or write the graph itself).
 _TOOL_AGENT = {"ingest_data": "extractor", "list_research": "research", "research_status": "research",
                "daily_report": "reporter", "list_reviews": "validator", "resolve_review": "validator",
-               "update_ontology": "ontologist", "get_ontology": "ontologist", "draft_charter": "strategist",
+               "update_ontology": "ontologist", "get_ontology": "ontologist", "search_papers": "research", "draft_charter": "strategist",
                "suggest_charter": "strategist", "confirm_charter": "research", "exam_results": "learning",
                "take_exam": "learning"}
 
@@ -142,13 +142,21 @@ def _entity(e: dict) -> dict:
     return {"uid": e["uid"], "name": e["name"], "type": e.get("type"), "summary": (e.get("summary") or "")[:240]}
 
 
-def _fact(f: dict) -> dict:
+def _fact(f: dict, kinds: dict[str, str] | None = None) -> dict:
+    """`kinds`: episode uid → tier, to say what kind of sources a fact rests on (papers, official, press…)."""
     out = {"uid": f["uid"], "fact": f["fact"], "relation": f["relation"], "source_uid": f["source_uid"],
            "source": f["source_name"], "target_uid": f["target_uid"], "target": f["target_name"],
            "weight": round(f["weight"], 2), "evidence": f.get("evidence")}
+    if kinds and (found := [kinds[u] for u in f.get("sources") or [] if u in kinds]):
+        out["source_kinds"] = sorted(set(found), key=list(sources.CAPS).index)
     if not f.get("valid", True):
         out["superseded"] = (f.get("invalid_reason") or "")[:200]
     return out
+
+
+def _source(ep: dict) -> dict:
+    return {"uid": ep["uid"], "title": ep.get("title") or "", "source": ep["source"], "kind": ep.get("tier"),
+            **({"status": ep["content_status"]} if ep.get("content_status") == "partial" else {})}
 
 
 @tool("readonly")
@@ -161,10 +169,10 @@ async def query_knowledge_graph(domain: str, query: str, k: int = 5) -> dict:
     """
     _require(domain)
     result = await kg.query(db, domain, query, max(1, min(k, 50)))
+    kinds = {ep["uid"]: ep.get("tier") for ep in result["episodes"]}
     return {"entities": [_entity(e) for e in result["entities"][:15]],
-            "facts": [_fact(f) for f in result["facts"][:MAX_FACTS]],
-            "sources": [{"uid": ep["uid"], "title": ep.get("title") or "", "source": ep["source"],
-                         "status": ep.get("content_status")} for ep in result["episodes"][:10]]}
+            "facts": [_fact(f, kinds) for f in result["facts"][:MAX_FACTS]],
+            "sources": [_source(ep) for ep in result["episodes"][:10]]}
 
 
 @tool("readonly")
@@ -178,9 +186,8 @@ async def get_entity(domain: str, uid: str) -> dict:
     facts = detail["facts"]
     return {"entity": {**_entity(detail["entity"]), "aliases": detail["entity"].get("aliases") or [],
                        "mentions": detail["entity"].get("mentions")},
-            "facts": [_fact(f) for f in facts[:40]], "more_facts": max(0, len(facts) - 40),
-            "sources": [{"uid": ep["uid"], "title": ep.get("title") or "", "source": ep["source"]}
-                        for ep in detail["episodes"][:15]]}
+            "facts": [_fact(f, {ep["uid"]: ep.get("tier") for ep in detail["episodes"]}) for f in facts[:40]],
+            "more_facts": max(0, len(facts) - 40), "sources": [_source(ep) for ep in detail["episodes"][:15]]}
 
 
 @tool()
@@ -191,8 +198,9 @@ async def ingest_data(
     """Add new information to a domain's graph. The text is stored as an episode; entities and facts are
     extracted, checked against the ontology and the text, merged with what is already known (confirming facts
     get stronger, outdated ones are superseded) and ambiguous items go to the review queue.
-    `source`: where the text came from (URL, paper, API). `content_status`: "partial" when only part of the
-    source could be read (e.g. paywall) — its facts are trusted less."""
+    `source`: where the text came from — its URL (a paper's DOI link) tells what kind of source it is, and so how far
+    its facts are trusted alone. `content_status`: "partial" when only part of the source could be read (e.g. paywall)
+    — its facts are trusted less."""
     _require(domain)
     if not raw_text.strip():
         raise ToolError("raw_text is empty")
@@ -378,6 +386,16 @@ async def read_webpage(url: str) -> dict:
     ingest_data it if it is worth keeping."""
     _proxy_allowed()
     return await _research("POST", "/fetch", json={"url": url, "max_chars": 12000}, timeout=120)
+
+
+@tool("readonly")
+async def search_papers(query: str, limit: int = 5) -> list[dict]:
+    """Search the scholarly literature now — OpenAlex, PubMed, arXiv: papers with year, venue, citation count, link
+    (DOI) and abstract. For what research has established; ingest_data an abstract worth keeping, with the paper's
+    link as its source (it is then trusted as a paper)."""
+    _proxy_allowed()
+    found = await _research("GET", "/papers", params={"q": query, "limit": max(1, min(limit, 10))}, timeout=60)
+    return [{k: p.get(k) for k in ("title", "year", "venue", "citations", "url", "abstract")} for p in found["papers"]]
 
 
 @tool("readonly")
