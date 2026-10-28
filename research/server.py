@@ -146,7 +146,8 @@ def _hours_since(last: dict | None) -> int:
 
 async def cycle(d: str, slot: str) -> None:
     """One learning cycle (kg/core/learning.py): learn what's new and what the graph is unsure of, then keep what
-    holds, forget what never did, and brief. Never raises (a cycle that dies is logged, not lost silently)."""
+    holds, forget what never did, take the exam (kg/core/exam.py) and brief. Never raises (a cycle that dies is logged,
+    not lost silently)."""
     try:
         await _cycle(d, slot)
     except Exception as e:
@@ -185,6 +186,12 @@ async def _cycle(d: str, slot: str) -> None:
         # what the graph now holds — then the briefing.
         forgot = await step("forget", "POST", f"/domains/{d}/learning/forget", json={"dry_run": False})
         await step("Head reviews", "POST", f"/domains/{d}/head-review", params={"minutes": REVIEW_MINUTES})
+        # The exam: how much of the charter the graph answers now — before the briefing, which reports it.
+        sat = await step("exam", "POST", f"/domains/{d}/exam",
+                         lambda b: b.get("skipped") or b.get("busy") and "already running" or f"{b.get('score')}/100",
+                         json={"wait": True})
+        if sat and "score" in sat:
+            summary["exam"] = {k: sat[k] for k in ("score", "answered", "partial", "open", "total")}
         hours = _hours_since(previous)
         summary["reported_at"] = jobs_now()
         await step(f"report ({hours} h)", "POST", f"/domains/{d}/reports", lambda b: b.get("headline", ""),

@@ -2,7 +2,8 @@
 
     LLM_MODEL=ollama:qwen3.6:35b            default for every agent
     LLM_MODEL_EXTRACTOR=anthropic:claude-…  optional per-agent override (EXTRACTOR, VALIDATOR,
-                                            RESOLVER, LINKER, ONTOLOGIST, SUMMARIZER, REPORTER)
+                                            RESOLVER, LINKER, ONTOLOGIST, SUMMARIZER, REPORTER,
+                                            STRATEGIST — also writes the charter, EXAMINER, CREW)
     LLM_THINKING=false                      reasoning off unless set to true
     ANTHROPIC_API_KEY=…                     only needed for anthropic: models
     LLM_BASE_URL=http://localhost:18081/v1  with openai:<model>: any OpenAI-compatible server — e.g. mlx-lm's,
@@ -12,6 +13,7 @@ Model strings are pydantic-ai's "<provider>:<model>" (ollama:, anthropic:, opena
 """
 
 import os
+import re
 
 from dotenv import load_dotenv
 from pydantic_ai.models import Model, infer_model
@@ -62,3 +64,16 @@ def model_settings(decisive: bool = False) -> ModelSettings:
         settings["temperature"] = DECISION_TEMPERATURE
     return settings
 
+
+
+HANGUL = re.compile(r"[\uac00-\ud7a3]")
+_FOREIGN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")   # kana and Chinese characters
+
+
+def foreign_script(context: str, written: str) -> str:
+    """The Chinese characters and kana in `written` when the text is Korean ('' when none). A local model lets them
+    into Korean (measured 2026-10-28: 各社, 半导体) and a schema can't say "one language" — an output validator can,
+    and with ModelRetry the model writes it again."""
+    if not HANGUL.search(context + written):
+        return ""
+    return "".join(sorted(set(_FOREIGN.findall(written))))[:12]

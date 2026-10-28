@@ -15,7 +15,6 @@ status: "draft" until confirmed, then "active" for good (a later revision steers
 """
 
 import os
-import re
 from datetime import date
 from typing import Literal
 
@@ -26,7 +25,7 @@ from pydantic_ai import Agent, ModelRetry
 from core import auth
 from core import database as kgdb
 from core.database import ArcadeDB, new_uid, now
-from core.llm import model_for, model_settings
+from core.llm import foreign_script, model_for, model_settings
 from domains import registry
 
 DRAFT, ACTIVE = "draft", "active"
@@ -73,12 +72,10 @@ From the notes below write:
 - exclude: what the user wants left out (short phrases); empty when they named nothing
 - depth: overview (the big picture), working (enough to discuss and act on it) or expert (specialist depth: primary
   literature, methods, open debates)
-Write in the language of the notes, and only in it: Korean notes get Korean with no Chinese characters or Japanese
+Keep the user's own framing: don't add technical specifics, standards or acronyms they didn't bring up — a core
+question built on a wrong detail sends research the wrong way. Write in the language of the notes, and only in it: Korean notes get Korean with no Chinese characters or Japanese
 (proper and product names stay as written). Use only what the notes and the description support: leave scope or
 exclude short rather than invent preferences the user never stated.{current}"""
-
-_HANGUL = re.compile(r"[\uac00-\ud7a3]")
-_FOREIGN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")   # kana and Chinese characters
 
 
 # ── Storage ────────────────────────────────────────────────────────────────
@@ -175,12 +172,9 @@ async def draft(db: ArcadeDB, domain: str, notes: str = "") -> dict:
 
     @agent.output_validator
     def one_language(c: Charter) -> Charter:
-        # A local model lets Chinese characters into Korean (measured 2026-10-28: 各社, 半导体): the schema
-        # can't say "one language", so the validator does — and the model writes it again.
-        written = " ".join([c.goal, *c.questions, *c.scope, *c.exclude])
-        if _HANGUL.search(notes + written) and (foreign := sorted(set(_FOREIGN.findall(written)))):
-            raise ModelRetry(f"Write it in Korean only — no Chinese characters or Japanese ({''.join(foreign[:12])}); "
-                             "use the Korean word instead.")
+        if foreign := foreign_script(notes, " ".join([c.goal, *c.questions, *c.scope, *c.exclude])):
+            raise ModelRetry(f"Write it in Korean only — no Chinese characters or Japanese ({foreign}); use the "
+                             "Korean word instead.")
         return c
     written = (await agent.run(notes.strip() or "(No interview notes: draft it from the description alone, "
                                                 "conservatively.)")).output

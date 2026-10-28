@@ -80,6 +80,9 @@ CREATE PROPERTY ChatTurn.uid IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON ChatTurn (uid) UNIQUE;
 CREATE PROPERTY ChatTurn.user IF NOT EXISTS STRING;
 CREATE INDEX IF NOT EXISTS ON ChatTurn (user) NOTUNIQUE;
+CREATE DOCUMENT TYPE ExamRun IF NOT EXISTS;
+CREATE PROPERTY ExamRun.uid IF NOT EXISTS STRING;
+CREATE INDEX IF NOT EXISTS ON ExamRun (uid) UNIQUE;
 """
 # Relation names that would collide with the schema's own types: every type above (2026-10-14: the list had been
 # written by hand and missed Thread, Message, Setting, ChatTurn — a relation "message" would have been a document).

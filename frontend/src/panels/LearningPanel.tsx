@@ -137,7 +137,8 @@ export function LearningPanel({ domain, editable }: { domain: string; editable: 
           <div className="space-y-1.5 rounded-md border border-line p-3">
             <p className="text-dim">{when(last.started_at)}{last.finished_at ? ` → ${when(last.finished_at)}` : ' — running'}
               {' · '}learned <b className="text-ink">{learned}</b> facts, confirmed <b className="text-ink">{confirmed}</b>,
-              forgot <b className="text-ink">{last.forgotten?.facts ?? 0}</b>{last.forgotten?.entities ? ` (and ${last.forgotten.entities} entities)` : ''}</p>
+              forgot <b className="text-ink">{last.forgotten?.facts ?? 0}</b>{last.forgotten?.entities ? ` (and ${last.forgotten.entities} entities)` : ''}
+              {last.exam && <> · exam <b className="text-ink">{last.exam.score}</b>/100</>}</p>
             {last.questions.length > 0 && (
               <ul className="space-y-1">
                 {last.questions.map(q => (
@@ -159,11 +160,12 @@ export function LearningPanel({ domain, editable }: { domain: string; editable: 
         <div className="font-mono text-[10px] tracking-widest text-faint uppercase">What it is unsure about now</div>
         {!gaps ? <p className="text-faint">…</p> : (
           <ul className="space-y-1 text-dim">
+            {gaps.exam?.length > 0 && <li>Exam questions it can't answer yet: {gaps.exam.slice(0, 3).map(q => `“${q.slice(0, 70)}”`).join(', ')}{gaps.exam.length > 3 ? ` and ${gaps.exam.length - 3} more` : ''}</li>}
             {gaps.weak.length > 0 && <li>One weak source only: {gaps.weak.slice(0, 5).map(w => w.entity).join(', ')}</li>}
             {gaps.stale.length > 0 && <li>Nothing new for a month: {gaps.stale.slice(0, 5).map(w => w.entity).join(', ')}</li>}
             {gaps.unanswered.length > 0 && <li>You asked, but it's not in the graph: {gaps.unanswered.slice(-3).map(q => `“${q.slice(0, 60)}”`).join(', ')}{gaps.unanswered_total > gaps.unanswered.length ? ` (${gaps.unanswered_total} such questions from everyone)` : ''}</li>}
             {gaps.ontology.length > 0 && <li>No words for yet: {gaps.ontology.slice(0, 5).join(', ')}</li>}
-            {!gaps.weak.length && !gaps.stale.length && !gaps.unanswered.length && !gaps.ontology.length && <li className="text-faint">Nothing stands out.</li>}
+            {!gaps.exam?.length && !gaps.weak.length && !gaps.stale.length && !gaps.unanswered.length && !gaps.ontology.length && <li className="text-faint">Nothing stands out.</li>}
           </ul>
         )}
       </section>

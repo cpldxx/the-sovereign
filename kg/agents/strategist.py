@@ -28,8 +28,9 @@ CURIOUS = """You decide what the "{domain}" knowledge graph should learn next. D
 Today is {today}. Ask about the current state — this year and the latest — never about years long past unless the
 gap is about history (the model's own sense of "now" is older than today).
 Below is what the graph is unsure or silent about. Write at most {n} research questions that would close the most
-important gaps for this domain. When the domain has a research charter, it says what matters: a core question the
-graph cannot answer well yet comes first, and nothing it says to leave out is researched. Then confirm what rests on
+important gaps for this domain. When the domain has a research charter, it says what matters: the exam questions
+the graph could not answer come first (each is a concrete question from the charter — research it as it stands or
+sharpen it), then core questions it answers poorly; nothing the charter says to leave out is researched. Then confirm what rests on
 one weak source, refresh what may be stale, answer what users asked and the graph could not, and find what the
 ontology lacked words for. Each question is specific (names, the period), self-contained and answerable from public
 sources. Skip anything off-domain or trivial. Fewer good questions beat many vague ones; none is fine if nothing

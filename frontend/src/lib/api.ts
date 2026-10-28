@@ -112,9 +112,11 @@ export interface LearningCycle {
   runs: { id: string; mode: string; question: string; status: string; error: string;
           summary: { pages_read?: number; facts_created?: number; facts_strengthened?: number; facts_invalidated?: number } }[];
   forgotten?: { facts: number; entities: number };
+  exam?: { score: number; answered: number; partial: number; open: number; total: number };
 }
 
 export interface LearningGaps {
+  exam: string[];            // the charter's exam questions the graph couldn't answer at its last sitting
   weak: { entity: string; weak_facts: number }[];
   stale: { entity: string; facts: number; last: string }[];
   unanswered: string[];      // the caller's own questions the graph couldn't answer
@@ -148,6 +150,52 @@ export interface CharterState {
   updated_at: string | null;
   confirmed_at: string | null;
   kickoff?: { jobs?: { id: string; mode: string; question: string }[]; error?: string } | null;
+}
+
+/** How much of the charter the graph can answer (kg/core/exam.py): questions drawn from the charter, answered from the
+ * graph alone, graded 2 / 1 / 0. */
+export interface ExamItem {
+  id: string;
+  core: number;          // 1-based: which core question it tests
+  tier?: 'basic' | 'working' | 'deep';
+  question: string;
+  points: 0 | 1 | 2;
+  answer: string;        // from the graph's facts only
+  facts: string[];
+  sources: number;
+  well_sourced: boolean; // a cited fact has more than one source
+}
+
+export interface ExamCore {
+  core: number;
+  question: string;
+  score: number;
+  status: 'answered' | 'partial' | 'open';
+}
+
+export interface ExamSitting {
+  uid: string;
+  created_at: string;
+  version: number;
+  score: number;
+  answered: number;
+  partial: number;
+  open: number;
+  total: number;
+  graph: { entities: number; facts: number };
+}
+
+export interface ExamRun extends ExamSitting {
+  items: ExamItem[];
+  cores: ExamCore[];
+  seconds: number;
+}
+
+export interface ExamState {
+  exam: { version: number; created_at: string; cores: string[]; questions: { id: string; core: number; question: string }[] } | null;
+  latest: ExamRun | null;
+  history: ExamSitting[];   // oldest first
+  running: boolean;
 }
 
 export interface ChatTurn {
@@ -600,6 +648,13 @@ export const kg = {
   learningGaps: (id: string) => request<LearningGaps>(KG_API, `${d(id)}/learning/gaps`),
 
   charter: (id: string) => request<CharterState & { brief: string }>(KG_API, `${d(id)}/charter`),
+
+  exam: (id: string) => request<ExamState>(KG_API, `${d(id)}/exam`),
+
+  /** Take the exam now, in the background (minutes): {started} — or {busy} / {skipped} without a charter. `fresh`: new
+   * questions from the same charter first (the score starts a new series). */
+  takeExam: (id: string, fresh = false) =>
+    request<{ started?: boolean; busy?: boolean; skipped?: string }>(KG_API, `${d(id)}/exam`, json({ wait: false, fresh })),
 
   saveCharter: (id: string, changes: Partial<Charter>) =>
     request<CharterState>(KG_API, `${d(id)}/charter`, { method: 'PUT', body: JSON.stringify(changes) }),

@@ -267,9 +267,17 @@ first       you give a topic → the Head interviews you → a research charter 
 on demand   you ask → the Head checks the graph → what it lacks goes to the Researcher (a mission) → every page read
             is learned through the pipeline → the Head is woken with the report and answers
 by itself   a learning cycle at the times you set (Settings › Learning): what's new + the Strategist's questions for
-            the graph's gaps → keep what holds, forget what never did → the Head decides the review queue → briefing
+            the graph's gaps → keep what holds, forget what never did → the Head decides the review queue → the exam
+            → briefing
 ```
 
+- **Growth you can measure.** After every cycle the domain sits an exam drawn from the charter (a few questions per
+  core question, fixed until the charter's questions change) and answers each from the graph alone — the examiner sees
+  only the facts Graph RAG returns, so what the model knows by itself earns nothing. Briefing › Growth shows the score
+  over time and each core question's state; the questions still open are the next cycle's first research. Each
+  core question gets a basic, a working and a deep question, so the score climbs as the graph goes deeper. A local
+  model sometimes builds a question on a detail it got wrong — "Set new ones" writes fresh questions, and
+  `LLM_MODEL_EXAMINER=anthropic:<model>` lets a stronger model set and grade the exam.
 - **The charter steers everything.** Research missions, the Strategist's questions, the ontology and the Head read
   it; the Head suggests an addition when you keep asking about something it lacks, and you take it or leave it
   (Settings › Charter). It stays yours to edit — or start over with a new interview.
@@ -337,10 +345,11 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
 | `GET` / `POST` | `/domains/{domain}/reports`, `/reports/{uid}` | Daily reports / write one now `{hours: 24, wait?}`: refreshes stale entity summaries, then a briefing of the period's changes |
 | `GET` / `PUT` / `DELETE` | `/domains/{domain}/charter` | The research charter `{goal, questions, scope, exclude, depth}`, its status (none / draft / active), the Head's suggestions and `brief` (the domain as research prompts see it) / edit / start over |
 | `POST` | `/domains/{domain}/charter/draft`, `/charter/confirm`, `/charter/suggestions/{uid}` | Draft it from interview notes `{notes}` / confirm it — the first time this starts the first deep research / take or leave a suggestion `{accept}` |
+| `GET` / `POST` | `/domains/{domain}/exam` | The exam (its questions), the latest sitting with every answer, the score history / sit it now `{wait?}` (skipped without a charter) |
 | `GET` | `/domains/{domain}/team` | The Head's agents: role, tasks (inputs), state (working / queued / idle), the Head's unread count |
 | `GET` | `/domains/{domain}/threads`, `/threads/{uid}` | Conversations between the Head and its agents (`?agent=`) / one with every message |
 | `GET` | `/health` | KG API + ArcadeDB status, tracing on/off |
-| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `draft_charter`, `confirm_charter`, `suggest_charter`, `web_search`, `read_webpage`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
+| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `draft_charter`, `confirm_charter`, `suggest_charter`, `exam_results`, `take_exam`, `web_search`, `read_webpage`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
 | MCP | `/mcp/readonly` | The reading tools only (no ingest, ontology, review or research requests) |
 
 Every endpoint but `/health` and the sign-in ones needs a session cookie or `Authorization: Bearer <API token>`;
@@ -443,8 +452,8 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - ✅ Research charter: the Head interviews you, drafts the charter, and the first deep research starts when you agree;
   every research run steers by it after that
 - ✅ Three roles: the Head, the Researcher and Learning (the learning pipeline, its steps shown as stations)
-- Growth you can measure: exam questions drawn from the charter, answered on a schedule — a score over time and
-  which core questions the graph can answer
+- ✅ Growth you can measure: exam questions drawn from the charter, answered from the graph alone after every
+  cycle — a score over time, which core questions the graph can answer, and the open ones researched next
 - Source tiers: papers (OpenAlex, arXiv, PubMed) > official sources > news > blogs, weighed in every fact
 - A second layer: synthesis pages per core question — the consensus, the debates, the open questions, the key
   sources — rewritten as the graph changes

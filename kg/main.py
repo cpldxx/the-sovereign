@@ -18,6 +18,7 @@ from api.learning import router as learning_router
 from api.crew import router as crew_router
 from api.domains import router as domains_router
 from api.entities import router as entities_router
+from api.exam import router as exam_router
 from api import mcp as kg_mcp
 from api.graph import router as graph_router
 from api.ontology import router as ontology_router
@@ -116,6 +117,7 @@ app.include_router(crew_router)
 app.include_router(chat_router)
 app.include_router(learning_router)
 app.include_router(charter_router)
+app.include_router(exam_router)
 app.include_router(system_router)
 
 

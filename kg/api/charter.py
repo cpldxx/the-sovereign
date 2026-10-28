@@ -4,7 +4,7 @@ confirmed by the user, then steering every research run."""
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core import auth, charter
+from core import auth, charter, exam
 
 router = APIRouter(tags=["charter"])
 
@@ -52,12 +52,16 @@ async def api_draft(domain_name: str, body: Draft, req: Request):
 
 @router.post("/domains/{domain_name}/charter/confirm")
 async def api_confirm(domain_name: str, req: Request):
-    """The user agrees: it becomes active, and the first time the domain's first deep research starts (`kickoff`)."""
+    """The user agrees: it becomes active, and the first time the domain's first deep research starts (`kickoff`)
+    and the exam is taken once as the baseline."""
     auth.require(domain_name, "editor")
     try:
-        return await charter.start(req.app.state.db, domain_name)
+        state = await charter.start(req.app.state.db, domain_name)
     except charter.CharterError as e:
         _fail(e)
+    if state["kickoff"] is not None:
+        exam.start(req.app.state.db, domain_name)   # the baseline: what the graph knows before it researches
+    return state
 
 
 @router.post("/domains/{domain_name}/charter/suggestions/{uid}")

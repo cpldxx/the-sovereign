@@ -29,7 +29,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import activity, auth, charter, crew, digest, kg
+from core import activity, auth, charter, crew, digest, exam, kg
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -78,7 +78,8 @@ _caller: contextvars.ContextVar[tuple[auth.Principal, str]] = contextvars.Contex
 _TOOL_AGENT = {"ingest_data": "extractor", "list_research": "research", "research_status": "research",
                "daily_report": "reporter", "list_reviews": "validator", "resolve_review": "validator",
                "update_ontology": "ontologist", "get_ontology": "ontologist", "draft_charter": "strategist",
-               "suggest_charter": "strategist", "confirm_charter": "research"}
+               "suggest_charter": "strategist", "confirm_charter": "research", "exam_results": "learning",
+               "take_exam": "learning"}
 
 
 def _guarded(fn: Callable, need: str) -> Callable:
@@ -291,6 +292,8 @@ async def confirm_charter(domain: str) -> dict:
         state = await charter.start(db, domain)
     except charter.CharterError as e:
         raise ToolError(str(e)) from e
+    if state["kickoff"] is not None:
+        exam.start(db, domain)   # the baseline
     return {**_charter_view(state), "research": state["kickoff"] or "already active: nothing new started"}
 
 
@@ -305,6 +308,33 @@ async def suggest_charter(domain: str, text: str, kind: Literal["question", "sco
         return _charter_view(await charter.suggest(db, domain, kind, text, why))
     except charter.CharterError as e:
         raise ToolError(str(e)) from e
+
+
+@tool("readonly")
+async def exam_results(domain: str) -> dict:
+    """How much of the research charter the graph can answer: the latest exam score (0-100) and the one before, each
+    core question's state (answered / partial / open), and the exam questions still open — where research should go.
+    Use it when asked how much the domain knows, how it has grown, or what it still can't answer."""
+    _require(domain)
+    run, runs = await exam.latest(db, domain), await exam.history(db, domain, 30)
+    if not run:
+        return {"exam": None, "note": "No exam yet — it is taken after each learning cycle once a charter exists."}
+    same = [r for r in runs if r["version"] == run["version"]]
+    return {"score": run["score"], "taken_at": run["created_at"], "first_score": same[0]["score"] if same else None,
+            "sittings": len(same), "answered": run["answered"], "partial": run["partial"], "open": run["open"],
+            "cores": [{k: c[k] for k in ("question", "score", "status")} for c in run["cores"]],
+            "open_questions": [x["question"] for x in run["items"] if x["points"] == 0][:10],
+            "running": exam.running(domain)}
+
+
+@tool()
+async def take_exam(domain: str) -> dict:
+    """Take the exam now, in the background (minutes): every question of the charter's exam answered from the graph
+    alone. The result shows in exam_results and in the Briefing › Growth view."""
+    _require(domain)
+    if not (await charter.get(db, domain))["charter"]:
+        raise ToolError("The exam is drawn from the research charter — there is none yet")
+    return {"started": exam.start(db, domain), "note": "already running" if exam.running(domain) else ""}
 
 
 # ── Senses: the world right now (the graph can be a day old) ──────────────

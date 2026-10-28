@@ -18,7 +18,7 @@ import httpx
 
 from agents.reporter import write_briefing
 from agents.summarizer import summarize
-from core import activity, auth
+from core import activity, auth, exam
 from core import database as kgdb
 from core.database import ArcadeDB
 from core.tracing import llm_usage, observe
@@ -83,11 +83,11 @@ def _ontology_gaps(changes: dict) -> list[dict]:
 
 
 def _digest_text(domain: str, description: str, start: str, end: str, totals: dict, changes: dict,
-                 runs: list[dict] | None, gaps: list[dict]) -> str:
+                 runs: list[dict] | None, gaps: list[dict], exam_line: str = "") -> str:
     lines = [f"DOMAIN: {domain} — {description}", f"PERIOD: {start} → {end} (UTC)",
              f"GRAPH NOW: {totals['entity_count']} entities, {totals['fact_count']} valid facts, "
              f"{totals['invalid_fact_count']} superseded, {totals['episode_count']} sources, "
-             f"{totals['pending_reviews']} pending reviews", ""]
+             f"{totals['pending_reviews']} pending reviews", *([exam_line] if exam_line else []), ""]
 
     def section(title: str, items: list, fmt, cap: int) -> None:
         lines.append(f"{title} ({len(items)}{f', showing {cap}' if len(items) > cap else ''}):")
@@ -199,7 +199,8 @@ async def build_report(db: ArcadeDB, domain: str, hours: int = 24, refresh: bool
             if any(stats["changes"].values()) or runs:
                 description = dom["config"].get("description") or domain
                 try:
-                    b = await write_briefing(_digest_text(domain, description, start, end, totals, changes, runs, gaps))
+                    b = await write_briefing(_digest_text(domain, description, start, end, totals, changes, runs, gaps,
+                                                          await exam.line(db, domain)))
                     headline, briefing, spoken = b.headline.strip(), b.briefing.strip(), b.spoken.strip()
                 except Exception as e:
                     print(f"[Reporter] failed: {type(e).__name__}: {e}", flush=True)

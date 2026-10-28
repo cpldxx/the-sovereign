@@ -1,6 +1,7 @@
 """The learning cycle — how a domain's graph keeps growing smarter by itself, on a schedule the user sets.
 
-    look     gaps(): what the graph is unsure or silent about — facts resting on one weak source, well-connected
+    look     gaps(): what the graph is unsure or silent about — the charter's exam questions it could not answer
+             (core/exam.py), facts resting on one weak source, well-connected
              entities nothing new was heard about lately, questions users asked that the Head had to take to the
              web, words the ontology lacked
     learn    the research service runs "what's new" plus the Strategist's questions for those gaps (research_questions)
@@ -22,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agents.strategist import research_questions
-from core import charter
+from core import charter, exam
 from core import database as kgdb
 from core.database import ArcadeDB, now
 
@@ -108,7 +109,7 @@ async def gaps(db: ArcadeDB, domain: str, user: str | None = None) -> dict:
     """What the graph is unsure or silent about — the raw material of the next cycle's questions.
     `user`: show only that person's own unanswered questions (unanswered_total still counts everyone's)."""
     if not await db.exists(domain):
-        return {"weak": [], "stale": [], "unanswered": [], "unanswered_total": 0, "ontology": []}
+        return {"exam": [], "weak": [], "stale": [], "unanswered": [], "unanswered_total": 0, "ontology": []}
     before = (datetime.now(timezone.utc) - timedelta(days=STALE_DAYS)).isoformat(timespec="seconds")
     weak = await db.cypher(
         domain,
@@ -136,7 +137,8 @@ async def gaps(db: ArcadeDB, domain: str, user: str | None = None) -> dict:
                                      "RETURN ep.ontology_gaps AS g ORDER BY ep.created_at DESC LIMIT 50"):
         for k, v in (json.loads(r["g"]) if isinstance(r["g"], str) else r["g"] or {}).items():
             gaps_[k] = gaps_.get(k, 0) + v
-    return {"weak": [{"entity": r["name"], "weak_facts": r["n"]} for r in weak],
+    return {"exam": await exam.open_questions(db, domain),   # the charter's, the graph couldn't answer: first
+            "weak": [{"entity": r["name"], "weak_facts": r["n"]} for r in weak],
             "stale": [{"entity": r["name"], "facts": r["degree"], "last": str(r["last"])[:10]} for r in stale],
             "unanswered": [q for who, q in unanswered if user is None or who == user][-8:],
             "unanswered_total": len(unanswered),
@@ -144,7 +146,9 @@ async def gaps(db: ArcadeDB, domain: str, user: str | None = None) -> dict:
 
 
 def gap_text(g: dict) -> str:
-    lines = ["Facts resting on one weak source, by entity: "
+    lines = ["Exam questions from the research charter the graph could not answer at its last sitting (research these "
+             "first):" + ("".join(f"\n- {q}" for q in g.get("exam") or []) or " none"),
+             "Facts resting on one weak source, by entity: "
              + (", ".join(f"{w['entity']} ({w['weak_facts']})" for w in g["weak"]) or "none"),
              "Well-connected entities with nothing new for a month: "
              + (", ".join(f"{s['entity']} (last {s['last']})" for s in g["stale"]) or "none"),
