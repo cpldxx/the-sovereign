@@ -44,7 +44,6 @@ from core.llm import HANGUL, foreign_script, model_for, model_settings
 RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
 MAX_QUESTIONS = 36    # three per core question (basic, working, deep), twelve core questions at most
 FACTS_SHOWN = 15      # facts the examiner sees per question (closest first, then the strongest around them)
-GRADINGS = 3          # a grade is the middle of three: one grading gave the same answer 1, the next 0 (2026-10-28)
 PAGES_TRIED = 2       # pages read per core question until one yields questions
 SOURCE_CHARS = 9000   # of a page the examiner reads
 MIN_PAGE = 800        # characters a page needs to be worth reading
@@ -190,12 +189,16 @@ def _one_language(context: str):
     return check
 
 
-async def _ask(output_type, system_prompt: str, prompt: str, context: str = "", decisive: bool = False, check=None):
+async def _ask(output_type, system_prompt: str, prompt: str, context: str = "", decisive: bool = False, check=None,
+               exact: bool = False):
     """One structured answer, its language checked (`check`: the validator, by default one language). A model that
     fails the check every time is taken as it is: one question's wording must not stop the exam (2026-10-28: answers
-    written in English three times over ended a whole sitting)."""
+    written in English three times over ended a whole sitting). `exact`: temperature 0 — the same graph gets the same
+    answer and grade (at 0.1 one graph scored 41, 23 and 36: answers took either side of a debate, one answer was graded
+    1, 0 and 1 — 2026-10-28)."""
     def agent(validated: bool) -> Agent:
-        a = Agent(MODEL, name="examiner", model_settings=model_settings(decisive=decisive), output_type=output_type,
+        settings = {**model_settings(decisive=decisive), **({"temperature": 0.0} if exact else {})}
+        a = Agent(MODEL, name="examiner", model_settings=settings, output_type=output_type,
                   retries=2 if validated else 4, system_prompt=system_prompt)
         if validated:
             a.output_validator(check or _one_language(context or prompt))
@@ -396,16 +399,15 @@ async def _grade(domain: str, q: dict, facts: list[dict]) -> Verdict:
 
     # The facts are often English: said last, the answer's language holds (said once in the system prompt, it didn't).
     language = "\n\nWrite the answer in Korean (한국어로)." if korean else ""
-    text = await _ask(str, ANSWER, f"QUESTION: {q['question']}\n\nFACTS:\n{shown}{language}", decisive=True,
+    text = await _ask(str, ANSWER, f"QUESTION: {q['question']}\n\nFACTS:\n{shown}{language}", exact=True,
                       check=checked)
     answer, cited = _cited(str(text), len(facts))
     v = Verdict(answer=answer, facts=cited)
     if not cited or not q.get("answer"):
         return v                                      # an answer resting on no fact knows nothing
-    prompt = f"QUESTION: {q['question']}\nREFERENCE: {q['answer']}\nANSWER: {v.answer}"
-    grades = [await _ask(Grade, COMPARE, prompt, decisive=True) for _ in range(GRADINGS)]
-    v.points = sorted(g.points for g in grades)[GRADINGS // 2]
-    v.conflict = sum(g.conflict for g in grades) > GRADINGS // 2
+    g = await _ask(Grade, COMPARE, f"QUESTION: {q['question']}\nREFERENCE: {q['answer']}\nANSWER: {v.answer}",
+                   exact=True)
+    v.points, v.conflict = g.points, g.conflict
     return v
 
 

@@ -112,19 +112,23 @@ async def test_a_model_that_keeps_failing_the_language_check_is_taken_as_it_is(m
     assert v.answer == "Leqembi is an antibody." and v.facts == [1]
 
 
-async def test_a_grade_is_the_middle_of_three(monkeypatch):
-    """The same answer graded 1 in one sitting and 0 in the next (2026-10-28): one grading's slip doesn't count."""
-    grades = iter([Grade(points=1, conflict=True), Grade(points=0), Grade(points=1)])
+async def test_the_graph_is_answered_and_graded_at_temperature_zero(monkeypatch):
+    """One graph scored 41, 23 and 36 at temperature 0.1 (2026-10-28): the same graph must get the same score."""
+    temperatures = []
 
     class Agent(_Agent):
+        def __init__(self, *a, model_settings, **kw):
+            super().__init__(*a, **kw)
+            temperatures.append(model_settings.get("temperature"))
+
         async def run(self, prompt):
-            if prompt.startswith("QUESTION") and "REFERENCE" not in prompt:
+            if "REFERENCE" not in prompt:
                 return type("Run", (), {"output": "Leqembi is an antibody [1]."})
-            return type("Run", (), {"output": next(grades)})
+            return type("Run", (), {"output": Grade(points=2)})
     monkeypatch.setattr(exam, "Agent", Agent)
     v = await exam._grade("d", {"question": "What is Leqembi?", "answer": "An antibody"},
                           [{"fact": "Leqembi is an antibody."}])
-    assert (v.points, v.conflict) == (1, False)                # one grading saw a conflict: not the majority
+    assert v.points == 2 and temperatures == [0.0, 0.0]          # the answer, then its grade
 
 
 def test_the_graphs_answer_is_read_with_the_facts_it_cites():
