@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, ChevronDown, ChevronRight, ExternalLink, Globe, Loader2, Sparkles, Telescope } from 'lucide-react';
 import { research, type ResearchJob, type ResearchPage } from '../lib/api';
 import { Markdown } from '../components/Markdown';
+import { TierChip } from '../components/TierChip';
 
 const ACTIVE = new Set(['queued', 'researching', 'ontology', 'ingesting']);
 
@@ -42,6 +43,7 @@ function PageRow({ page }: { page: ResearchPage }) {
       <a href={page.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-dim hover:text-ink">
         <ExternalLink size={10} className="shrink-0" />
         <span className="truncate">{page.title || page.url}</span>
+        <TierChip tier={page.tier} />
         {page.status === 'partial' && <span className="shrink-0 text-[9.5px] text-accent">partial</span>}
       </a>
       <div className={`pl-3.5 text-[10.5px] ${page.status === 'failed' || ing?.error ? 'text-bad' : 'text-faint'}`}>{outcome}</div>

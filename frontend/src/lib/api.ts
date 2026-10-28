@@ -297,6 +297,7 @@ export interface Episode {
   source: string;
   title: string;
   content_status: 'full' | 'partial' | string;
+  tier?: string;            // what kind of source (kg/core/sources.py): paper, official, press, blog…
   created_at: string;
   snippet?: string;
   entities?: number;
@@ -376,6 +377,7 @@ export interface ResearchPage {
   status: 'full' | 'partial' | 'failed';
   error: string;
   chars: number;
+  tier?: string;            // "paper" when read through the scholarly APIs
   ingest?: {
     skipped?: string;
     error?: string;
@@ -469,7 +471,7 @@ export interface Report {
   spoken: string;
   stats: ReportStats;
   digest?: {
-    sources: { uid: string; source: string; title: string; content_status: string; entities: number }[];
+    sources: { uid: string; source: string; title: string; content_status: string; tier?: string; entities: number }[];
     entities: { uid: string; name: string; type: string }[];
     facts_created: ReportFact[];
     facts_strengthened: ReportFact[];

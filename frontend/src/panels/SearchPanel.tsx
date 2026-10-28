@@ -3,6 +3,7 @@ import { ExternalLink, Loader2, Search } from 'lucide-react';
 import { kg, type QueryResult } from '../lib/api';
 import { categoryColor } from '../lib/colors';
 import { FactRow } from '../components/FactRow';
+import { TierChip } from '../components/TierChip';
 
 export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
   domain: string;
@@ -92,6 +93,7 @@ export function SearchPanel({ domain, entityTypes, onHighlight, onSelect }: {
                       {/^https?:\/\//.test(ep.source) ? (
                         <a href={ep.source} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-dim hover:text-ink">
                           <ExternalLink size={10} className="shrink-0" /><span className="truncate">{ep.title || ep.source}</span>
+                          <TierChip tier={ep.tier} />
                         </a>
                       ) : <span className="text-dim">{ep.title || ep.source}</span>}
                     </li>

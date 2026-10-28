@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, ExternalLink, Loader2, Newspaper, RefreshCw,
 import { kg, LANGFUSE_URL, type Report, type ReportFact } from '../lib/api';
 import { Markdown } from '../components/Markdown';
 import { canSpeak, speak, stopSpeaking } from '../lib/voice';
+import { TierChip } from '../components/TierChip';
 
 function when(iso: string) {
   return new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -161,6 +162,7 @@ function ReportView({ domain, summary, onHighlight, onSelect }: {
                         <a href={/^https?:/.test(e.source) ? e.source : undefined} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-dim hover:text-ink">
                           <ExternalLink size={10} className="shrink-0" />
                           <span className="truncate">{e.title || e.source}</span>
+                          <TierChip tier={e.tier} />
                           {e.content_status === 'partial' && <span className="shrink-0 text-[9.5px] text-accent">partial</span>}
                         </a>
                       </li>

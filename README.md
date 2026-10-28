@@ -284,6 +284,13 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
   write and grade it. (Methods: roundtrip-consistent question generation, Alberti et al. 2019; premise verification
   against retrieved evidence, EMNLP 2025; claim-level checking as in DeepMind's SAFE; answering in isolation as in
   Chain-of-Verification's factored variant.)
+- **Papers first, and every source weighed by what it is.** The Researcher searches the scholarly literature —
+  OpenAlex (every field), arXiv and PubMed, official APIs with abstracts and open-access full text — with
+  `paper_search` / `read_paper`, beside `web_search` / `web_fetch`. Every source gets a tier from its URL
+  (`kg/core/sources.py`): paper · official · reference · press · web · blog. The tier caps how far a fact it states is
+  trusted on its own (paper 1.0, official 0.95, press 0.85, web 0.75, blog 0.6 — a blog alone barely enters the graph);
+  confirmation by other sources still adds up. The Head says what kind of source a fact rests on, and every source list
+  shows it.
 - **The charter steers everything.** Research missions, the Strategist's questions, the ontology and the Head read
   it; the Head suggests an addition when you keep asking about something it lacks, and you take it or leave it
   (Settings › Charter). It stays yours to edit — or start over with a new interview.
@@ -340,7 +347,7 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
 | `POST` | `/domains` | Create a domain `{name, description}` → `{domain: "<id>"}` — you own it (id derived: `"Quant Trading"` → `quant_trading`, plus a short suffix if another account has it). Creates its database and generates its ontology in the background |
 | `GET` / `DELETE` | `/domains/{domain}` | Domain config, stats, your role / delete domain and its database (owner) |
 | `GET` / `PUT` / `DELETE` | `/domains/{domain}/members`, `/members/{uid}` | Members / share with an existing account `{email, role}` (owner) / remove (owner) or leave (yourself) |
-| `POST` | `/domains/{domain}/ingest` | Ingest `{raw_text, source, title?, content_status?}` → what was created / strengthened / superseded / sent to review |
+| `POST` | `/domains/{domain}/ingest` | Ingest `{raw_text, source, title?, content_status?, tier?}` → what was created / strengthened / superseded / sent to review |
 | `POST` | `/domains/{domain}/query` | Graph RAG `{query, k}` → `entities`, `facts`, `episodes` |
 | `GET` / `PUT` | `/domains/{domain}/ontology` | Read / replace the ontology |
 | `POST` | `/domains/{domain}/ontology/generate` | Re-generate the ontology (background) |
@@ -355,7 +362,7 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
 | `GET` | `/domains/{domain}/team` | The Head's agents: role, tasks (inputs), state (working / queued / idle), the Head's unread count |
 | `GET` | `/domains/{domain}/threads`, `/threads/{uid}` | Conversations between the Head and its agents (`?agent=`) / one with every message |
 | `GET` | `/health` | KG API + ArcadeDB status, tracing on/off |
-| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `draft_charter`, `confirm_charter`, `suggest_charter`, `exam_results`, `take_exam`, `web_search`, `read_webpage`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
+| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `draft_charter`, `confirm_charter`, `suggest_charter`, `exam_results`, `take_exam`, `web_search`, `search_papers`, `read_webpage`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
 | MCP | `/mcp/readonly` | The reading tools only (no ingest, ontology, review or research requests) |
 
 Every endpoint but `/health` and the sign-in ones needs a session cookie or `Authorization: Bearer <API token>`;
@@ -366,6 +373,7 @@ Every endpoint but `/health` and the sign-in ones needs a session cookie or `Aut
 | Method | Path | What |
 |---|---|---|
 | `POST` | `/domains/{domain}/research` | Queue a run `{mode: bootstrap \| update \| mission, question?}` |
+| `GET` | `/papers?q=&limit=` | Scholarly papers now (OpenAlex, PubMed, arXiv) with abstracts — for the KG's exam and the Head's `search_papers` (service only) |
 | `POST` | `/domains/{domain}/kickoff` | The first deep research when a charter is confirmed (the KG calls it) `{questions}`: a bootstrap unless the domain has one, then a mission per core question |
 | `GET` | `/jobs?domain=`, `/jobs/{id}` | Runs: status, pages read (and what each added to the graph), report |
 | `GET` | `/search?q=&time_range=` | Live web search for agents (paced SearXNG) |
@@ -460,7 +468,7 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - ✅ Three roles: the Head, the Researcher and Learning (the learning pipeline, its steps shown as stations)
 - ✅ Growth you can measure: an exam written from held-out authoritative sources (round-trip checked), answered from
   the graph alone after every cycle — a score over time, each core question's state, the open ones researched next
-- Source tiers: papers (OpenAlex, arXiv, PubMed) > official sources > news > blogs, weighed in every fact
+- ✅ Source tiers: papers (OpenAlex, arXiv, PubMed) > official sources > news > blogs, weighed in every fact
 - A second layer: synthesis pages per core question — the consensus, the debates, the open questions, the key
   sources — rewritten as the graph changes
 
