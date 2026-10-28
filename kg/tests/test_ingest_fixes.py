@@ -85,8 +85,8 @@ def test_which_existing_episodes_are_read_again():
 
 
 async def test_a_querys_sources_follow_its_facts(monkeypatch):
-    facts = [{"uid": f"f_{i}", "source_uid": "e_a", "target_uid": "e_b", "sources": [f"ep_{9 - i}", "ep_shared"]}
-             for i in range(5)]
+    facts = [{"uid": f"f_{i}", "source_uid": "e_a", "target_uid": "e_b", "sources": [f"ep_{9 - i}", "ep_shared"],
+              "similarity": 0.9 - i / 10} for i in range(5)]
 
     async def embed(texts):
         return [[0.0]]
@@ -105,6 +105,42 @@ async def test_a_querys_sources_follow_its_facts(monkeypatch):
         monkeypatch.setattr(kgdb, fn, stand_in)
     out = await kg._query(None, "d", "q", 5, {"entities": [], "facts": [], "episodes": []})
     assert [e["uid"] for e in out["episodes"]] == ["ep_9", "ep_shared", "ep_8", "ep_7", "ep_6", "ep_5"]
+
+
+async def test_a_question_in_another_language_is_also_searched_in_english(monkeypatch):
+    """The graph is kept in English: a Korean question found facts about HBM4 in general, its English twin the answer."""
+    by_vector = {"ko": [{"uid": "f_general", "similarity": 0.52, "source_uid": "e", "target_uid": "e"},
+                        {"uid": "f_answer", "similarity": 0.40, "source_uid": "e", "target_uid": "e"}],
+                 "en": [{"uid": "f_answer", "similarity": 0.77, "source_uid": "e", "target_uid": "e"}]}
+    translated = []
+
+    class Translator:
+        def __init__(self, *a, **k):
+            pass
+
+        async def run(self, question):
+            translated.append(question)
+            return type("Run", (), {"output": "Which bonding replaces bumps in HBM4?"})
+
+    async def embed(texts):
+        return [["en"] if t.isascii() else ["ko"] for t in texts]
+
+    async def search_facts(db, domain, vector, k):
+        return by_vector[vector[0]]
+
+    async def none(*a, **k):
+        return []
+    monkeypatch.setattr(kg, "Agent", Translator)
+    monkeypatch.setattr(kg, "embed", embed)
+    for fn, stand_in in (("search_entities", none), ("expand", none), ("get_entities", none),
+                         ("search_facts", search_facts), ("get_episodes", none)):
+        monkeypatch.setattr(kgdb, fn, stand_in)
+    empty = {"entities": [], "facts": [], "episodes": []}
+    out = await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
+    assert [(f["uid"], f["similarity"]) for f in out["facts"]] == [("f_answer", 0.77), ("f_general", 0.52)]
+    await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
+    await kg._query(None, "d", "Which bonding replaces bumps?", 5, empty)
+    assert len(translated) == 1                    # asked again: remembered — and an English question isn't translated
 
 
 # ── Failed reads are read again ────────────────────────────────────────────

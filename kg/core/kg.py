@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 
+from pydantic_ai import Agent
+
 from agents.extractor import STATE, extract, relate
 from agents.linker import link
 from agents.resolver import resolve
@@ -30,6 +32,7 @@ from core import activity, sources
 from core import database as kgdb
 from core.database import ArcadeDB, ArcadeDBError, new_uid, now
 from core.embeddings import embed
+from core.llm import model_for, model_settings
 from core.names import name_key
 from core.ontology import Ontology, normalize_type
 from core.tracing import Timings, observe
@@ -813,10 +816,46 @@ async def query(db: ArcadeDB, domain: str, question: str, k: int = 5) -> dict:
     return result
 
 
+IN_ENGLISH = """Translate the question into English for a search of an English knowledge graph. Keep every name, term and
+number. Answer with the English question only."""
+_english: dict[str, str] = {}   # question → its English, for the questions asked again (an exam's, a review's)
+
+
+async def _in_english(question: str) -> str:
+    """The question in English when most of it isn't in Latin script — the graph is kept in English
+    (agents/extractor.py), and the multilingual embedding still matches poorly across languages: measured 2026-10-28,
+    a Korean exam question's nearest facts were about HBM4 in general (similarity 0.52) while its English twin found
+    the answer (0.77). '' for an English question, or when the model can't be reached (the question alone is used)."""
+    if _latin_share(question) >= 0.5:
+        return ""
+    if question not in _english:
+        agent = Agent(model_for("searcher"), name="search_in_english", model_settings=model_settings(decisive=True),
+                      system_prompt=IN_ENGLISH)
+        try:
+            english = " ".join(str((await agent.run(question)).output).split())[:500]
+        except Exception as e:   # a search must not fail over its translation
+            print(f"[KG] query searched untranslated ({type(e).__name__})", flush=True)
+            return ""
+        if len(_english) >= 500:
+            _english.pop(next(iter(_english)))
+        _english[question] = english
+    return _english[question]
+
+
+def _closest(hits: list[list[dict]], k: int) -> list[dict]:
+    """The k closest of several searches' hits, each once, at its best similarity."""
+    best: dict[str, dict] = {}
+    for h in (h for found in hits for h in found):
+        if h["uid"] not in best or h["similarity"] > best[h["uid"]]["similarity"]:
+            best[h["uid"]] = h
+    return sorted(best.values(), key=lambda h: -h["similarity"])[:k]
+
+
 async def _query(db: ArcadeDB, domain: str, question: str, k: int, empty: dict) -> dict:
-    [vector] = await embed([question])
-    entities = await kgdb.search_entities(db, domain, vector, k)
-    hit_facts = await kgdb.search_facts(db, domain, vector, k)
+    english = await _in_english(question)
+    vectors = await embed([question, english] if english else [question])
+    entities = _closest([await kgdb.search_entities(db, domain, v, k) for v in vectors], k)
+    hit_facts = _closest([await kgdb.search_facts(db, domain, v, k) for v in vectors], k)
     seeds = {e["uid"] for e in entities} | {u for f in hit_facts for u in (f["source_uid"], f["target_uid"])}
     around = await kgdb.expand(db, domain, sorted(seeds), limit=40)
 

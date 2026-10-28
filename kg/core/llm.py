@@ -3,7 +3,8 @@
     LLM_MODEL=ollama:qwen3.6:35b            default for every agent
     LLM_MODEL_EXTRACTOR=anthropic:claude-…  optional per-agent override (EXTRACTOR, VALIDATOR,
                                             RESOLVER, LINKER, ONTOLOGIST, SUMMARIZER, REPORTER,
-                                            STRATEGIST — also writes the charter, EXAMINER, CREW)
+                                            STRATEGIST — also writes the charter, EXAMINER, CREW,
+                                            SEARCHER — puts a question in English for Graph RAG)
     LLM_THINKING=false                      reasoning off unless set to true
     ANTHROPIC_API_KEY=…                     only needed for anthropic: models
     LLM_BASE_URL=http://localhost:18081/v1  with openai:<model>: any OpenAI-compatible server — e.g. mlx-lm's,
