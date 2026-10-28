@@ -16,7 +16,7 @@ import threading
 import time
 import urllib.robotparser
 from dataclasses import dataclass, field
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urldefrag, urljoin, urlsplit
 
 import httpx
 from deerflow.community.url_safety import validate_public_http_url
@@ -61,7 +61,8 @@ class Capture:
     pages: list[Page] = field(default_factory=list)
 
     def add(self, page: Page) -> None:
-        if not any(p.url == page.url and p.status != "failed" for p in self.pages):
+        url = urldefrag(page.url).url        # …/ep2/ and …/ep2/#main-content are one page
+        if not any(urldefrag(p.url).url == url and p.status != "failed" for p in self.pages):
             self.pages.append(page)
 
 

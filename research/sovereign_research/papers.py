@@ -197,9 +197,11 @@ def brief(p: Paper) -> dict:
             "full_text": bool(p.full_text)}
 
 
-async def read(key: str, full_text: bool = False) -> fetch.Page:
-    """A found paper as a page — its abstract, and the open-access full text when asked for and readable (under
-    fetch's rules: robots.txt, pacing). Recorded for the knowledge graph with tier "paper"."""
+async def read(key: str, full_text: bool = True) -> fetch.Page:
+    """A found paper as a page — its abstract, and its open-access full text when there is one and it's readable
+    (under fetch's rules: robots.txt, pacing). Recorded for the knowledge graph with tier "paper". An abstract alone
+    gave the graph 5–12 facts against 50–90 from a long web page (2026-10-28), so the full text is read unless the
+    agent asks for less."""
     p = _found.get(key)
     if p is None:
         return fetch.Page(key, "", "", "failed", "unknown key: search with paper_search first", tier="paper")
@@ -235,13 +237,14 @@ async def paper_search_tool(query: str, max_results: int = 6) -> str:
 
 
 @tool("read_paper", parse_docstring=True)
-async def read_paper_tool(key: str, full_text: bool = False) -> str:
+async def read_paper_tool(key: str, full_text: bool = True) -> str:
     """Read a paper found with paper_search — its abstract and details; what it states is learned into the knowledge
     graph, trusted as a paper.
 
     Args:
         key: The paper's key from paper_search.
-        full_text: Also read its open-access full text when there is one (long: only when the abstract isn't enough).
+        full_text: Read its open-access full text too, when there is one (the default — an abstract holds little);
+            false for the abstract alone.
     """
     page = await read(key, full_text)
     if page.status == "failed":
