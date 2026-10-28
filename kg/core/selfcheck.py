@@ -66,7 +66,7 @@ async def run(db: ArcadeDB, alert: bool = True) -> dict:
         message = "Security self-check failed: " + "; ".join(f"{k}: {v['detail']}" for k, v in failed.items())
         for domain in list_domains():
             try:
-                await crew.notify(db, domain, "reporter", message, {"selfcheck": results})
+                await crew.notify(db, domain, "learning", message, {"selfcheck": results})
             except Exception as e:
                 print(f"[selfcheck] notice for {domain} failed: {type(e).__name__}", flush=True)
     return {"ok": not failed, "checks": results}

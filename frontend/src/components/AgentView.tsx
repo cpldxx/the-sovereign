@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  Crown, FileText, GitMerge, Globe, Link2, Newspaper, ScanText, Shapes, ShieldCheck, Target, User,
+  Crown, FileText, GitMerge, Globe, Link2, Newspaper, ScanText, Shapes, ShieldCheck, Target, User, Workflow,
   X, type LucideIcon,
 } from 'lucide-react';
 import { kg, research, type ActivityEvent, type TeamAgent } from '../lib/api';
@@ -10,7 +10,8 @@ import { TeamPanel } from '../panels/TeamPanel';
 
 /**
  * The main view: the Head, the knowledge graph and the team, as the user drew it — the Head on top, the graph at the
- * centre, the agents on a dial around it. Drawn in graphite: an agent at work turns bone-white and its ring turns;
+ * centre, the team on a dial around it: the Researcher, and the learning pipeline's stations (extract, validate,
+ * resolve, link, ontology, plan, summaries, briefing — one teammate, Learning, kg/core/crew.py). Drawn in graphite: an agent at work turns bone-white and its ring turns;
  * every hand-off (a task, a report, a tool call, facts written to the graph) travels its line as a comet, its kind
  * told by the comet's shape. Below, the console lists the hand-offs. Click an agent for its conversations (the
  * Researcher: its runs too; the Head: every conversation). Polls the KG's activity feed.
@@ -20,15 +21,21 @@ const W = 1000, H = 640;
 const HEAD = { x: 500, y: 76 }, USER = { x: 850, y: 76 }, CORE = { x: 500, y: 262, r: 74 };
 const ARC = { rx: 432, ry: 318 };   // the team's dial, centred on the graph: every line to it is a clear spoke
 const NODE_R = 21;
-const TEAMS: { label: string; agents: string[]; caption?: number }[] = [
-  // caption: where along its span a team is named (default the middle); Learning's steep end holds agents' status
-  { label: 'Learning', agents: ['research', 'extractor', 'validator', 'resolver', 'linker', 'ontologist'], caption: 0.75 },
-  { label: 'Planning', agents: ['strategist'] },
-  { label: 'Briefing', agents: ['summarizer', 'reporter'] },
+// teammate: whose span it is (its queue shows by the caption); caption: where along the span it is named (null: the
+// node's own label names it).
+const TEAMS: { label: string; teammate: string; agents: string[]; caption?: number | null }[] = [
+  { label: 'Research', teammate: 'research', agents: ['research'], caption: null },
+  { label: 'Learning pipeline', teammate: 'learning',
+    agents: ['extractor', 'validator', 'resolver', 'linker', 'ontologist', 'strategist', 'summarizer', 'reporter'] },
 ];
+// The pipeline's stations, by what they do (the KG names them after its agents).
+const STATION: Record<string, string> = {
+  extractor: 'Extract', validator: 'Validate', resolver: 'Resolve', linker: 'Link', ontologist: 'Ontology',
+  strategist: 'Plan', summarizer: 'Summaries', reporter: 'Briefing',
+};
 const ICON: Record<string, LucideIcon> = {
-  head: Crown, user: User, research: Globe, extractor: ScanText, validator: ShieldCheck, resolver: GitMerge,
-  linker: Link2, ontologist: Shapes, strategist: Target, summarizer: FileText, reporter: Newspaper,
+  head: Crown, user: User, research: Globe, learning: Workflow, extractor: ScanText, validator: ShieldCheck,
+  resolver: GitMerge, linker: Link2, ontologist: Shapes, strategist: Target, summarizer: FileText, reporter: Newspaper,
 };
 // The graphite scale (index.css) — SVG attributes take no CSS variables.
 const C = { bg: '#0a0a0a', node: '#101010', line: '#1e1e1e', line2: '#2e2e2e', edge: '#3a3a3a',
@@ -47,20 +54,24 @@ const on = (a: number, r = 0) => ({ x: CORE.x + (ARC.rx + r) * Math.cos(a), y: C
 /** Agent angles along the dial, left to right, a gap between teams; and each team's span. */
 function layout() {
   const angle: Record<string, number> = {};
-  const spans: { label: string; from: number; to: number; caption: number }[] = [];
+  const spans: { label: string; teammate: string; from: number; to: number; caption: number | null }[] = [];
   const slots = TEAMS.reduce((n, t) => n + t.agents.length, 0) - 1 + (TEAMS.length - 1) * 0.6;
   const at = (s: number) => rad(172 - (s / slots) * 164);    // 172° → 8°: below the graph
   let s = 0;
   for (const team of TEAMS) {
     const first = s;
     for (const name of team.agents) angle[name] = at(s++);
-    spans.push({ label: team.label, from: at(first - 0.3), to: at(s - 1 + 0.3), caption: team.caption ?? 0.5 });
+    spans.push({ label: team.label, teammate: team.teammate, from: at(first - 0.3), to: at(s - 1 + 0.3),
+                 caption: team.caption === undefined ? 0.5 : team.caption });
     s += 0.6;
   }
   return { angle, spans };
 }
 const { angle: ANGLE, spans: SPANS } = layout();
 const POS = Object.fromEntries(Object.entries(ANGLE).map(([n, a]) => [n, on(a)]));
+// Where work handed to a teammate lands: Learning's is the middle of its stations.
+const ANCHOR: Record<string, { x: number; y: number }> = Object.fromEntries(
+  SPANS.filter(s => !POS[s.teammate]).map(s => [s.teammate, on((s.from + s.to) / 2)]));
 
 /** A small fixed constellation inside the graph's core. */
 const STARS = (() => {
@@ -82,13 +93,14 @@ function point(name: string) {
   if (name === 'head') return HEAD;
   if (name === 'user') return USER;
   if (name === 'graph') return CORE;
-  return POS[name] ?? CORE;
+  return POS[name] ?? ANCHOR[name] ?? CORE;
 }
 
 /** The line a hand-off travels: Head ↔ agent bends around the graph on the agent's side; the rest go straight. */
 function path(from: string, to: string): string {
   const a = point(from), b = point(to);
-  const agent = from === 'head' && POS[to] ? b : to === 'head' && POS[from] ? a : null;
+  const onDial = (n: string) => !!(POS[n] || ANCHOR[n]);
+  const agent = from === 'head' && onDial(to) ? b : to === 'head' && onDial(from) ? a : null;
   if (agent) {
     const cx = agent.x < CORE.x ? CORE.x - CORE.r - 150 : CORE.x + CORE.r + 150;
     return `M ${a.x} ${a.y} Q ${cx} ${CORE.y - 30} ${b.x} ${b.y}`;
@@ -236,8 +248,13 @@ export function AgentView({ domain, stats, canResearch, onIngesting }: {
     return () => { alive = false; clearInterval(t); };
   }, [domain]);
 
-  const title = (name: string) => agents.find(a => a.name === name)?.title ?? (name === 'head' ? 'Head' : name === 'user' ? 'You' : name === 'graph' ? 'Graph' : name);
-  const active = (name: string) => !!working[name] || (recent[name] ?? 0) > Date.now() - 6000;
+  const title = (name: string) => STATION[name] ?? agents.find(a => a.name === name)?.title ?? (name === 'head' ? 'Head' : name === 'user' ? 'You' : name === 'graph' ? 'Graph' : name);
+  // A station is lit when it works — or when Learning itself does (answering the Head, a task just handed over).
+  const active = (name: string): boolean => !!working[name] || (recent[name] ?? 0) > Date.now() - 6000
+    || (name in STATION && (!!working.learning || (recent.learning ?? 0) > Date.now() - 6000));
+  const doingOf = (name: string) => name === 'learning'
+    ? working.learning?.[0] ?? Object.keys(STATION).map(n => working[n]?.[0]).find(Boolean)
+    : working[name]?.[0];
   const queued = Object.fromEntries(agents.map(a => [a.name, a.queued]));
   const busyCount = Object.keys(working).filter(n => n !== 'graph').length;
   const queuedCount = agents.reduce((n, a) => n + a.queued, 0);
@@ -280,15 +297,22 @@ export function AgentView({ domain, stats, canResearch, onIngesting }: {
             const p = on(a, -3), q = on(a, i % 5 === 0 ? 6 : 3);
             return <line key={i} x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={C.line2} strokeWidth={1} />;
           })}
-          {SPANS.map(s => {
-            const l = on(s.from + (s.to - s.from) * s.caption, -62);
+          {SPANS.filter(s => !POS[s.teammate]).map(s => {   // a teammate drawn as one node needs no bracket
             const cap = (a: number) => { const p = on(a, -40), q = on(a, -47); return <line x1={p.x} y1={p.y} x2={q.x} y2={q.y} stroke={C.edge} />; };
+            const l = s.caption === null ? null : on(s.from + (s.to - s.from) * s.caption, -62);
+            const waiting = queued[s.teammate] ?? 0;
+            const lit = active(s.teammate) || (s.teammate === 'learning' && Object.keys(STATION).some(n => !!working[n]));
             return (
-              <g key={s.label}>
-                <path d={arc(s.from, s.to, -40)} stroke={C.edge} strokeWidth={1} fill="none" />
+              <g key={s.label} onClick={() => setOpen(o => (o === s.teammate ? null : s.teammate))} style={{ cursor: 'pointer' }}>
+                <title>{`${s.label} — its conversations`}</title>
+                <path d={arc(s.from, s.to, -40)} stroke={lit ? C.accent : C.edge} strokeOpacity={lit ? 0.5 : 1} strokeWidth={1} fill="none" />
                 {cap(s.from)}{cap(s.to)}
-                <text x={l.x} y={l.y + 3} textAnchor="middle" fill={C.faint} fontSize={9} letterSpacing={2.2}
-                  fontFamily={MONO} stroke={C.bg} strokeWidth={4} paintOrder="stroke">{s.label.toUpperCase()}</text>
+                {l && (
+                  <text x={l.x} y={l.y + 3} textAnchor="middle" fill={open === s.teammate || lit ? C.accent : C.faint} fontSize={9}
+                    letterSpacing={2.2} fontFamily={MONO} stroke={C.bg} strokeWidth={4} paintOrder="stroke">
+                    {s.label.toUpperCase()}{waiting > 0 ? ` · ${waiting} QUEUED` : ''}
+                  </text>
+                )}
               </g>
             );
           })}
@@ -379,11 +403,12 @@ export function AgentView({ domain, stats, canResearch, onIngesting }: {
           {/* the team */}
           {Object.entries(POS).map(([name, p]) => {
             const lit = active(name), doing = working[name]?.[0], waiting = queued[name] ?? 0;
+            const owner = name in STATION ? 'learning' : name;   // a station opens Learning's conversations
             const Icon = ICON[name] ?? Shapes;
             return (
-              <g key={name} onClick={() => setOpen(o => (o === name ? null : name))} style={{ cursor: 'pointer' }}>
-                <title>{`${title(name)} — its conversations`}</title>
-                {open === name && <circle cx={p.x} cy={p.y} r={NODE_R + 11} fill="none" stroke={C.accent} strokeWidth={1.2} />}
+              <g key={name} onClick={() => setOpen(o => (o === owner ? null : owner))} style={{ cursor: 'pointer' }}>
+                <title>{name in STATION ? `${title(name)} — a station of the learning pipeline` : `${title(name)} — its conversations`}</title>
+                {open === owner && <circle cx={p.x} cy={p.y} r={NODE_R + 11} fill="none" stroke={C.accent} strokeWidth={1.2} />}
                 {lit && <circle cx={p.x} cy={p.y} r={NODE_R + 7} fill="none" stroke={C.accent} strokeOpacity={0.55}
                   strokeDasharray="2 5" className="spin-slow" />}
                 {!lit && waiting > 0 && <circle cx={p.x} cy={p.y} r={NODE_R + 6} fill="none" stroke={C.faint} strokeDasharray="1 4" />}
@@ -420,7 +445,7 @@ export function AgentView({ domain, stats, canResearch, onIngesting }: {
         </svg>
 
         {open && (
-          <AgentDrawer domain={domain} name={open} agent={agents.find(a => a.name === open)} doing={working[open]?.[0]}
+          <AgentDrawer domain={domain} name={open} agent={agents.find(a => a.name === open)} doing={doingOf(open)}
             canResearch={canResearch} onClose={() => setOpen(null)} onIngesting={onIngesting} />
         )}
         <div className="pointer-events-none absolute bottom-3 left-4 flex flex-wrap gap-x-4 gap-y-1 font-mono text-[9.5px] tracking-wider text-faint uppercase">

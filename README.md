@@ -68,22 +68,25 @@ The gap widens as the knowledge graph grows deeper.
        │   (queue) ┌──────────────────┐ │
        │           │ Knowledge graph  │ │
        │           └──────────────────┘ │
-       │              ▲   ▲   ▲   ▲     │
-       ▼              │   │   │   │     │
-  research · extractor · validator · resolver · linker · ontologist
-  strategist · summarizer · reporter
+       │              ▲          ▲      │
+       ▼              │          │      │
+   Researcher        Learning — the learning pipeline
+   (DeerFlow)        extract · validate · resolve · link · ontology · plan · summaries · briefing
 ```
 
-The Head Agent leads nine agents (`kg/core/crew.py`). It gives them work with `assign_task` (the inputs are
-checked by the task's Pydantic model) and asks them questions with `ask_agent` — each answers from what it knows
-right now: the Researcher from its runs, the Validator from what it rejected, the Strategist from what the graph is
-unsure or silent about. Work goes out on one queue (one message at a time: the agents share the local model; long
-jobs such as a research mission or a relink run beside it). When an agent finishes, it reports on the thread and the
-Head is woken to read the report and decide — store the findings, follow up on the same thread, send the
-Researcher further. Other news (the morning report is ready) is a notice in the Head's inbox. The graph only
-ever receives facts that the pipeline checked against their source; the conversations stay in the threads, which the
-**Team** tab shows. Guard: a thread wakes the Head at most 4 times and a domain 12 times an hour (`HEAD_MAX_WAKES`,
-`HEAD_WAKES_PER_HOUR`; `HEAD_WAKE=off` leaves every report in the inbox).
+Three roles (`kg/core/crew.py`): the **Head** (Hermes) talks to you and decides, the **Researcher** (DeerFlow) reads
+the web, and **Learning** — the learning pipeline — turns what is read into checked facts and keeps the graph in
+shape. The pipeline's steps are its stations; the agent view lights the one at work. The Head gives work with
+`assign_task` (the inputs are checked by the task's Pydantic model) and asks questions with `ask_agent` — the
+Researcher answers from its runs, Learning from what it read, rejected and is unsure about. Work goes out on one queue
+(one message at a time: everything shares the local model; long jobs such as a research mission or a relink run beside
+it). When a teammate finishes, it reports on the thread and the Head is woken to read the report and decide — store
+the findings, follow up on the same thread, send the Researcher further. Other news (the briefing is ready) is a
+notice in the Head's inbox. The graph only ever receives facts that the pipeline checked against their source; the
+conversations stay in the threads (click a teammate on the left). Guard: a thread wakes the Head at most 4 times and a
+domain 12 times an hour (`HEAD_MAX_WAKES`, `HEAD_WAKES_PER_HOUR`; `HEAD_WAKE=off` leaves every report in the inbox).
+Until 2026-10-28 each station was a teammate of its own — nine names for what is one pipeline; their old names still
+reach Learning.
 
 - **Agents never touch the database.** Every KG read and write goes through the KG API, which is where ontology checks and validation are enforced — in code, not in prompts.
 - **REST is the core; MCP is a thin adapter.** The same functions back both. Hermes discovers the KG tools over MCP with no glue code.
@@ -224,11 +227,11 @@ neutral scale, a bone-white accent, Geist type bundled with the app): state show
 
 Left — what the team is doing:
 - **Agents** (the main view) — the Head, the knowledge graph and the team as one picture: the Head on top, the
-  graph at the centre with its counts, the nine agents on a dial around it, bracketed by team. An agent at work
-  turns white, its ring turns and its line to the graph flows, with what it is doing beside it; every hand-off travels
+  graph at the centre with its counts, the Researcher and the learning pipeline's stations on a dial around it. A
+  teammate or station at work turns white, its ring turns and its line to the graph flows, with what it is doing beside it; every hand-off travels
   its line as a comet whose shape tells the kind (● task · ○ report · ■ tool call · ◆ facts stored). The console below
   lists the hand-offs with live counts of agents working, tasks queued and hand-offs per minute
-  (`GET /domains/{domain}/activity`, polled). **Click an agent** for who it is, what it is doing and its conversations
+  (`GET /domains/{domain}/activity`, polled). **Click a teammate** (any station opens Learning) for who it is, what it is doing and its conversations
   with the Head (tasks, questions, answers, reports, the Head's decisions); the Researcher also shows its runs —
   bootstrap, "what's new" and missions, each with the pages read, what each added and the report; the Head shows
   every conversation.
@@ -424,7 +427,7 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - Judging agents (Validator, Resolver, Linker) run at a low temperature for consistent decisions; research no longer hangs on parallel searches
 
 ### ✅ Phase E — The team
-- Roles as MCP endpoints (`/mcp`, `/mcp/readonly`); the Head leads nine agents over a queue and threads
+- Roles as MCP endpoints (`/mcp`, `/mcp/readonly`); the Head leads its team over a queue and threads
 - Learning cycles on your schedule: what's new + the graph's own open questions, then forgetting what never held up
 - (2026-10-25) The acting layer — actions, playbooks, live-data sensors and their sandbox — was removed: the
   Sovereign is a research engine. It is in the git history (commit 42729ee and earlier) if it is ever wanted back
@@ -439,6 +442,7 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 ### 🔜 Phase H — The research lab
 - ✅ Research charter: the Head interviews you, drafts the charter, and the first deep research starts when you agree;
   every research run steers by it after that
+- ✅ Three roles: the Head, the Researcher and Learning (the learning pipeline, its steps shown as stations)
 - Growth you can measure: exam questions drawn from the charter, answered on a schedule — a score over time and
   which core questions the graph can answer
 - Source tiers: papers (OpenAlex, arXiv, PubMed) > official sources > news > blogs, weighed in every fact

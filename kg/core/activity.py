@@ -3,7 +3,8 @@
     working(domain, agent, what)          while it runs, the agent shows as busy with `what`
     event(domain, source, target, kind)   one hand-off: a task, a report, a tool call, facts written to the graph
 
-Agents are the crew's names plus "head" and "graph" (the knowledge graph itself). Kept in memory, per domain, for the
+Agents are the crew's names, the learning pipeline's stations (crew.STATIONS), "head" and "graph" (the knowledge
+graph itself). Kept in memory, per domain, for the
 last EVENTS hand-offs: a picture of now, not a log — threads, reports and reviews keep the history. Polled by the UI
 (GET /domains/{domain}/activity?after=<seq>).
 """

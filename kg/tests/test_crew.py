@@ -74,13 +74,17 @@ async def _until(predicate, seconds: float = 10):
     return False
 
 
-def test_the_real_roster_is_the_whole_team():
-    """Every agent module has a place on the team, and every task's inputs are a model."""
+def test_the_real_roster_is_the_researcher_and_the_learning_pipeline():
+    """Two teammates; every agent module is a station of the learning pipeline, every task runs at one, and every
+    task's inputs are a model."""
     import pkgutil
     import agents
-    modules = {m.name for m in pkgutil.iter_modules(agents.__path__)}
-    # the pipeline agents are on it by name; research is the DeerFlow service
-    assert modules <= set(crew.ROSTER) | {"__init__"}, modules - set(crew.ROSTER)
+    modules = {m.name for m in pkgutil.iter_modules(agents.__path__)} - {"__init__"}
+    assert set(crew.ROSTER) == {"research", "learning"}
+    assert modules == set(crew.STATIONS), modules ^ set(crew.STATIONS)
+    for member in crew.ROSTER.values():
+        for t in member.tasks.values():
+            assert t.station in (*crew.STATIONS, "research"), t.name
     for card in crew.roster():
         assert card["role"] and card["title"]
         for t in card["tasks"]:
@@ -213,15 +217,18 @@ def test_loose_inputs_become_the_tasks_fields_and_are_still_checked():
         crew.Check.model_validate(crew._shape(crew.Check, {"claims": [{"a": 1, "b": 2}], "source_text": "x" * 30}))
 
 
-def test_an_agent_is_found_by_name_or_title():
-    assert crew._member_of("The Validator").name == "validator"
-    assert crew._member_of("strategist agent").name == "strategist"
+def test_an_agent_is_found_by_name_or_title_and_a_stations_old_name_reaches_learning():
+    assert crew._member_of("The Researcher").name == "research"
+    assert crew._member_of("learning pipeline").name == "learning"
+    assert crew._member_of("The Validator").name == "learning"
+    assert crew._member_of("strategist agent").name == "learning"
+    assert crew._teammate("reporter") == "learning" and crew._teammate("research") == "research"
     with pytest.raises(crew.CrewError):
         crew._member_of("intern")
 
 
 def test_the_roster_shows_inputs_as_an_example():
-    card = crew.ROSTER["validator"].card()["tasks"][0]
+    card = next(t for t in crew.ROSTER["learning"].card()["tasks"] if t["name"] == "check")
     assert card["example"] == {"claims": ["…"], "source_text": "…"} and card["optional"] == ["source"]
 
 
@@ -453,3 +460,14 @@ async def test_a_background_review_sweep_runs_one_at_a_time(monkeypatch):
     await asyncio.wait_for(ran.wait(), 2)
     await asyncio.sleep(0)
     assert "rv2" not in crew._reviewing
+
+
+@pytest.mark.db
+async def test_learnings_conversations_include_those_its_stations_had(scratch):
+    db, domain = scratch
+    for agent in ("validator", "learning", "research"):
+        await kgdb.insert_doc(db, domain, "Thread", {"title": agent, "agent": agent, "opened_by": "head",
+                                                      "status": "done", "wakes": 0, "updated_at": kgdb.now()})
+    assert sorted(t["agent"] for t in await crew.threads(db, domain, "learning")) == ["learning", "validator"]
+    assert [t["agent"] for t in await crew.threads(db, domain, "research")] == ["research"]
+    assert len(await crew.threads(db, domain)) == 3

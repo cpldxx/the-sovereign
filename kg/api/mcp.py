@@ -399,8 +399,8 @@ async def assign_task(domain: str, agent: str, task: str, inputs: dict | str | N
 
 @tool()
 async def ask_agent(domain: str, agent: str, question: str, thread: str | None = None) -> dict:
-    """Ask a teammate a question — e.g. the Validator what it rejected lately, the Strategist what the graph is
-    unsure about, the Researcher which sources it read. It answers from what it knows right now; waits up to 2 minutes, otherwise
+    """Ask a teammate a question — e.g. Learning what it rejected lately or what the graph is unsure about, the
+    Researcher which sources it read. It answers from what it knows right now; waits up to 2 minutes, otherwise
     the answer arrives in your inbox. `thread`: a follow-up in an earlier conversation."""
     _require(domain)
     try:

@@ -1,5 +1,11 @@
 """The crew — the Head Agent's team, and how they talk: work goes out on a queue, reports come back on threads.
 
+    the team       two teammates: the Researcher (reads the web — DeerFlow) and Learning (the learning pipeline: turns
+                   what is read into checked facts, and keeps the graph in shape). The pipeline's steps — extract,
+                   validate, resolve, link, the ontology, the plan, summaries, the briefing — are its STATIONS: the
+                   live view lights the one at work. (Until 2026-10-28 each station was a teammate of its own: nine
+                   names for the Head to juggle, for what is one pipeline.)
+
     Head → agent   assign(agent, task, inputs): a task on a thread, its inputs checked against the task's model;
                    ask(agent, question): a question, answered from what that agent knows right now (its desk)
     agent → Head   a finished task is reported on its thread and the Head is woken to read it and decide (HEAD_WAKE);
@@ -80,6 +86,7 @@ class Task:
     inputs: type[BaseModel]
     run: Callable[[ArcadeDB, str, BaseModel], Awaitable[Outcome]]
     background: bool = False   # long: runs beside the queue, reports when done
+    station: str = ""          # the pipeline station it runs at (the live view lights it)
 
 
 @dataclass
@@ -338,69 +345,50 @@ async def _desk_research(db: ArcadeDB, domain: str) -> str:
         f"→ {j.get('summary') or ''}" for j in jobs) if jobs else "No research jobs yet."
 
 
-async def _desk_extractor(db: ArcadeDB, domain: str) -> str:
+async def _reviews(db: ArcadeDB, domain: str) -> str:
+    pending = await kgdb.list_reviews(db, domain)
+    what = {"fact": "low-reliability facts", "merge": "possible duplicates (same thing, two names?)",
+            "link": "facts that may restate or replace older ones"}
+    lines = []
+    for kind, label in what.items():
+        mine = [r for r in pending if r.get("kind") == kind]
+        if mine:
+            lines.append(f"{len(mine)} {label}:" + "".join(f"\n  - {r['summary']}"[:200] for r in mine[:4]))
+    return "Waiting for the Head: " + ("\n".join(lines) if lines else "nothing")
+
+
+async def _desk_learning(db: ArcadeDB, domain: str) -> str:
+    """Everything the pipeline knows right now: what it read, what waits, what it dropped, its grammar, what the graph is
+    unsure about, the latest briefing."""
     stats = await kgdb.domain_stats(db, domain)
-    eps = await kgdb.list_episodes(db, domain, 10)
-    return (f"Graph: {stats}\nRecent sources I read:\n" +
-            "\n".join(f"- {e.get('created_at', '')[:16]} {e.get('title') or e.get('source')}" for e in eps))
-
-
-async def _reviews(db: ArcadeDB, domain: str, kind: str, what: str) -> str:
-    pending = [r for r in await kgdb.list_reviews(db, domain) if r.get("kind") == kind]
-    return f"{len(pending)} {what} waiting for the Head:\n" + "\n".join(f"- {r['summary']}" for r in pending[:12])
-
-
-async def _desk_validator(db: ArcadeDB, domain: str) -> str:
-    stats = await kgdb.domain_stats(db, domain)
-    weak = await _reviews(db, domain, "fact", "low-reliability facts")
-    rejected = await kgdb.top_facts(db, domain, 8, valid=False)
-    return (f"Graph: {stats}\n{weak}\nRecently invalidated facts:\n"
-            + "\n".join(f"- {f['fact']} ({f.get('invalid_reason') or 'invalid'})"[:240]
-                        for f in rejected))
-
-
-async def _desk_resolver(db: ArcadeDB, domain: str) -> str:
-    return await _reviews(db, domain, "merge", "possible duplicates (same thing, two names?)")
-
-
-async def _desk_linker(db: ArcadeDB, domain: str) -> str:
-    return await _reviews(db, domain, "link", "facts that may restate or replace older ones")
-
-
-async def _desk_ontologist(db: ArcadeDB, domain: str) -> str:
+    eps = await kgdb.list_episodes(db, domain, 6)
+    dropped = await kgdb.top_facts(db, domain, 5, valid=False)
     ontology = registry.load_domain(domain)["ontology"]
-    gaps: dict[str, int] = defaultdict(int)
+    words: dict[str, int] = defaultdict(int)
     rows = await db.cypher(domain, "MATCH (ep:Episode) WHERE ep.ontology_gaps IS NOT NULL RETURN ep.ontology_gaps AS g "
                                    "ORDER BY ep.created_at DESC LIMIT 50")
     for r in rows:
         for k, v in (json.loads(r["g"]) if isinstance(r["g"], str) else r["g"] or {}).items():
-            gaps[k] += v
-    top = sorted(gaps.items(), key=lambda kv: -kv[1])[:12]
-    return (f"Entity types: {', '.join(ontology.get('entity_types', []))}\n"
-            f"Relations: {', '.join(ontology.get('relation_types', []))}\n"
-            f"What recent sources said that the ontology couldn't hold: "
-            + (", ".join(f"{k} ×{v}" for k, v in top) or "nothing"))
-
-
-async def _desk_strategist(db: ArcadeDB, domain: str) -> str:
-    g = await learning.gaps(db, domain)
+            words[k] += v
+    missing = sorted(words.items(), key=lambda kv: -kv[1])[:10]
     last = await learning.last_cycle(db, domain) or {}
-    return ("What the graph is unsure or silent about:\n" + learning.gap_text(g)
-            + "\nQuestions researched in the last learning cycle: "
-            + ("; ".join(q["question"] for q in last.get("questions", [])) or "none yet"))
-
-
-async def _desk_summarizer(db: ArcadeDB, domain: str) -> str:
-    top = await kgdb.top_entities(db, domain, 12)
-    return "Most connected entities and their summaries:\n" + "\n".join(
-        f"- {e['name']} ({e.get('type')}): {(e.get('summary') or '(none)')[:200]}" for e in top)
-
-
-async def _desk_reporter(db: ArcadeDB, domain: str) -> str:
-    reports = await kgdb.list_reports(db, domain, 3)
-    return "Latest reports:\n" + "\n".join(
-        f"- {r.get('created_at', '')[:16]} {r.get('headline') or ''}\n  {(r.get('briefing') or '')[:600]}"
-        for r in reports) if reports else "No report yet — one is written every night after research."
+    reports = await kgdb.list_reports(db, domain, 1)
+    return "\n".join([
+        f"Graph: {stats}",
+        "Recent sources read:" + "".join(f"\n  - {e.get('created_at', '')[:16]} {e.get('title') or e.get('source')}"
+                                          for e in eps),
+        await _reviews(db, domain),
+        "Recently superseded or forgotten facts:" + "".join(
+            f"\n  - {f['fact']} ({f.get('invalid_reason') or 'invalid'})"[:200] for f in dropped),
+        f"Ontology — entity types: {', '.join(ontology.get('entity_types', []))}; relations: "
+        f"{', '.join(ontology.get('relation_types', []))}. What recent sources said that it couldn't hold: "
+        + (", ".join(f"{k} ×{v}" for k, v in missing) or "nothing"),
+        "What the graph is unsure or silent about:\n" + learning.gap_text(await learning.gaps(db, domain)),
+        "Questions researched in the last learning cycle: "
+        + ("; ".join(q["question"] for q in last.get("questions", [])) or "none yet"),
+        "Latest briefing: " + (f"{reports[0].get('created_at', '')[:16]} {reports[0].get('headline') or ''}"
+                               if reports else "none yet — one is written after each learning cycle"),
+    ])
 
 
 def _member(name, title, role, desk, *tasks: Task) -> Member:
@@ -408,35 +396,33 @@ def _member(name, title, role, desk, *tasks: Task) -> Member:
 
 
 ROSTER: dict[str, Member] = {m.name: m for m in [
-    _member("research", "Researcher", "reads the web for a question and stores what each page states (DeerFlow)",
+    _member("research", "Researcher", "reads the web for a question and learns every page it reads (DeerFlow)",
             _desk_research, Task("investigate", "Research a question on the web; every page read is learned into "
-                                 "the graph (minutes)", Investigate, _investigate, background=True)),
-    _member("extractor", "Extractor", "turns source text into entities and facts — the start of the learning "
-            "pipeline (then Validator, Resolver, Linker)",
-            _desk_extractor, Task("learn", "Learn a text into the graph through the whole pipeline: extract, "
-                                  "validate against the text, resolve duplicates, link to existing facts", Learn,
-                                  _learn)),
-    _member("validator", "Validator", "checks every fact against the source it came from — only supported facts "
-            "enter the graph", _desk_validator,
-            Task("check", "Check statements against a text (nothing is stored)", Check, _check)),
-    _member("resolver", "Resolver", "decides whether a new entity is the same real thing as a known one",
-            _desk_resolver),
-    _member("linker", "Linker", "finds the existing facts a new fact restates or contradicts, and the relations "
-            "hidden in facts filed about one entity", _desk_linker,
+                                 "the graph (minutes)", Investigate, _investigate, background=True, station="research")),
+    _member("learning", "Learning", "the learning pipeline: turns what is read into checked facts — extracts "
+            "entities and facts, validates each against its source, resolves duplicates, links them to what is known "
+            "— and keeps the graph in shape: its ontology, the entity summaries, the briefing, and the plan of what "
+            "to learn next from what the graph is unsure or silent about", _desk_learning,
+            Task("learn", "Learn a text into the graph through the whole pipeline: extract, validate against the "
+                 "text, resolve duplicates, link to existing facts", Learn, _learn, station="extractor"),
+            Task("check", "Check statements against a text (nothing is stored)", Check, _check, station="validator"),
             Task("relink", "Turn stored facts about one entity that name another into the relations they state, "
-                 "each checked by the Validator (minutes)", Nothing, _relink, background=True)),
-    _member("ontologist", "Ontologist", "designs the domain's grammar: its entity types and relations",
-            _desk_ontologist, Task("propose", "Propose an ontology from recent sources (not applied)", Propose,
-                                   _propose)),
-    _member("strategist", "Strategist", "decides what the graph should learn next from what it is unsure or silent "
-            "about — facts on one weak source, topics gone quiet, questions it could not answer",
-            _desk_strategist, Task("plan", "Pick the research questions that would close the graph's biggest gaps",
-                                   Plan, _plan)),
-    _member("summarizer", "Summarizer", "rewrites entity summaries from their current facts",
-            _desk_summarizer, Task("refresh", "Refresh the summaries of entities that changed", Since, _summarize)),
-    _member("reporter", "Reporter", "writes the daily briefing of what changed",
-            _desk_reporter, Task("brief_now", "Write a briefing of what changed now", Since, _brief)),
+                 "each one validated (minutes)", Nothing, _relink, background=True, station="linker"),
+            Task("propose", "Propose an ontology from recent sources (not applied)", Propose, _propose,
+                 station="ontologist"),
+            Task("plan", "Pick the research questions that would close the graph's biggest gaps — the charter's core "
+                 "questions first", Plan, _plan, station="strategist"),
+            Task("refresh", "Refresh the summaries of entities that changed", Since, _summarize, station="summarizer"),
+            Task("brief_now", "Write a briefing of what changed now", Since, _brief, station="reporter")),
 ]}
+# The learning pipeline's stations (the KG's own agents, kg/agents/): they light up in the live view as they work.
+# Their old names still reach Learning — a model, a thread or a caller from before may use them.
+STATIONS = ("extractor", "validator", "resolver", "linker", "ontologist", "strategist", "summarizer", "reporter")
+
+
+def _teammate(name: str) -> str:
+    """A teammate's name — a station's old name is Learning's (messages queued before 2026-10-28 use them)."""
+    return "learning" if name in STATIONS else name
 
 
 def roster() -> list[dict]:
@@ -445,6 +431,8 @@ def roster() -> list[dict]:
 
 def _member_of(agent: str) -> Member:
     name = re.sub(r"^(the|agent)\s+", "", (agent or "").strip().lower()).removesuffix(" agent")
+    if name in STATIONS or name in ("learning pipeline", "pipeline"):
+        name = "learning"
     if (m := ROSTER.get(name) or next((x for x in ROSTER.values() if x.title.lower() == name), None)) is None:
         raise CrewError(f"No agent '{agent}'. The team: {', '.join(ROSTER)}")
     return m
@@ -582,7 +570,9 @@ async def thread(db: ArcadeDB, domain: str, uid: str) -> dict | None:
 
 
 async def threads(db: ArcadeDB, domain: str, agent: str | None = None, limit: int = 40) -> list[dict]:
-    where, params = ("agent = :a", {"a": agent}) if agent else ("", {})
+    # Learning's threads include those its stations had when each was a teammate of its own.
+    names = [agent, *STATIONS] if agent == "learning" else [agent]
+    where, params = ("agent IN :a", {"a": names}) if agent else ("", {})
     return await kgdb.find_docs(db, domain, "Thread", (), where, order="updated_at DESC", limit=limit, **params)
 
 
@@ -592,7 +582,7 @@ async def team(db: ArcadeDB, domain: str) -> list[dict]:
                                      states=[QUEUED, WORKING, WAITING])
     out = []
     for card in roster():
-        mine = [m for m in open_msgs if m["recipient"] == card["name"]]
+        mine = [m for m in open_msgs if _teammate(m["recipient"]) == card["name"]]
         state = ("working" if any(m["status"] in (WORKING, WAITING) for m in mine)
                  else "queued" if mine else "idle")
         out.append({**card, "state": state, "queued": sum(m["status"] == QUEUED for m in mine)})
@@ -667,7 +657,7 @@ async def _work(db: ArcadeDB, domain: str, msg: dict) -> None:
     # Claim it: of two KG processes on one database, only one runs it.
     if not await kgdb.update_doc(db, domain, "Message", msg["uid"], {"status": WORKING}, if_status=QUEUED):
         return
-    member = ROSTER.get(msg["recipient"])
+    member = ROSTER.get(_teammate(msg["recipient"]))
     if member is None:
         await _finish(db, domain, msg, Outcome(f"No agent '{msg['recipient']}'", ok=False))
         return
@@ -676,7 +666,7 @@ async def _work(db: ArcadeDB, domain: str, msg: dict) -> None:
 
     async def run() -> None:
         try:
-            with activity.working(domain, member.name, msg.get("task") or msg["text"][:100]):
+            with activity.working(domain, (t.station if t else "") or member.name, msg.get("task") or msg["text"][:100]):
                 if msg["kind"] == "task":
                     if t is None:
                         raise CrewError(f"The {member.title} has no task '{msg['task']}'")
@@ -747,7 +737,7 @@ async def _wake_once(db: ArcadeDB, domain: str, thread_uid: str) -> bool:
         message = (f"[Your team reports — thread {thread_uid}, “{t['title']}”]\n{history}\n\n"
                    f"You were woken because a teammate reported. Decide what follows: store findings worth keeping as "
                    f"facts (ingest_data — only what the sources state), follow up with a teammate on this same thread "
-                   f"(assign_task / ask_agent with thread=\"{thread_uid}\"), propose an action, or close it. Don't "
+                   f"(assign_task / ask_agent with thread=\"{thread_uid}\"), or close it. Don't "
                    f"repeat work that is done. End with a two-sentence note of what you decided.")
         for r in reports:
             await kgdb.update_doc(db, domain, "Message", r["uid"], {"status": READ})
