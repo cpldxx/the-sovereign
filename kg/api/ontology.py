@@ -5,11 +5,12 @@ update tool. Existing nodes keep their categories; the new grammar applies to
 everything ingested afterwards.
 """
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from agents.ontologist import bootstrap_domain_ontology
 from agents.ontologist import generate_ontology as generate_ontology_now
+from core import charter
 from core.ontology import Ontology, save_ontology
 from domains.registry import load_domain, ontology_path
 
@@ -47,18 +48,19 @@ class GenerateRequest(BaseModel):
 
 
 @router.post("/{domain_name}/ontology/generate", status_code=202)
-async def generate_ontology(domain_name: str, background_tasks: BackgroundTasks, request: GenerateRequest | None = None):
+async def generate_ontology(domain_name: str, req: Request, background_tasks: BackgroundTasks,
+                            request: GenerateRequest | None = None):
     """(Re)generate the ontology with the Ontologist, replacing the current one.
 
     With `corpus` (e.g. pages from the research bootstrap) the grammar is derived from real sources.
     By default it runs in the background; `wait: true` returns the new ontology (or 502 on failure).
     """
     try:
-        config = load_domain(domain_name)["config"]
+        load_domain(domain_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     request = request or GenerateRequest()
-    description = config.get("description") or domain_name
+    description = await charter.brief(req.app.state.db, domain_name)   # the charter's too, once confirmed
     if request.wait:
         try:
             ontology = await generate_ontology_now(domain_name, description, request.corpus or None)

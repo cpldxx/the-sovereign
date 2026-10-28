@@ -22,9 +22,9 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from agents.strategist import research_questions
+from core import charter
 from core import database as kgdb
 from core.database import ArcadeDB, now
-from domains import registry
 
 # The machine's timezone (the launcher passes it in; containers run on UTC) until the user saves their own.
 DEFAULTS = {"enabled": True, "times": ["03:00"], "timezone": os.getenv("SOVEREIGN_TIMEZONE") or "UTC", "curiosity": 2,
@@ -157,10 +157,10 @@ def gap_text(g: dict) -> str:
 async def questions(db: ArcadeDB, domain: str, n: int) -> dict:
     """The Strategist's research questions for the current gaps (none when n is 0 or nothing matters)."""
     g = await gaps(db, domain)
-    if n <= 0 or not any(g.values()):
+    steered = (await charter.get(db, domain))["status"] == charter.ACTIVE   # its core questions are always worth pursuing
+    if n <= 0 or not (steered or any(g.values())):
         return {"questions": [], "gaps": g}
-    description = registry.load_domain(domain)["config"].get("description") or domain
-    out = await research_questions(domain, description, gap_text(g), n)
+    out = await research_questions(domain, await charter.brief(db, domain), gap_text(g), n)
     return {"questions": [q.model_dump() for q in out.questions], "gaps": g}
 
 

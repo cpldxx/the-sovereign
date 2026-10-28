@@ -8,7 +8,7 @@
 
 The Sovereign is a multi-tenant platform where users create **domain-specific research workspaces**. Each domain gets its own knowledge graph and a team of agents that keeps researching, validating and storing what it finds — and a Head Agent that answers from that graph, with its sources.
 
-Think of it as building a domain expert from scratch. You give it a topic. It researches, learns, organizes and forgets what never held up — getting smarter every day. It doesn't act in the world (no messages, orders or bookings): it finds out what is true and explains it.
+Think of it as a research lab that never stops. You give it a topic; the Head asks what you really want to know and writes a **research charter** with you — your goal, the core questions, what to leave out, how deep. From then on it researches, learns, organizes and forgets what never held up, steering by that charter — getting smarter every day. It doesn't act in the world (no messages, orders or bookings): it finds out what is true and explains it.
 
 ---
 
@@ -259,11 +259,17 @@ Backend URLs default to localhost; override with `VITE_KG_URL` / `VITE_HERMES_UR
 ### Researching: how the graph grows
 
 ```
+first       you give a topic → the Head interviews you → a research charter (goal, core questions, in scope, leave
+            out, depth) → you agree → the first deep research: a broad first study + one mission per core question
 on demand   you ask → the Head checks the graph → what it lacks goes to the Researcher (a mission) → every page read
             is learned through the pipeline → the Head is woken with the report and answers
 by itself   a learning cycle at the times you set (Settings › Learning): what's new + the Strategist's questions for
             the graph's gaps → keep what holds, forget what never did → the Head decides the review queue → briefing
 ```
+
+- **The charter steers everything.** Research missions, the Strategist's questions, the ontology and the Head read
+  it; the Head suggests an addition when you keep asking about something it lacks, and you take it or leave it
+  (Settings › Charter). It stays yours to edit — or start over with a new interview.
 
 - **A research engine, not an agent that acts.** Nothing is sent, ordered or booked; the Head finds out what is true,
   keeps it as checked facts with their sources, and says how sure it is.
@@ -326,10 +332,12 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
 | `GET` | `/domains/{domain}/episodes` | Ingested sources, newest first |
 | `GET` / `POST` | `/domains/{domain}/reviews`, `/reviews/{uid}` | Head review queue / decide `{approve, note}` |
 | `GET` / `POST` | `/domains/{domain}/reports`, `/reports/{uid}` | Daily reports / write one now `{hours: 24, wait?}`: refreshes stale entity summaries, then a briefing of the period's changes |
+| `GET` / `PUT` / `DELETE` | `/domains/{domain}/charter` | The research charter `{goal, questions, scope, exclude, depth}`, its status (none / draft / active), the Head's suggestions and `brief` (the domain as research prompts see it) / edit / start over |
+| `POST` | `/domains/{domain}/charter/draft`, `/charter/confirm`, `/charter/suggestions/{uid}` | Draft it from interview notes `{notes}` / confirm it — the first time this starts the first deep research / take or leave a suggestion `{accept}` |
 | `GET` | `/domains/{domain}/team` | The Head's agents: role, tasks (inputs), state (working / queued / idle), the Head's unread count |
 | `GET` | `/domains/{domain}/threads`, `/threads/{uid}` | Conversations between the Head and its agents (`?agent=`) / one with every message |
 | `GET` | `/health` | KG API + ArcadeDB status, tracing on/off |
-| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `web_search`, `read_webpage`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
+| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `draft_charter`, `confirm_charter`, `suggest_charter`, `web_search`, `read_webpage`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
 | MCP | `/mcp/readonly` | The reading tools only (no ingest, ontology, review or research requests) |
 
 Every endpoint but `/health` and the sign-in ones needs a session cookie or `Authorization: Bearer <API token>`;
@@ -340,6 +348,7 @@ Every endpoint but `/health` and the sign-in ones needs a session cookie or `Aut
 | Method | Path | What |
 |---|---|---|
 | `POST` | `/domains/{domain}/research` | Queue a run `{mode: bootstrap \| update \| mission, question?}` |
+| `POST` | `/domains/{domain}/kickoff` | The first deep research when a charter is confirmed (the KG calls it) `{questions}`: a bootstrap unless the domain has one, then a mission per core question |
 | `GET` | `/jobs?domain=`, `/jobs/{id}` | Runs: status, pages read (and what each added to the graph), report |
 | `GET` | `/search?q=&time_range=` | Live web search for agents (paced SearXNG) |
 | `POST` | `/fetch` | Read one page now `{url}` — robots.txt, SSRF guard, pacing, crawl4ai |
@@ -426,6 +435,15 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 ### ✅ Phase G — SaaS
 - Accounts (invite sign-up, sessions, API tokens), domains shared as viewer / editor / owner, every service checks
   every request, Heads limited to their domain, the operator's machine kept from other tenants
+
+### 🔜 Phase H — The research lab
+- ✅ Research charter: the Head interviews you, drafts the charter, and the first deep research starts when you agree;
+  every research run steers by it after that
+- Growth you can measure: exam questions drawn from the charter, answered on a schedule — a score over time and
+  which core questions the graph can answer
+- Source tiers: papers (OpenAlex, arXiv, PubMed) > official sources > news > blogs, weighed in every fact
+- A second layer: synthesis pages per core question — the consensus, the debates, the open questions, the key
+  sources — rewritten as the graph changes
 
 ---
 

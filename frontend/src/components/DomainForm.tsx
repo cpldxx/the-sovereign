@@ -40,7 +40,7 @@ export function DomainForm({ onCreate, onBusy }: {
           autoFocus
           value={name}
           onChange={e => setName(e.target.value)}
-          placeholder="Quant Trading"
+          placeholder="Alzheimer's treatments"
           className="mt-1 w-full rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-accent/60"
         />
         {id && <span className="mt-1 block font-mono text-[10.5px] text-faint">id: {id} (+ a short suffix if another account has it)</span>}
@@ -51,11 +51,12 @@ export function DomainForm({ onCreate, onBusy }: {
           value={description}
           onChange={e => setDescription(e.target.value)}
           rows={3}
-          placeholder="Algorithmic trading strategies, technical analysis, market signals"
+          placeholder="New treatments for Alzheimer's disease: antibodies, clinical trials, biomarkers"
           className="mt-1 w-full resize-none rounded-md border border-line-2 bg-bg px-3 py-2 text-sm outline-none focus:border-accent/60"
         />
         <span className="mt-1 block text-[10.5px] text-faint">
-          The Ontologist turns this into the domain's grammar (entity and relation types) — usually under a minute.
+          A first sketch is enough. Next, the Head asks what you really want to find out and writes a research
+          charter with you; research starts when you agree.
         </span>
       </label>
       {error && <p className="text-xs text-bad">{error}</p>}

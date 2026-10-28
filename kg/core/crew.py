@@ -36,7 +36,7 @@ from pydantic_ai import Agent
 
 from agents.ontologist import generate_ontology
 from agents.validator import validate
-from core import activity, auth, digest, kg, learning
+from core import activity, auth, charter, digest, kg, learning
 from core import database as kgdb
 from core.database import ArcadeDB, now
 from core.llm import model_for, model_settings
@@ -269,9 +269,8 @@ class Propose(BaseModel):
 
 
 async def _propose(db: ArcadeDB, domain: str, x: Propose) -> Outcome:
-    dom = registry.load_domain(domain)
-    description = dom["config"].get("description") or domain
-    current = Ontology.model_validate(dom["ontology"])
+    description = await charter.brief(db, domain)
+    current = Ontology.model_validate(registry.load_domain(domain)["ontology"])
     rows = await db.cypher(domain, "MATCH (ep:Episode) RETURN ep.title AS title, left(ep.content, 1500) AS text "
                                    "ORDER BY ep.created_at DESC LIMIT 12")
     corpus = [f"{r.get('title') or ''}\n{r.get('text') or ''}" for r in rows]

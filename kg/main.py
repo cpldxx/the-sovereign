@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.transport_security import TransportSecuritySettings
 
 from api.auth import router as auth_router
+from api.charter import router as charter_router
 from api.chat import router as chat_router
 from api.learning import router as learning_router
 from api.crew import router as crew_router
@@ -114,6 +115,7 @@ app.include_router(reports_router)
 app.include_router(crew_router)
 app.include_router(chat_router)
 app.include_router(learning_router)
+app.include_router(charter_router)
 app.include_router(system_router)
 
 

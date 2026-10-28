@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Bot, Network, Newspaper, Settings2, Workflow } from 'lucide-react';
-import { ApiError, auth, can, kg, onSignedOut, research, type DomainDetail, type DomainSummary, type Ontology, type User } from './lib/api';
+import { ApiError, auth, can, kg, onSignedOut, type DomainDetail, type DomainSummary, type Ontology, type User } from './lib/api';
 import { Sidebar } from './components/Sidebar';
 import { SignIn } from './components/SignIn';
 import { DomainHeader } from './components/DomainHeader';
@@ -10,7 +10,7 @@ import { EntityPanel } from './components/EntityPanel';
 import { Welcome } from './components/Welcome';
 import { AskPanel } from './panels/AskPanel';
 import { BriefingPanel } from './panels/BriefingPanel';
-import { SettingsPanel } from './panels/SettingsPanel';
+import { SettingsPanel, type SettingsView } from './panels/SettingsPanel';
 
 // Three tabs: you talk to the Head (and confirm what it wants to do), read what happened, and set things up. The rest
 // is the Head's work, seen on the left — click an agent for its conversations; search lives in the graph tab.
@@ -97,6 +97,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
   const [highlight, setHighlight] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('head');
+  const [settingsView, setSettingsView] = useState<SettingsView>('charter');
   const [version, setVersion] = useState(0);  // bumps on every reload, so open panels refetch
   const [error, setError] = useState<string | null>(null);
 
@@ -183,11 +184,10 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
     const id = await kg.createDomain(name, description);
     await loadDomains();
     select(id);
-    // Start the research bootstrap right away when the research service is up (the Researcher lights up on the
-    // left); otherwise paste sources into the Head chat.
+    // No research yet: the Head first asks what you want from the domain, drafts its research charter, and the first
+    // deep research starts when you agree (kg/core/charter.py).
     setView('agents');
     setTab('head');
-    await research.start(id, 'bootstrap').catch(() => undefined);
   }
 
   async function deleteDomain(id: string) {
@@ -273,7 +273,8 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                   <div className={tab === 'head' ? 'flex h-full flex-col' : 'hidden'}>
                     <div className="min-h-0 flex-1">
                       <AskPanel key={active} domain={active} canIngest={can(detail.role, 'editor')} onKnowledgeChanged={refresh} onHighlight={setHighlight}
-                        ontologyReady={detail.ontology_generated} />
+                        ontologyReady={detail.ontology_generated}
+                        onOpenCharter={() => { setSettingsView('charter'); setTab('settings'); }} />
                     </div>
                   </div>
                   <div className={tab === 'briefing' ? 'h-full' : 'hidden'}>
@@ -282,6 +283,7 @@ function Workspace({ me, onSignOut }: { me: User; onSignOut: () => Promise<void>
                   </div>
                   <div className={tab === 'settings' ? 'h-full' : 'hidden'}>
                     <SettingsPanel key={active} domain={active} detail={detail} ontology={ontology} version={version}
+                      view={settingsView} onView={setSettingsView} onAskHead={() => setTab('head')}
                       onChanged={refresh}
                       onOntologyChanged={async () => { await refresh(); await loadDomains(); }} />
                   </div>

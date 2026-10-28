@@ -148,8 +148,8 @@ def _toolset_tools(toolset: str) -> list[str]:
     return registry.get_tool_names_for_toolset(toolset)
 
 
-def _domain_context(domain: str) -> tuple[str, dict, dict]:
-    """Domain description, ontology and team from the KG REST API."""
+def _domain_context(domain: str) -> tuple[str, dict, dict, dict]:
+    """Domain description, ontology, team and research charter from the KG REST API."""
     with httpx.Client(base_url=KG_URL, timeout=10.0, headers=auth.headers(domain)) as client:
         r = client.get(f"/domains/{domain}")
         if r.status_code == 404:
@@ -158,7 +158,8 @@ def _domain_context(domain: str) -> tuple[str, dict, dict]:
         description = r.json()["config"].get("description") or domain
         ontology = client.get(f"/domains/{domain}/ontology").json()["ontology"]
         team = client.get(f"/domains/{domain}/team").json()
-    return description, ontology, team
+        charter = client.get(f"/domains/{domain}/charter").json()
+    return description, ontology, team, charter
 
 
 def _team(team: dict) -> str:
@@ -175,7 +176,56 @@ def _team(team: dict) -> str:
     return "\n".join(lines)
 
 
-def _system_prompt(domain: str, description: str, ontology: dict, team: dict) -> str:
+def _charter_lines(c: dict) -> str:
+    lines = [f"  Goal: {c['goal']}", "  Core questions:", *(f"  - {q}" for q in c["questions"])]
+    if c.get("scope"):
+        lines.append("  In scope: " + "; ".join(c["scope"]))
+    if c.get("exclude"):
+        lines.append("  Leave out: " + "; ".join(c["exclude"]))
+    lines.append(f"  Depth: {c.get('depth') or 'working'}")
+    return "\n".join(lines)
+
+
+def _charter(domain: str, state: dict, editable: bool) -> str:
+    """What the user wants from this domain — or, without a charter yet, the interview that finds out."""
+    status, c = state.get("status"), state.get("charter")
+    if status == "active" and c:
+        waiting = len(state.get("suggestions") or [])
+        return f"""
+THE RESEARCH CHARTER — what the user wants from this domain. It steers all research; answer with it in mind:
+{_charter_lines(c)}
+When the user keeps asking about something it doesn't cover (twice or more), propose adding it once with
+suggest_charter and tell them they can take it in Settings › Charter{f" ({waiting} suggestion(s) already wait)" if waiting else ""}.
+Revise it with draft_charter only when the user asks you to change it.
+"""
+    if status == "draft" and c:
+        return f"""
+A DRAFT RESEARCH CHARTER waits for the user's agreement — no research has started from it yet:
+{_charter_lines(c)}
+If the user agrees (yes, start, looks good…), call confirm_charter: it starts the first deep research — tell them
+it runs in the background for a while and the graph fills as it reads. If they want changes, call draft_charter
+again with your updated notes.
+""" if editable else ""
+    if not editable:
+        return ""
+    return f"""
+NO RESEARCH CHARTER YET — interview first. You don't know yet what the user really wants from "{domain}".
+Like a thesis advisor's first meeting, find out:
+- what they want to understand or decide, and why;
+- which questions matter most to them;
+- what to leave out;
+- how deep (the big picture, working knowledge, or expert depth) and which sources they trust.
+Ask one or two short questions per turn, building on their answers; three or four rounds are usually enough. If
+they ask something about the domain meanwhile, answer it first, then go on. When you understand — or they want
+to start — call draft_charter with your notes from the interview (everything they said that matters, in their
+words). Show them the draft briefly (the goal and the core questions) and ask whether to start researching; when
+they agree, call confirm_charter. Only a person is interviewed: when a teammate's report or a review sweep woke
+you, do that work and leave the charter alone.
+"""
+
+
+def _system_prompt(domain: str, description: str, ontology: dict, team: dict, charter: dict | None = None,
+                   editable: bool = True) -> str:
     entity_types = ", ".join(ontology.get("entity_types", []))
     relation_types = ", ".join(ontology.get("relation_types", []))
     return f"""You are the Head Agent of The Sovereign — the lead researcher of the "{domain}" domain.
@@ -184,7 +234,7 @@ Domain: {description}
 You run a research operation: you find out what is true, keep it as checked facts with their sources, and explain
 it. You don't act in the world — no messages, orders or bookings; when asked for one, say this is a research engine
 and offer what you found instead.
-
+{_charter(domain, charter or {}, editable)}
 You lead a TEAM of agents — give them work and talk to them:
 {_team(team)}
 - assign_task queues work, e.g. assign_task(domain="{domain}", agent="validator", task="check",
@@ -363,12 +413,12 @@ def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSi
                       voice: bool = False, tools: str = "head") -> AIAgent:
     """Build a domain-scoped Head Agent whose only tools are the KG's MCP tools for that domain
     (`tools`: "head" — everything, for editors; "readonly" — for viewers)."""
-    description, ontology, team = _domain_context(domain)
+    description, ontology, team, charter = _domain_context(domain)
     toolset = connect_kg(domain, tools)
     return AIAgent(
         **_model_kwargs(),
         enabled_toolsets=[toolset],
-        ephemeral_system_prompt=(_system_prompt(domain, description, ontology, team)
+        ephemeral_system_prompt=(_system_prompt(domain, description, ontology, team, charter, editable=tools == "head")
                                  + (READ_ONLY if tools == "readonly" else "") + (VOICE_MODE if voice else "")),
         max_iterations=max_iterations,
         tool_delay=0.0,

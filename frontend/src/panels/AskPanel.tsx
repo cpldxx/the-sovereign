@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { AudioLines, Check, Loader2, Mic, MicOff, Paperclip, Send, Square, Trash2, Volume2, VolumeX, Wrench, X } from 'lucide-react';
-import { hermes, kg, type AgentEvent, type ChatTurn, type IngestResult, type Turn } from '../lib/api';
+import { AudioLines, Check, Compass, Loader2, Mic, MicOff, Paperclip, Play, Send, Square, Trash2, Volume2, VolumeX, Wrench, X } from 'lucide-react';
+import { hermes, kg, type AgentEvent, type CharterState, type ChatTurn, type IngestResult, type Turn } from '../lib/api';
 import { IngestPanel } from './IngestPanel';
 import { Markdown } from '../components/Markdown';
 import { canSpeak, speak, stopSpeaking } from '../lib/voice';
@@ -101,12 +101,43 @@ function Steps({ steps }: { steps: Step[] }) {
   );
 }
 
-export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, ontologyReady }: {
+// The Head's tools that change the research charter: the charter card follows them.
+const CHARTER_TOOLS = new Set(['draft_charter', 'confirm_charter', 'suggest_charter']);
+
+/** A drafted charter, waiting for the user's yes — the end of the Head's interview. */
+function CharterDraft({ state, starting, onStart, onEdit }: {
+  state: CharterState;
+  starting: boolean;
+  onStart: () => void;
+  onEdit: () => void;
+}) {
+  const c = state.charter!;
+  return (
+    <div className="space-y-2 rounded-md border border-accent/40 bg-panel p-3 text-[12px]">
+      <div className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-accent uppercase"><Compass size={11} /> Research charter · draft</div>
+      <p className="leading-snug text-ink">{c.goal}</p>
+      <ol className="list-decimal space-y-0.5 pl-4 text-dim">
+        {c.questions.slice(0, 5).map(q => <li key={q}>{q}</li>)}
+        {c.questions.length > 5 && <li className="list-none text-faint">+{c.questions.length - 5} more</li>}
+      </ol>
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <button onClick={onStart} disabled={starting} className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-black disabled:opacity-50">
+          {starting ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Start researching
+        </button>
+        <button onClick={onEdit} className="rounded-md border border-line-2 px-3 py-1.5 text-dim hover:text-ink">Edit</button>
+        <span className="text-[10.5px] text-faint">or tell the Head what to change</span>
+      </div>
+    </div>
+  );
+}
+
+export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, ontologyReady, onOpenCharter }: {
   domain: string;
   canIngest: boolean;   // editors add sources; any member asks
   onKnowledgeChanged: () => Promise<void>;
   onHighlight: (uids: Set<string>) => void;
   ontologyReady: boolean;
+  onOpenCharter: () => void;
 }) {
   const [messages, setMessages] = useState<Message[]>(() => loadChat(domain));
   const [attaching, setAttaching] = useState(false);   // a source pasted in: the pipeline learns it, the chat notes it
@@ -134,6 +165,31 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
   messagesRef.current = messages;
 
   useEffect(() => { cacheChat(domain, messages); }, [domain, messages]);
+
+  // What the user wants from this domain: none yet → the Head interviews; a draft → the card to start research.
+  const [charter, setCharter] = useState<CharterState | null>(null);
+  const [starting, setStarting] = useState(false);
+  const loadCharter = () => kg.charter(domain).then(setCharter).catch(() => undefined);
+  useEffect(() => { void loadCharter(); }, [domain]);
+
+  async function startResearch() {
+    setStarting(true);
+    try {
+      const s = await kg.confirmCharter(domain);
+      setCharter(s);
+      const runs = s.kickoff?.jobs?.length ?? 0;
+      const note = s.kickoff?.error
+        ? `**Charter confirmed.** The research service didn't take the first runs (${s.kickoff.error}).`
+        : `**Research started** from the charter: ${runs} run${runs === 1 ? '' : 's'} queued — a broad first study and one per core question. ` +
+          'They work in the background (the Researcher on the left); the graph fills as they read.';
+      setMessages(m => [...m, { role: 'assistant', content: note }]);
+      void kg.addChat(domain, { role: 'assistant', content: note }).catch(() => undefined);
+    } catch (e) {
+      setMessages(m => [...m, { role: 'assistant', content: (e as Error).message, error: true }]);
+    } finally {
+      setStarting(false);
+    }
+  }
 
   // The conversation from the KG; this browser's old local one is moved there once.
   const waiting = messages.some(m => m.pending);
@@ -213,6 +269,10 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
             s.done = true;
           }
           setSteps([...collected]);
+          if (CHARTER_TOOLS.has(e.name)) {
+            void loadCharter();
+            void onKnowledgeChanged();
+          }
           // Light up what the agent read (query) or stored (ingest) in the graph.
           if (e.name === 'ingest_data' || e.name === 'update_ontology') {
             void onKnowledgeChanged().then(() => { if (e.uids.length) onHighlight(new Set(e.uids)); });
@@ -424,14 +484,21 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
         </div>
       )}
       <div ref={scroller} className="h-full space-y-4 overflow-y-auto px-4 py-4">
-        {messages.length === 0 && !busy && (
+        {messages.length === 0 && !busy && (charter?.status === 'none' && canIngest ? (
+          <div className="mx-auto mt-10 max-w-sm space-y-2 text-center text-xs text-faint">
+            <p className="font-mono tracking-widest text-dim">HEAD AGENT</p>
+            <p className="text-[13px] leading-relaxed text-dim">What do you want to find out about this topic?</p>
+            <p className="leading-relaxed">Tell me in your own words. I'll ask a few questions, write a research charter with you, and
+              start researching once you agree — then keep at it.</p>
+          </div>
+        ) : (
           <div className="mt-10 space-y-2 text-center text-xs text-faint">
             <p className="font-mono tracking-widest text-dim">HEAD AGENT</p>
             <p>"What do we know about …?"</p>
             {canIngest && <p>📎 paste an article to learn it</p>}
-            <p>"What's the biggest risk right now?"</p>
+            <p>"Where do the sources disagree?"</p>
           </div>
-        )}
+        ))}
 
         {messages.map((m, i) =>
           m.role === 'user' ? (
@@ -446,6 +513,10 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
               ) : m.error ? <p className="text-[13px] text-bad">{m.content}</p> : <Markdown>{m.content}</Markdown>}
             </div>
           ),
+        )}
+
+        {!busy && canIngest && charter?.status === 'draft' && charter.charter && (
+          <CharterDraft state={charter} starting={starting} onStart={() => void startResearch()} onEdit={onOpenCharter} />
         )}
 
         {busy && (
@@ -463,6 +534,13 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
         )}
       </div>
       </div>
+
+      {canIngest && charter?.status === 'active' && charter.suggestions.length > 0 && (
+        <button onClick={onOpenCharter} className="flex items-center gap-1.5 border-t border-line px-4 py-1.5 text-left text-[11px] text-dim hover:text-ink">
+          <Compass size={11} className="text-accent" />
+          The Head suggested {charter.suggestions.length} addition{charter.suggestions.length === 1 ? '' : 's'} to the research charter — review
+        </button>
+      )}
 
       {(voice !== 'off' || voiceError) && (
         <div className="flex items-center gap-2 border-t border-line px-3 py-2 text-[11.5px]">

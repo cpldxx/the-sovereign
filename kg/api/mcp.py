@@ -29,7 +29,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import activity, auth, crew, digest, kg
+from core import activity, auth, charter, crew, digest, kg
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -77,7 +77,8 @@ _caller: contextvars.ContextVar[tuple[auth.Principal, str]] = contextvars.Contex
 # Which agent a tool call reaches, for the live agent view (the rest read or write the graph itself).
 _TOOL_AGENT = {"ingest_data": "extractor", "list_research": "research", "research_status": "research",
                "daily_report": "reporter", "list_reviews": "validator", "resolve_review": "validator",
-               "update_ontology": "ontologist", "get_ontology": "ontologist"}
+               "update_ontology": "ontologist", "get_ontology": "ontologist", "draft_charter": "strategist",
+               "suggest_charter": "strategist", "confirm_charter": "research"}
 
 
 def _guarded(fn: Callable, need: str) -> Callable:
@@ -258,6 +259,52 @@ async def daily_report(domain: str) -> dict:
         return {"report": None, "generating": digest.running(domain),
                 "note": "No report yet — one is written every night after research."}
     return {"report": reports[0], "generating": digest.running(domain)}
+
+
+# ── The research charter: what the user wants from this domain ─────────────
+
+def _charter_view(state: dict) -> dict:
+    return {"status": state["status"], "charter": state["charter"],
+            "suggestions": [{k: x[k] for k in ("kind", "text")} for x in state["suggestions"]]}
+
+
+@tool()
+async def draft_charter(domain: str, notes: str) -> dict:
+    """Write the research charter from your interview with the user. `notes`: everything they told you that matters,
+    in their words — what they want to understand or decide and why, the questions they care about most, what to
+    leave out, how deep, which sources they trust. Takes a minute. A first charter is a draft until the user
+    agrees (confirm_charter); an active one is revised in place — only when the user asked for the change."""
+    _require(domain)
+    try:
+        return _charter_view(await charter.draft(db, domain, notes))
+    except charter.CharterError as e:
+        raise ToolError(str(e)) from e
+
+
+@tool()
+async def confirm_charter(domain: str) -> dict:
+    """The user agreed to the drafted charter: it becomes active and the domain's first deep research starts from it
+    (a broad first study unless the domain has one, then one research run per core question — in the background,
+    hours with a local model). Only after the user said yes."""
+    _require(domain)
+    try:
+        state = await charter.start(db, domain)
+    except charter.CharterError as e:
+        raise ToolError(str(e)) from e
+    return {**_charter_view(state), "research": state["kickoff"] or "already active: nothing new started"}
+
+
+@tool()
+async def suggest_charter(domain: str, text: str, kind: Literal["question", "scope", "exclude"] = "question",
+                          why: str = "") -> dict:
+    """Propose an addition to the charter — when the user keeps asking about something it doesn't cover (a new
+    core question, a sub-topic in scope, or something to leave out). The user takes or leaves it in Settings ›
+    Charter; tell them you suggested it."""
+    _require(domain)
+    try:
+        return _charter_view(await charter.suggest(db, domain, kind, text, why))
+    except charter.CharterError as e:
+        raise ToolError(str(e)) from e
 
 
 # ── Senses: the world right now (the graph can be a day old) ──────────────

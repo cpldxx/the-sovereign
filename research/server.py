@@ -27,7 +27,7 @@ os.environ["DEER_FLOW_HOME"] = str((HERE / os.getenv("DEER_FLOW_HOME", ".deerflo
 import httpx  # noqa: E402
 from fastapi import FastAPI, HTTPException, Query  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from pydantic import BaseModel  # noqa: E402
+from pydantic import BaseModel, Field  # noqa: E402
 
 from sovereign_research import auth, fetch, runner, search  # noqa: E402
 from sovereign_research.jobs import KG_URL, Jobs  # noqa: E402
@@ -235,6 +235,25 @@ async def run_cycle(domain: str):
     slot = f"manual {jobs_now()[:16]}"
     start_cycle(domain, slot)
     return {"started": slot}
+
+
+class Kickoff(BaseModel):
+    questions: list[str] = Field(default_factory=list, max_length=12)
+
+
+@app.post("/domains/{domain}/kickoff")
+async def kickoff(domain: str, request: Kickoff):
+    """A domain's first deep research, when its user confirms the research charter (the KG asks): a broad bootstrap
+    unless the domain has one, then a mission for each core question. Queued like any research."""
+    async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain), timeout=10) as kg:
+        if (await kg.get(f"/domains/{domain}")).status_code == 404:
+            raise HTTPException(status_code=404, detail=f"Domain '{domain}' does not exist")
+    queued = []
+    if not jobs.bootstrapped(domain) and not ((active := jobs.active(domain)) and active["mode"] == "bootstrap"):
+        queued.append(jobs.submit(domain, "bootstrap"))
+    for q in dict.fromkeys(q.strip() for q in request.questions if q.strip()):
+        queued.append(jobs.submit(domain, "mission", q))
+    return {"jobs": [{"id": j["id"], "mode": j["mode"], "question": j["question"]} for j in queued]}
 
 
 @app.post("/domains/{domain}/research")

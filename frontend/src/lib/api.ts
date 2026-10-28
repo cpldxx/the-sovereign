@@ -122,6 +122,34 @@ export interface LearningGaps {
   ontology: string[];
 }
 
+/** What the user wants from a domain (kg/core/charter.py): drafted from the Head's interview, then it steers all research. */
+export type CharterDepth = 'overview' | 'working' | 'expert';
+
+export interface Charter {
+  goal: string;
+  questions: string[];   // the core questions, most important first
+  scope: string[];
+  exclude: string[];
+  depth: CharterDepth;
+}
+
+export interface CharterSuggestion {
+  uid: string;
+  kind: 'question' | 'scope' | 'exclude';
+  text: string;
+  why: string;
+  at: string;
+}
+
+export interface CharterState {
+  charter: Charter | null;
+  status: 'none' | 'draft' | 'active';
+  suggestions: CharterSuggestion[];
+  updated_at: string | null;
+  confirmed_at: string | null;
+  kickoff?: { jobs?: { id: string; mode: string; question: string }[]; error?: string } | null;
+}
+
 export interface ChatTurn {
   uid: string;
   role: 'user' | 'assistant';
@@ -570,6 +598,22 @@ export const kg = {
       .then(r => r.settings),
 
   learningGaps: (id: string) => request<LearningGaps>(KG_API, `${d(id)}/learning/gaps`),
+
+  charter: (id: string) => request<CharterState & { brief: string }>(KG_API, `${d(id)}/charter`),
+
+  saveCharter: (id: string, changes: Partial<Charter>) =>
+    request<CharterState>(KG_API, `${d(id)}/charter`, { method: 'PUT', body: JSON.stringify(changes) }),
+
+  /** Write it from notes (none: from the description) — a minute with a local model. */
+  draftCharter: (id: string, notes = '') => request<CharterState>(KG_API, `${d(id)}/charter/draft`, json({ notes })),
+
+  /** The user agrees: it steers research from now on, and the first time the first deep research starts. */
+  confirmCharter: (id: string) => request<CharterState>(KG_API, `${d(id)}/charter/confirm`, { method: 'POST' }),
+
+  decideCharterSuggestion: (id: string, uid: string, accept: boolean) =>
+    request<CharterState>(KG_API, `${d(id)}/charter/suggestions/${encodeURIComponent(uid)}`, json({ accept })),
+
+  resetCharter: (id: string) => request<CharterState>(KG_API, `${d(id)}/charter`, { method: 'DELETE' }),
 
   /** Your conversation with the Head, kept in the KG (Hermes writes each question and answer as it happens). */
   chat: (id: string) => request<{ turns: ChatTurn[] }>(KG_API, `${d(id)}/chat`).then(r => r.turns),

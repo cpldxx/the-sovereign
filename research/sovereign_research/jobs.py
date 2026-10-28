@@ -190,19 +190,19 @@ class Jobs:
         domain = job["domain"]
         job.update(status="researching", started_at=now())
         async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain), timeout=30) as kg:
-            detail = (await kg.get(f"/domains/{domain}")).raise_for_status().json()
+            # The domain as research should see it: its description plus the user's charter once confirmed.
+            brief = (await kg.get(f"/domains/{domain}/charter")).raise_for_status().json()["brief"]
             episodes = (await kg.get(f"/domains/{domain}/episodes", params={"limit": 500})).raise_for_status().json()
-        description = detail["config"].get("description") or domain
         # Newest first (the KG's order): the prompt shows the most recent sources and the sites read most of late.
         recent = list(dict.fromkeys(e["source"] for e in episodes["episodes"]
                                     if str(e.get("source") or "").startswith("http")))
 
         if job["mode"] == "bootstrap":
-            prompt = missions.bootstrap(domain, description)
+            prompt = missions.bootstrap(domain, brief)
         elif job["mode"] == "update":
-            prompt = missions.update(domain, description, recent)
+            prompt = missions.update(domain, brief, recent)
         else:
-            prompt = missions.mission(domain, description, job["question"])
+            prompt = missions.mission(domain, brief, job["question"])
 
         loop = asyncio.get_running_loop()
         on_step = lambda text: loop.call_soon_threadsafe(self._step, job, text)  # noqa: E731
