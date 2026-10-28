@@ -69,7 +69,8 @@ Write:
 Every summary sentence and every point ends with the numbers of the facts it rests on, like [2][5] or [S1]. Say how sure
 in words: "confirmed by several sources", "one paper", "a single report". Write in {language}."""
 
-_CITE = re.compile(r"\[(S?)(\d+)\]")
+_CITE = re.compile(r"\[(S?)(\d+)\]|\((S)(\d+)\)")    # [2], [S1] — and (S1), as the model writes it at times
+_CITE_SPACED = re.compile(r"\s*(?:\[S?\d+\]|\(S\d+\))")
 
 
 def running(domain: str) -> bool:
@@ -124,11 +125,12 @@ def _numbered(ev: dict) -> str:
 def _cited(text: str, ev: dict) -> tuple[str, list[str]]:
     """A sentence and the fact uids it cites (citations removed from the text; numbers out of range ignored)."""
     uids = []
-    for s, n in _CITE.findall(text):
+    for m in _CITE.finditer(text):
+        s, n = (m[1], m[2]) if m[2] else (m[3], m[4])
         pool = ev["superseded"] if s else ev["facts"]
         if 1 <= int(n) <= len(pool):
             uids.append(pool[int(n) - 1]["uid"])
-    return re.sub(r"\s*\[S?\d+\]", "", text).strip(), list(dict.fromkeys(uids))
+    return _CITE_SPACED.sub("", text).strip(), list(dict.fromkeys(uids))
 
 
 def _points(items: list[str], ev: dict) -> list[dict]:
@@ -181,7 +183,17 @@ async def _write(domain: str, core: str, c: dict, ev: dict) -> Review:
         return await run(True)
     except UnexpectedModelBehavior as e:   # one review's wording must not stop the others
         print(f"[Synthesis] {domain}: taken unchecked ({e})", flush=True)
-        return await run(False)
+        return _scrubbed(core, await run(False))
+
+
+def _scrubbed(core: str, r: Review) -> Review:
+    """A review taken unchecked, without the sentences and points still in a foreign script (a local model's 让 in
+    Korean, 2026-10-28) — left out as uncited ones are."""
+    def ok(text: str) -> bool:
+        return not foreign_script(core, text)
+    sentences = re.split(r"(?<=[.!?])\s+", r.summary.strip())
+    return Review(summary=" ".join(s for s in sentences if ok(s)), consensus=[p for p in r.consensus if ok(p)],
+                  debates=[p for p in r.debates if ok(p)], open=[q for q in r.open if ok(q)])
 
 
 async def _page(domain: str, n: int, core: str, c: dict, ev: dict) -> dict:

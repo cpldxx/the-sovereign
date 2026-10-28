@@ -24,9 +24,10 @@ EV = {"facts": FACTS, "superseded": [{"uid": "s1", "fact": "Lecanemab showed no 
 
 def test_a_point_that_cites_no_fact_is_dropped():
     points = synthesis._points(["Lecanemab slows decline [1].", "Everyone agrees it works.",
-                                "It once looked useless [S1][9]."], EV)
+                                "It once looked useless [S1][9].", "A blog said so (S1), in 2023 (2023)."], EV)
     assert points == [{"text": "Lecanemab slows decline.", "facts": ["f1"]},
-                      {"text": "It once looked useless.", "facts": ["s1"]}]       # [9] doesn't exist
+                      {"text": "It once looked useless.", "facts": ["s1"]},        # [9] doesn't exist
+                      {"text": "A blog said so, in 2023 (2023).", "facts": ["s1"]}]  # (S1) is a citation, (2023) not
 
 
 def test_the_key_sources_are_counted_papers_and_official_first():
@@ -113,6 +114,12 @@ async def test_a_korean_review_is_written_again_until_it_is_korean_and_cites(dom
     await synthesis.refresh(db, d)
     [page] = await synthesis.pages(db, d)
     assert page["summary"] == "레켐비는 진행을 27% 늦춘다." and page["summary_facts"] == ["f1"]
+    _Agent.reviews = [Review(summary="레켐비는 진행을 늦춘다 [1]. 半导体처럼 승인됐다 [2].",          # never passes:
+                             consensus=["진행을 27% 늦춘다 [1].", "효과가 증가让된다 [1]."])]       # taken unchecked
+    await synthesis.refresh(db, d, force=True)
+    [page] = await synthesis.pages(db, d)
+    assert page["summary"] == "레켐비는 진행을 늦춘다." and page["summary_facts"] == ["f1"]
+    assert [p["text"] for p in page["consensus"]] == ["진행을 27% 늦춘다."]               # the foreign-script ones went
 
 
 @pytest.mark.db
