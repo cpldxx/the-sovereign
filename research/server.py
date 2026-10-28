@@ -146,7 +146,7 @@ def _hours_since(last: dict | None) -> int:
 
 async def cycle(d: str, slot: str) -> None:
     """One learning cycle (kg/core/learning.py): learn what's new and what the graph is unsure of, then keep what
-    holds, forget what never did, take the exam (kg/core/exam.py) and brief. Never raises (a cycle that dies is logged,
+    holds, forget what never did, take the exam (kg/core/exam.py), rewrite the synthesis and brief. Never raises (a cycle that dies is logged,
     not lost silently)."""
     try:
         await _cycle(d, slot)
@@ -192,6 +192,10 @@ async def _cycle(d: str, slot: str) -> None:
                          json={"wait": True})
         if sat and "score" in sat:
             summary["exam"] = {k: sat[k] for k in ("score", "answered", "partial", "open", "total")}
+        # The living review: each core question's page rewritten where its facts changed (kg/core/synthesis.py).
+        await step("synthesis", "POST", f"/domains/{d}/synthesis",
+                   lambda b: b.get("skipped") or f"{b.get('written')} rewritten, {b.get('unchanged')} unchanged",
+                   json={"wait": True})
         hours = _hours_since(previous)
         summary["reported_at"] = jobs_now()
         await step(f"report ({hours} h)", "POST", f"/domains/{d}/reports", lambda b: b.get("headline", ""),

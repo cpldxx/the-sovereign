@@ -29,7 +29,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import ValidationError
 
 from core import database as kgdb
-from core import activity, auth, charter, crew, digest, exam, kg, sources
+from core import activity, auth, charter, crew, digest, exam, kg, sources, synthesis
 from core.database import ArcadeDB
 from core.ontology import Ontology, save_ontology
 from domains import registry
@@ -79,7 +79,7 @@ _TOOL_AGENT = {"ingest_data": "extractor", "list_research": "research", "researc
                "daily_report": "reporter", "list_reviews": "validator", "resolve_review": "validator",
                "update_ontology": "ontologist", "get_ontology": "ontologist", "search_papers": "research", "draft_charter": "strategist",
                "suggest_charter": "strategist", "confirm_charter": "research", "exam_results": "learning",
-               "take_exam": "learning"}
+               "take_exam": "learning", "read_synthesis": "summarizer"}
 
 
 def _guarded(fn: Callable, need: str) -> Callable:
@@ -335,6 +335,19 @@ async def exam_results(domain: str) -> dict:
             "contradicted": [{"question": x["question"], "source_says": x.get("reference"), "graph_says": x["answer"]}
                              for x in run["items"] if x.get("conflict")][:5],
             "running": exam.running(domain)}
+
+
+@tool("readonly")
+async def read_synthesis(domain: str) -> list[dict]:
+    """The living review of the research charter: per core question, the current answer, what confirmed sources agree
+    on, where they disagree or what changed, what is still open, and the key sources — each point resting on cited
+    graph facts. Start here for a broad question ("what do we know about…", "summarize…"); drill in with
+    query_knowledge_graph."""
+    _require(domain)
+    return [{"question": p["question"], "summary": p["summary"], "consensus": [x["text"] for x in p["consensus"]],
+             "debates": [x["text"] for x in p["debates"]], "open": p["open"],
+             "key_sources": [{k: s[k] for k in ("title", "url", "tier")} for s in p["sources"][:5]],
+             "written_at": p["written_at"]} for p in await synthesis.pages(db, domain)]
 
 
 @tool()

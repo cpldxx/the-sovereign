@@ -268,7 +268,7 @@ on demand   you ask → the Head checks the graph → what it lacks goes to the 
             is learned through the pipeline → the Head is woken with the report and answers
 by itself   a learning cycle at the times you set (Settings › Learning): what's new + the Strategist's questions for
             the graph's gaps → keep what holds, forget what never did → the Head decides the review queue → the exam
-            → briefing
+            → the synthesis → briefing
 ```
 
 - **Growth you can measure.** The domain sits an exam after every cycle. Its questions are written from
@@ -291,6 +291,11 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
   trusted on its own (paper 1.0, official 0.95, press 0.85, web 0.75, blog 0.6 — a blog alone barely enters the graph);
   confirmation by other sources still adds up. The Head says what kind of source a fact rests on, and every source list
   shows it.
+- **Two layers.** Beneath, the facts with their sources — the truth. Above, a living review of each core question
+  (`kg/core/synthesis.py`, Briefing › Knowledge): the current answer, what confirmed sources agree on, what is debated
+  or changed (superseded facts), what is still open, and the key sources — every point citing the facts it rests on (a
+  point citing none is dropped), the sources counted, papers and official ones first. Rewritten after each cycle where
+  its facts changed; the Head starts broad questions from it (`read_synthesis`).
 - **The charter steers everything.** Research missions, the Strategist's questions, the ontology and the Head read
   it; the Head suggests an addition when you keep asking about something it lacks, and you take it or leave it
   (Settings › Charter). It stays yours to edit — or start over with a new interview.
@@ -359,10 +364,11 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
 | `GET` / `PUT` / `DELETE` | `/domains/{domain}/charter` | The research charter `{goal, questions, scope, exclude, depth}`, its status (none / draft / active), the Head's suggestions and `brief` (the domain as research prompts see it) / edit / start over |
 | `POST` | `/domains/{domain}/charter/draft`, `/charter/confirm`, `/charter/suggestions/{uid}` | Draft it from interview notes `{notes}` / confirm it — the first time this starts the first deep research / take or leave a suggestion `{accept}` |
 | `GET` / `POST` | `/domains/{domain}/exam` | The exam (its questions), the latest sitting with every answer, the score history / sit it now `{wait?}` (skipped without a charter) |
+| `GET` / `POST` | `/domains/{domain}/synthesis` | The living review: a page per core question with its cited points and key sources / rewrite the changed pages `{wait?, force?}` |
 | `GET` | `/domains/{domain}/team` | The Head's agents: role, tasks (inputs), state (working / queued / idle), the Head's unread count |
 | `GET` | `/domains/{domain}/threads`, `/threads/{uid}` | Conversations between the Head and its agents (`?agent=`) / one with every message |
 | `GET` | `/health` | KG API + ArcadeDB status, tracing on/off |
-| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `draft_charter`, `confirm_charter`, `suggest_charter`, `exam_results`, `take_exam`, `web_search`, `search_papers`, `read_webpage`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
+| MCP | `/mcp` (Head) | `list_domains`, `query_knowledge_graph`, `get_entity`, `ingest_data`, `get_ontology`, `update_ontology`, `list_reviews`, `resolve_review`, `daily_report`, `draft_charter`, `confirm_charter`, `suggest_charter`, `exam_results`, `take_exam`, `read_synthesis`, `web_search`, `search_papers`, `read_webpage`, `research_status`, `list_research`, `list_agents`, `assign_task`, `ask_agent`, `inbox`, `read_thread` |
 | MCP | `/mcp/readonly` | The reading tools only (no ingest, ontology, review or research requests) |
 
 Every endpoint but `/health` and the sign-in ones needs a session cookie or `Authorization: Bearer <API token>`;
@@ -462,14 +468,14 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - Accounts (invite sign-up, sessions, API tokens), domains shared as viewer / editor / owner, every service checks
   every request, Heads limited to their domain, the operator's machine kept from other tenants
 
-### 🔜 Phase H — The research lab
+### ✅ Phase H — The research lab
 - ✅ Research charter: the Head interviews you, drafts the charter, and the first deep research starts when you agree;
   every research run steers by it after that
 - ✅ Three roles: the Head, the Researcher and Learning (the learning pipeline, its steps shown as stations)
 - ✅ Growth you can measure: an exam written from held-out authoritative sources (round-trip checked), answered from
   the graph alone after every cycle — a score over time, each core question's state, the open ones researched next
 - ✅ Source tiers: papers (OpenAlex, arXiv, PubMed) > official sources > news > blogs, weighed in every fact
-- A second layer: synthesis pages per core question — the consensus, the debates, the open questions, the key
+- ✅ A second layer: synthesis pages per core question — the consensus, the debates, the open questions, the key
   sources — rewritten as the graph changes
 
 ---

@@ -276,7 +276,9 @@ How you work:
    question, have Learning plan first (assign_task(domain, "learning", "plan", {{"n": 3}})): which questions would
    close the graph's biggest gaps, the charter's core questions first — then send the researcher on those.
 6. For "what happened / what's new / brief me", start from daily_report (written after each learning cycle),
-   then drill into the graph if asked. Read it out in your own words; don't just paste it.
+   then drill into the graph if asked. For a broad question about what the domain knows ("what do we know about…",
+   "summarize…"), start from read_synthesis — the living review of each core question — then drill in. Read them out
+   in your own words; don't just paste them.
 7. You alone may change the ontology (update_ontology), and only when accumulated evidence shows the current
    grammar cannot express it (e.g. many facts rejected for the same missing relation). Never for one fact.
 8. What is true NOW (a price, today's news, a status) may be newer than the graph: find it with web_search

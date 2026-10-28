@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import { can, type Role } from '../lib/api';
 import { GrowthPanel } from './GrowthPanel';
+import { KnowledgePanel } from './KnowledgePanel';
 import { ReportPanel } from './ReportPanel';
 
-/** What happened: the briefing each learning cycle writes — what the graph learned, what changed, what is unsure — and
- * how the domain grows: the charter's exam, sat after every cycle. */
+/** What happened: the briefing each learning cycle writes; what the domain knows: the living review of each core
+ * question; and how it grows: the charter's exam, sat after every cycle. */
 export function BriefingPanel({ domain, role, version, onHighlight, onSelect }: {
   domain: string;
   role: Role;
@@ -12,14 +13,14 @@ export function BriefingPanel({ domain, role, version, onHighlight, onSelect }: 
   onHighlight: (uids: Set<string>) => void;
   onSelect: (uid: string) => void;
 }) {
-  const [view, setView] = useState<'reports' | 'growth'>('reports');
+  const [view, setView] = useState<'reports' | 'knowledge' | 'growth'>('reports');
   return (
     <div className="flex h-full flex-col">
-      <SubNav value={view} onChange={setView} items={[['reports', 'Reports'], ['growth', 'Growth']]} />
+      <SubNav value={view} onChange={setView} items={[['reports', 'Reports'], ['knowledge', 'Knowledge'], ['growth', 'Growth']]} />
       <div className="min-h-0 flex-1">
-        {view === 'reports'
-          ? <ReportPanel domain={domain} version={version} editable={can(role, 'editor')} onHighlight={onHighlight} onSelect={onSelect} />
-          : <GrowthPanel domain={domain} version={version} editable={can(role, 'editor')} />}
+        {view === 'reports' && <ReportPanel domain={domain} version={version} editable={can(role, 'editor')} onHighlight={onHighlight} onSelect={onSelect} />}
+        {view === 'knowledge' && <KnowledgePanel domain={domain} version={version} editable={can(role, 'editor')} />}
+        {view === 'growth' && <GrowthPanel domain={domain} version={version} editable={can(role, 'editor')} />}
       </div>
     </div>
   );

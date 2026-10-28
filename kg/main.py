@@ -26,6 +26,7 @@ from api.pipeline import router as pipeline_router
 from api.query import router as query_router
 from api.reports import router as reports_router
 from api.reviews import router as reviews_router
+from api.synthesis import router as synthesis_router
 from api.system import router as system_router
 from core import accounts, auth, crew, tracing
 from core.database import get_db
@@ -118,6 +119,7 @@ app.include_router(chat_router)
 app.include_router(learning_router)
 app.include_router(charter_router)
 app.include_router(exam_router)
+app.include_router(synthesis_router)
 app.include_router(system_router)
 
 

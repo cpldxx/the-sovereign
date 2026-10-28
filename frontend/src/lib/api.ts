@@ -203,6 +203,24 @@ export interface ExamState {
   running: boolean;
 }
 
+/** The living review of one core question (kg/core/synthesis.py): every point rests on the graph facts it cites. */
+export interface SynthesisPoint {
+  text: string;
+  facts: string[];
+}
+
+export interface SynthesisPage {
+  core: number;
+  question: string;
+  summary: string;          // '' when the graph knows nothing about it yet
+  consensus: SynthesisPoint[];
+  debates: SynthesisPoint[];
+  open: string[];
+  sources: { title: string; url: string; tier: string; facts: number }[];
+  facts: number;            // facts it was written from
+  written_at: string;
+}
+
 export interface ChatTurn {
   uid: string;
   role: 'user' | 'assistant';
@@ -657,6 +675,12 @@ export const kg = {
   charter: (id: string) => request<CharterState & { brief: string }>(KG_API, `${d(id)}/charter`),
 
   exam: (id: string) => request<ExamState>(KG_API, `${d(id)}/exam`),
+
+  synthesis: (id: string) => request<{ pages: SynthesisPage[]; running: boolean }>(KG_API, `${d(id)}/synthesis`),
+
+  /** Rewrite the review's pages whose facts changed (all with `force`), in the background. */
+  writeSynthesis: (id: string, force = false) =>
+    request<{ started?: boolean; busy?: boolean; skipped?: string }>(KG_API, `${d(id)}/synthesis`, json({ force })),
 
   /** Take the exam now, in the background (minutes): {started} — or {busy} / {skipped} without a charter. `fresh`: new
    * questions from the same charter first (the score starts a new series). */
