@@ -101,6 +101,7 @@ async def test_a_querys_sources_follow_its_facts(monkeypatch):
     async def get_episodes(db, domain, uids):
         return [{"uid": u} for u in sorted(uids)]          # the database's order is not the facts' order
     monkeypatch.setattr(kg, "embed", embed)
+    monkeypatch.setattr(kg, "_search_texts", none)
     for fn, stand_in in (("search_entities", none), ("expand", none), ("get_entities", none),
                          ("search_facts", search_facts), ("get_episodes", get_episodes)):
         monkeypatch.setattr(kgdb, fn, stand_in)
@@ -108,40 +109,72 @@ async def test_a_querys_sources_follow_its_facts(monkeypatch):
     assert [e["uid"] for e in out["episodes"]] == ["ep_9", "ep_shared", "ep_8", "ep_7", "ep_6", "ep_5"]
 
 
-async def test_a_question_in_another_language_is_also_searched_in_english(monkeypatch):
-    """The graph is kept in English: a Korean question found facts about HBM4 in general, its English twin the answer."""
+async def test_a_question_is_also_searched_in_english_and_by_a_passage_that_would_answer_it(monkeypatch):
+    """The graph is kept in English: a Korean question found facts about HBM4 in general, its English twin the answer.
+    And facts read like answers: a would-be answer finds the one on the bonding that replaces bumps."""
     by_vector = {"ko": [{"uid": "f_general", "similarity": 0.52, "source_uid": "e", "target_uid": "e"},
                         {"uid": "f_answer", "similarity": 0.40, "source_uid": "e", "target_uid": "e"}],
-                 "en": [{"uid": "f_answer", "similarity": 0.77, "source_uid": "e", "target_uid": "e"}]}
-    translated = []
+                 "en": [{"uid": "f_answer", "similarity": 0.77, "source_uid": "e", "target_uid": "e"}],
+                 "passage": [{"uid": "f_bonding", "similarity": 0.81, "source_uid": "e", "target_uid": "e"}]}
+    asked = []
 
-    class Translator:
+    class Searcher:
         def __init__(self, *a, **k):
             pass
 
         async def run(self, question):
-            translated.append(question)
-            return type("Run", (), {"output": "Which bonding replaces bumps in HBM4?"})
+            asked.append(question)
+            return type("Run", (), {"output": "QUESTION: Which bonding replaces bumps in HBM4?\n"
+                                              "PASSAGE: HBM4 stacks are joined by hybrid bonding instead of\nmicrobumps."})
 
     async def embed(texts):
-        return [["en"] if t.isascii() else ["ko"] for t in texts]
+        return [["passage"] if t.startswith("HBM4 stacks") else ["en"] if t.isascii() else ["ko"] for t in texts]
 
     async def search_facts(db, domain, vector, k):
         return by_vector[vector[0]]
 
     async def none(*a, **k):
         return []
-    monkeypatch.setattr(kg, "Agent", Translator)
+    monkeypatch.setattr(kg, "Agent", Searcher)
     monkeypatch.setattr(kg, "embed", embed)
     for fn, stand_in in (("search_entities", none), ("expand", none), ("get_entities", none),
                          ("search_facts", search_facts), ("get_episodes", none)):
         monkeypatch.setattr(kgdb, fn, stand_in)
     empty = {"entities": [], "facts": [], "episodes": []}
     out = await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
-    assert [(f["uid"], f["similarity"]) for f in out["facts"]] == [("f_answer", 0.77), ("f_general", 0.52)]
+    assert [(f["uid"], f["similarity"]) for f in out["facts"]] == [("f_bonding", 0.81), ("f_answer", 0.77),
+                                                                     ("f_general", 0.52)]
+    assert kg._searches["HBM4에서 범프를 대체하는 결합 방식은?"][1] == \
+        "HBM4 stacks are joined by hybrid bonding instead of microbumps."
     await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
-    await kg._query(None, "d", "Which bonding replaces bumps?", 5, empty)
-    assert len(translated) == 1                    # asked again: remembered — and an English question isn't translated
+    assert len(asked) == 1                                        # asked again: remembered
+
+
+async def test_the_facts_around_a_question_come_closest_to_it_first(monkeypatch):
+    """Strongest first, the same hub facts filled half of what an exam question was shown, whatever it asked."""
+    async def embed(texts):
+        return [[1.0, 0.0]] * len(texts)
+
+    async def none(*a, **k):
+        return []
+
+    async def search_facts(db, domain, vector, k):
+        return [{"uid": "f_hit", "similarity": 0.9, "source_uid": "e_a", "target_uid": "e_b"}]
+
+    async def expand(db, domain, uids, limit=40, embeddings=False):
+        assert embeddings
+        return [{"uid": "f_hub", "source_uid": "e_a", "target_uid": "e_c", "embedding": [0.0, 1.0]},     # strongest
+                {"uid": "f_near", "source_uid": "e_a", "target_uid": "e_d", "embedding": [0.8, 0.6]},
+                {"uid": "f_bare", "source_uid": "e_a", "target_uid": "e_e"}]
+    monkeypatch.setattr(kg, "embed", embed)
+    monkeypatch.setattr(kg, "_search_texts", none)
+    for fn, stand_in in (("search_entities", none), ("expand", expand), ("get_entities", none),
+                         ("search_facts", search_facts), ("get_episodes", none)):
+        monkeypatch.setattr(kgdb, fn, stand_in)
+    out = await kg._query(None, "d", "q", 5, {"entities": [], "facts": [], "episodes": []})
+    assert [(f["uid"], f["similarity"]) for f in out["facts"]] == [("f_hit", 0.9), ("f_near", 0.8), ("f_hub", 0.0),
+                                                                     ("f_bare", 0.0)]
+    assert "embedding" not in out["facts"][1]
 
 
 # ── Failed reads are read again ────────────────────────────────────────────

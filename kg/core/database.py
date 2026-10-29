@@ -153,7 +153,7 @@ def _tiered(rows: list[dict]) -> list[dict]:
     return rows
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
+def cosine(a: list[float], b: list[float]) -> float:
     norm = math.sqrt(sum(x * x for x in a)) * math.sqrt(sum(y * y for y in b))
     return sum(x * y for x, y in zip(a, b)) / norm if norm else 0.0
 
@@ -431,7 +431,7 @@ async def fact_candidates(db: ArcadeDB, domain: str, source_uid: str, relation: 
         rows = await db.cypher(domain, "MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE r.invalid_at IS NULL "
                                        f"AND a.uid = $s AND b.uid = $s RETURN {_FACT_COLUMNS}, r.embedding AS embedding",
                                s=source_uid)
-        near = sorted(((_cosine(embedding, r.pop("embedding")), r) for r in rows if r.get("embedding")),
+        near = sorted(((cosine(embedding, r.pop("embedding")), r) for r in rows if r.get("embedding")),
                       key=lambda x: -x[0])
         return [{**_fact(r), "similarity": round(s, 4)} for s, r in near[:8] if s >= STATE_SIMILARITY]
     rows = await db.cypher(
@@ -654,14 +654,15 @@ async def search_facts(db: ArcadeDB, domain: str, vector: list[float], k: int) -
     return sorted(({**f, "similarity": sims[f["uid"]]} for f in facts), key=lambda f: -f["similarity"])
 
 
-async def expand(db: ArcadeDB, domain: str, entity_uids: list[str], limit: int = 40) -> list[dict]:
-    """Valid facts touching these entities, strongest first."""
+async def expand(db: ArcadeDB, domain: str, entity_uids: list[str], limit: int = 40,
+                 embeddings: bool = False) -> list[dict]:
+    """Valid facts touching these entities, strongest first — each with its `embedding` too, if asked."""
     if not entity_uids:
         return []
     rows = await db.cypher(
         domain,
         "MATCH (a:Entity)-[r:Fact]->(b:Entity) WHERE r.invalid_at IS NULL AND (a.uid IN $u OR b.uid IN $u) "
-        f"RETURN {_FACT_COLUMNS} ORDER BY r.disbelief ASC LIMIT $n",
+        f"RETURN {_FACT_COLUMNS}{', r.embedding AS embedding' if embeddings else ''} ORDER BY r.disbelief ASC LIMIT $n",
         u=entity_uids, n=limit,
     )
     return [_fact(r) for r in rows]

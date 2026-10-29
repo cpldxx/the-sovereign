@@ -4,7 +4,8 @@
     LLM_MODEL_EXTRACTOR=anthropic:claude-…  optional per-agent override (EXTRACTOR, VALIDATOR,
                                             RESOLVER, LINKER, ONTOLOGIST, SUMMARIZER, REPORTER,
                                             STRATEGIST — also writes the charter, EXAMINER, CREW,
-                                            SEARCHER — puts a question in English for Graph RAG)
+                                            SEARCHER — the English and a would-be answer a Graph RAG
+                                            question is searched by)
     LLM_THINKING=false                      reasoning off unless set to true
     ANTHROPIC_API_KEY=…                     only needed for anthropic: models
     LLM_BASE_URL=http://localhost:18081/v1  with openai:<model>: any OpenAI-compatible server — e.g. mlx-lm's,

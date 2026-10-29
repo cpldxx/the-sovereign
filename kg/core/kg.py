@@ -48,6 +48,7 @@ INGEST_CONCURRENCY = int(os.getenv("INGEST_CONCURRENCY", "4"))
 _reading = asyncio.Semaphore(INGEST_CONCURRENCY)
 _writing: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 FACT_SIMILARITY = 0.75      # existing facts this similar to a new one are compared with it by the Linker
+AROUND = 150                # facts around a query's entities ranked by closeness to it (strongest first, to this many)
 
 
 # Pages come as markdown with every link's URL, image tags, menus, "related" lists and share buttons — tokens the
@@ -856,30 +857,38 @@ async def query(db: ArcadeDB, domain: str, question: str, k: int = 5) -> dict:
     return result
 
 
-IN_ENGLISH = """Translate the question into English for a search of an English knowledge graph. Keep every name, term and
-number. Answer with the English question only."""
-_english: dict[str, str] = {}   # question → its English, for the questions asked again (an exam's, a review's)
+SEARCH = """You prepare a search of an English knowledge graph for a question. Answer in exactly two lines:
+QUESTION: the question in English (as it is, when it already is English), keeping every name, term and number
+PASSAGE: two or three plain sentences that would answer it, stated the way a knowledge graph's facts are — naming
+the things, processes and numbers involved. It is only used to find facts and is never shown: a best guess is fine."""
+_searches: dict[str, list[str]] = {}   # question → what else it is searched by, for the questions asked again
 
 
-async def _in_english(question: str) -> str:
-    """The question in English when most of it isn't in Latin script — the graph is kept in English
-    (agents/extractor.py), and the multilingual embedding still matches poorly across languages: measured 2026-10-28,
-    a Korean exam question's nearest facts were about HBM4 in general (similarity 0.52) while its English twin found
-    the answer (0.77). '' for an English question, or when the model can't be reached (the question alone is used)."""
-    if _latin_share(question) >= 0.5:
-        return ""
-    if question not in _english:
-        agent = Agent(model_for("searcher"), name="search_in_english", system_prompt=IN_ENGLISH,
+async def _search_texts(question: str) -> list[str]:
+    """What a question is searched by besides itself. Its English, when most of it isn't in Latin script — the graph
+    is kept in English (agents/extractor.py), and the multilingual embedding matches poorly across languages: measured
+    2026-10-28, a Korean exam question's nearest facts were about HBM4 in general (similarity 0.52) while its English
+    twin found the answer (0.77). And a passage that would answer it (HyDE, Gao et al. 2022): facts read like answers,
+    not like questions. Nothing when the model can't be reached (the question alone is used). With the facts around
+    ranked by closeness (_query), tried on the practice set (core/exam.py) on 2026-10-29: 24 → 37, four questions up
+    — answered from facts the graph held but never showed — one down."""
+    if question not in _searches:
+        agent = Agent(model_for("searcher"), name="search_texts", system_prompt=SEARCH,
                       model_settings={**model_settings(), "temperature": 0.0})   # one question, one search
         try:
-            english = " ".join(str((await agent.run(question)).output).split())[:500]
-        except Exception as e:   # a search must not fail over its translation
-            print(f"[KG] query searched untranslated ({type(e).__name__})", flush=True)
-            return ""
-        if len(_english) >= 500:
-            _english.pop(next(iter(_english)))
-        _english[question] = english
-    return _english[question]
+            out = str((await agent.run(question)).output).strip()
+        except Exception as e:   # a search must not fail over its preparation
+            print(f"[KG] query searched as asked ({type(e).__name__})", flush=True)
+            return []
+        english = re.search(r"QUESTION:\s*(.+)", out)
+        passage = re.search(r"PASSAGE:\s*(.+)", out, re.S)
+        if not english and not passage:
+            english = re.match(r"(.+)", out, re.S)   # the question alone, translated
+        texts = [" ".join(m[1].split())[:600] for m in (english, passage) if m]
+        if len(_searches) >= 500:
+            _searches.pop(next(iter(_searches)))
+        _searches[question] = [t for t in dict.fromkeys(texts) if t and t != question]
+    return _searches[question]
 
 
 def _closest(hits: list[list[dict]], k: int) -> list[dict]:
@@ -892,12 +901,17 @@ def _closest(hits: list[list[dict]], k: int) -> list[dict]:
 
 
 async def _query(db: ArcadeDB, domain: str, question: str, k: int, empty: dict) -> dict:
-    english = await _in_english(question)
-    vectors = await embed([question, english] if english else [question])
+    vectors = await embed([question, *await _search_texts(question)])
     entities = _closest([await kgdb.search_entities(db, domain, v, k) for v in vectors], k)
     hit_facts = _closest([await kgdb.search_facts(db, domain, v, k) for v in vectors], k)
     seeds = {e["uid"] for e in entities} | {u for f in hit_facts for u in (f["source_uid"], f["target_uid"])}
-    around = await kgdb.expand(db, domain, sorted(seeds), limit=40)
+    # The facts around them, closest to the question first: strongest first, the same hub facts ("the Big Three
+    # prioritized HBM allocation") filled 7 of the 15 an exam question was shown, whatever it asked (2026-10-29).
+    around = await kgdb.expand(db, domain, sorted(seeds), limit=AROUND, embeddings=True)
+    for f in around:
+        v = f.pop("embedding", None)
+        f["similarity"] = round(max(kgdb.cosine(v, q) for q in vectors), 4) if v else 0.0
+    around.sort(key=lambda f: -f["similarity"])
 
     facts, seen = [], set()
     for f in hit_facts + around:
