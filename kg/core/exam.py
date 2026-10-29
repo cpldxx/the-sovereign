@@ -18,9 +18,9 @@
     take   each question goes through Graph RAG (kg.query); the examiner writes the graph's answer from the facts
            found — without seeing the reference — then, apart, grades that answer against the reference: 2 answered,
            1 in part, 0 not, and whether it contradicts it. What the model itself knows earns nothing. At temperature
-           0, and a question shown the same facts as at the last sitting keeps its verdict: the score moves only when
-           the graph does (2026-10-28: one graph scored 41, 23 and 36 — and an answer the same to the byte, graded 1
-           three times, got 0 while the GPU was shared)
+           0, a question shown the same facts as at the last sitting keeps its verdict, and an answer written as
+           before keeps its grade: the score moves only when the graph's answers do (2026-10-28: one graph scored 41,
+           23 and 36 — and an answer the same to the byte, graded 1 three times, got 0 while the GPU was shared)
     score  100 × points / (2 × questions); per core question the same — open below 25, answered from 75
     loop   the practice set's open questions are the learning cycle's first gaps (learning.gaps): research goes where
            practice is weakest — and the exam's next sitting shows whether the graph learned the subject
@@ -171,6 +171,8 @@ COMPARE = """You compare a knowledge graph's ANSWER to a question with the REFER
 - points 0: it doesn't give it — an answer saying the information is missing is 0
 - conflict: true when it states something that contradicts the reference
 Judge the content, not the language."""
+# Who grades: another prompt or model grades every answer anew.
+GRADER = hashlib.sha1(f"{COMPARE}|{getattr(MODEL, 'model_name', MODEL)}".encode()).hexdigest()[:8]
 
 
 def running(domain: str) -> bool:
@@ -413,8 +415,25 @@ async def remove(db: ArcadeDB, domain: str, qid: str, kind: str = "exam") -> dic
 
 # ── Taking it ──────────────────────────────────────────────────────────────
 
-async def _grade(domain: str, q: dict, facts: list[dict]) -> Verdict:
-    """The graph's answer from its facts alone, then its grade against the reference."""
+def _graded(question: str, reference: str, answer: str) -> str:
+    return hashlib.sha1(json.dumps([question, reference, answer], ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+async def _grades(db: ArcadeDB, domain: str, kind: str, runs: int = 20) -> dict[str, tuple[int, bool]]:
+    """The grades this grader gave at the recent sittings, by question, reference and answer: the same answer is
+    graded the same. 2026-10-29: practice sat twice on one graph wrote all 19 answers the same to the byte, and two
+    got 1 one time, 0 the next (the GPU shared) — the score moved by 5 with nothing changed."""
+    memo: dict[str, tuple[int, bool]] = {}
+    for run in reversed(await kgdb.find_docs(db, domain, "ExamRun", RUN_JSON, _of(kind), order="n DESC", limit=runs)):
+        for x in run.get("items") or []:
+            if x.get("grader") == GRADER and x.get("facts"):
+                memo[_graded(x["question"], x.get("reference", ""), x["answer"])] = (x["points"], x["conflict"])
+    return memo
+
+
+async def _grade(domain: str, q: dict, facts: list[dict], memo: dict | None = None) -> Verdict:
+    """The graph's answer from its facts alone, then its grade against the reference — the one it had before (`memo`)
+    if the answer is the same."""
     korean = HANGUL.search(q["question"])
     if not facts:
         return Verdict(answer="그래프에 아직 이 내용이 없어요." if korean else "The graph holds nothing on this yet.")
@@ -436,6 +455,9 @@ async def _grade(domain: str, q: dict, facts: list[dict]) -> Verdict:
     v = Verdict(answer=answer, facts=cited)
     if not cited or not q.get("answer"):
         return v                                      # an answer resting on no fact knows nothing
+    if known := (memo or {}).get(_graded(q["question"], q["answer"], v.answer)):
+        v.points, v.conflict = known
+        return v
     g = await _ask(Grade, COMPARE, f"QUESTION: {q['question']}\nREFERENCE: {q['answer']}\nANSWER: {v.answer}",
                    exact=True)
     v.points, v.conflict = g.points, g.conflict
@@ -472,6 +494,7 @@ async def take(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "exam
         exam = await ensure(db, domain, fresh, kind)
         last = await latest(db, domain, kind)
         before = {x["id"]: x for x in last["items"]} if last and last["version"] == exam["version"] else {}
+        memo = await _grades(db, domain, kind)
         items = []
         for i, q in enumerate(exam["questions"]):
             found: list[dict] = []
@@ -481,7 +504,8 @@ async def take(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "exam
                     found = (await kg.query(db, domain, q["question"], 8))["facts"][:FACTS_SHOWN]
                     evidence = _evidence(q, found)
                     old = before.get(q["id"])
-                    v = _kept(old, found) if old and old.get("evidence") == evidence else await _grade(domain, q, found)
+                    v = (_kept(old, found) if old and old.get("evidence") == evidence
+                         and old.get("grader", GRADER) == GRADER else await _grade(domain, q, found, memo))
             except Exception as e:   # one question that can't be graded scores nothing; the sitting goes on
                 print(f"[Exam] {domain}: {q['id']} not graded: {type(e).__name__}: {e}"[:300], flush=True)
                 evidence = ""        # graded again next time
@@ -492,7 +516,8 @@ async def take(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "exam
                           "reference": q.get("answer", ""), "source": q.get("source"), "points": v.points,
                           "conflict": v.conflict, "answer": v.answer.strip(), "facts": [f["uid"] for f in cited],
                           "sources": len({s for f in cited for s in f.get("sources") or []}),
-                          "well_sourced": any((f.get("evidence") or 0) >= 2 for f in cited), "evidence": evidence})
+                          "well_sourced": any((f.get("evidence") or 0) >= 2 for f in cited), "evidence": evidence,
+                          "grader": GRADER})
         cores = []
         for n, question in enumerate(exam["cores"], start=1):
             mine = [x["points"] for x in items if x["core"] == n]

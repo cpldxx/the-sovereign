@@ -247,6 +247,25 @@ async def test_a_question_shown_the_same_facts_keeps_its_verdict(domain, monkeyp
 
 
 @pytest.mark.db
+async def test_an_answer_written_as_before_keeps_its_grade(domain, monkeypatch):
+    """Shown other facts, the model wrote the same answer: graded again, it could get 0 where it got 1 (2026-10-29)."""
+    db, d = domain
+    await charter.save(db, d, CHARTER)
+    await exam.take(db, d)
+
+    async def query(db_, d_, question, k):                                     # one more fact, the same answers
+        facts = [{"uid": "f1", "fact": "Leqembi is an anti-amyloid antibody.", "sources": ["ep1", "ep2"], "evidence": 2}]
+        return {"facts": facts + [{"uid": "f9", "fact": "Leqembi is given by infusion.", "sources": ["ep9"]}]}
+    monkeypatch.setattr(exam.kg, "query", query)
+    _Agent.verdicts["What kind of drug is Leqembi?"] = Verdict(points=0, answer="An anti-amyloid antibody.", facts=[1])
+    _Agent.prompts = []
+    again = await exam.take(db, d)
+    assert [x["points"] for x in again["items"]] == [2, 0]                     # the first kept its 2
+    assert not [p for system, p in _Agent.prompts if system == exam.COMPARE and "What kind" in p]
+    assert [p for system, p in _Agent.prompts if system == exam.ANSWER and "What kind" in p]   # answered anew
+
+
+@pytest.mark.db
 async def test_the_exam_stays_fixed_until_the_charter_changes_or_a_question_is_dropped(domain):
     db, d = domain
     await charter.save(db, d, CHARTER)
