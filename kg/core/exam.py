@@ -10,6 +10,11 @@
            for, or the user removes one — a new exam (its version) starts a new series
     hold   the exam's sources are held out: research skips them (they count as read), so the graph has to learn the
            answers elsewhere — a test set never trained on
+    two    sets, set the same way from different sources: the PRACTICE questions say where research goes (their open
+           ones are the learning cycle's first gaps) and are what a change to the system is tried on; the EXAM only
+           measures. A score that steers what is learned, or what is changed, stops measuring (2026-10-29: four
+           missions on the exam's open questions, then retrieval fixes found by reading its answers — the exam had
+           become the thing taught to). Both sets' sources are held out
     take   each question goes through Graph RAG (kg.query); the examiner writes the graph's answer from the facts
            found — without seeing the reference — then, apart, grades that answer against the reference: 2 answered,
            1 in part, 0 not, and whether it contradicts it. What the model itself knows earns nothing. At temperature
@@ -17,11 +22,12 @@
            the graph does (2026-10-28: one graph scored 41, 23 and 36 — and an answer the same to the byte, graded 1
            three times, got 0 while the GPU was shared)
     score  100 × points / (2 × questions); per core question the same — open below 25, answered from 75
-    loop   the open questions are the learning cycle's first gaps (learning.gaps): research goes where the score is
-           lowest — and the next sitting shows whether it worked
+    loop   the practice set's open questions are the learning cycle's first gaps (learning.gaps): research goes where
+           practice is weakest — and the exam's next sitting shows whether the graph learned the subject
 
 Taken after each learning cycle (the research service), once when a charter is confirmed (the baseline), and on demand.
-The exam is the Setting document "exam"; each sitting an ExamRun document.
+The exam is the Setting document "exam", the practice set "exam_practice"; each sitting an ExamRun document (its
+`kind`: "practice", or none for the exam).
 """
 
 import asyncio
@@ -54,6 +60,7 @@ TRUSTED = 0.5         # the Validator's reliability a kept question needs
 ANSWERED, PARTIAL = 75, 25
 GROUNDED = 2          # the exam format: 2 = written from sources with reference answers (older exams are set again)
 TIERS = ("basic", "working", "deep")
+KINDS = {"exam": "exam", "practice": "exam_practice"}   # set → its Setting key
 RUN_JSON = ("items", "cores", "graph")
 MODEL = model_for("examiner")
 
@@ -240,29 +247,34 @@ async def _fetch(url: str) -> dict:
 
 # ── Setting the exam ───────────────────────────────────────────────────────
 
-async def _doc(db: ArcadeDB, domain: str) -> dict | None:
-    rows = await kgdb.find_docs(db, domain, "Setting", ("value",), "key = :key", limit=1, key="exam")
+async def _doc(db: ArcadeDB, domain: str, kind: str = "exam") -> dict | None:
+    rows = await kgdb.find_docs(db, domain, "Setting", ("value",), "key = :key", limit=1, key=KINDS[kind])
     return rows[0] if rows else None
 
 
-async def current(db: ArcadeDB, domain: str) -> dict | None:
+async def current(db: ArcadeDB, domain: str, kind: str = "exam") -> dict | None:
     """{version, basis, grounded, created_at, cores, unsourced, questions: [{id, core, tier, question, answer,
     statement, source: {url, title}}]} — or None before the first."""
-    doc = await _doc(db, domain) if await db.exists(domain) else None
+    doc = await _doc(db, domain, kind) if await db.exists(domain) else None
     return (doc or {}).get("value")
 
 
+def _other(kind: str) -> str:
+    return "practice" if kind == "exam" else "exam"
+
+
 async def held_out(db: ArcadeDB, domain: str) -> set[str]:
-    """The exam's source pages: research doesn't learn from them."""
-    exam = await current(db, domain)
-    return {q["source"]["url"] for q in (exam or {}).get("questions", []) if q.get("source")}
+    """The source pages of the exam and of the practice set: research doesn't learn from them."""
+    return {q["source"]["url"] for kind in KINDS for q in ((await current(db, domain, kind)) or {}).get("questions", [])
+            if q.get("source")}
 
 
-async def _candidates(db: ArcadeDB, domain: str, queries: list[str]) -> list[dict]:
+async def _candidates(db: ArcadeDB, domain: str, queries: list[str], taken: set[str] = frozenset()) -> list[dict]:
     """Papers for the core question (the first search: the English one), then web results — by tier (official before
     press before other sites, the engines' order within one), blogs and forums left out: a reference must have authority
     (2026-10-28: a company blog's "HBM4 moves to hybrid bonding" stood against papers saying it keeps microbumps). The
-    pages the graph already read go last (a held-out source should be new to it)."""
+    pages the graph already read go last (a held-out source should be new to it); those the other set is drawn from
+    (`taken`) not at all — practice must not rehearse the exam's pages."""
     found: dict[str, dict] = {}
     try:
         for p in await _papers(queries[0]):
@@ -277,7 +289,8 @@ async def _candidates(db: ArcadeDB, domain: str, queries: list[str]) -> list[dic
                 found.setdefault(r["url"], {**r, "tier": sources.tier_of(r["url"])})
         except httpx.HTTPError as e:
             print(f"[Exam] {domain}: search failed ({type(e).__name__}): {q[:80]}", flush=True)
-    ranked = sorted((r for r in found.values() if r["tier"] != "blog"), key=lambda r: sources.TIERS.index(r["tier"]))
+    ranked = sorted((r for r in found.values() if r["tier"] != "blog" and r["url"] not in taken),
+                    key=lambda r: sources.TIERS.index(r["tier"]))
     read = set(await kg.known_sources(db, domain, [r["url"] for r in ranked]))
     return [r for r in ranked if r["url"] not in read] + [r for r in ranked if r["url"] in read]
 
@@ -298,8 +311,10 @@ async def _from_page(domain: str, core: str, goal: str, page: dict) -> list[dict
             for (t, w), v in zip(tiers, verdicts) if v.supported and v.reliability >= TRUSTED]
 
 
-async def _set(db: ArcadeDB, domain: str, c: dict) -> tuple[list[dict], list[int]]:
-    """(questions, the core questions no source was found for)."""
+async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None) -> tuple[list[dict], list[int]]:
+    """(questions, the core questions no source was found for) — none from the sources of the `other` set, or like
+    its questions."""
+    taken = {q["source"]["url"] for q in (other or {}).get("questions", []) if q.get("source")}
     n = len(c["questions"])
     with activity.working(domain, "learning", "exam: planning the searches"):
         plan = await _ask(Plan, PLAN.format(domain=domain, n=n, charter=charter.text(c)), "Plan the searches.",
@@ -309,10 +324,10 @@ async def _set(db: ArcadeDB, domain: str, c: dict) -> tuple[list[dict], list[int
     unsourced: list[int] = []
     for i, core in enumerate(c["questions"], start=1):
         with activity.working(domain, "research", f"exam sources {i}/{n}"):
-            results = await _candidates(db, domain, queries.get(i) or [core])
+            results = await _candidates(db, domain, queries.get(i) or [core], taken)
         mine: list[dict] = []
         try:
-            mine = await _core_questions(domain, core, c["goal"], results, questions)
+            mine = await _core_questions(domain, core, c["goal"], results, questions + (other or {}).get("questions", []))
         except Exception as e:   # one core question's trouble leaves it unsourced, not the exam unset
             print(f"[Exam] {domain}: core question {i} failed: {type(e).__name__}: {e}"[:300], flush=True)
         if not mine:
@@ -349,42 +364,44 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
     return mine
 
 
-async def _save(db: ArcadeDB, domain: str, value: dict) -> dict:
-    doc = await _doc(db, domain)
+async def _save(db: ArcadeDB, domain: str, value: dict, kind: str = "exam") -> dict:
+    doc = await _doc(db, domain, kind)
     if doc:
         await kgdb.update_doc(db, domain, "Setting", doc["uid"], {"value": value}, ("value",))
     else:
-        await kgdb.insert_doc(db, domain, "Setting", {"key": "exam", "value": value}, ("value",))
+        await kgdb.insert_doc(db, domain, "Setting", {"key": KINDS[kind], "value": value}, ("value",))
     return value
 
 
-async def ensure(db: ArcadeDB, domain: str, fresh: bool = False) -> dict:
-    """The exam for the charter as it is now: the current one, or a new version when the charter's questions or
-    depth changed, the exam predates sources (GROUNDED) — or `fresh` (new questions from the same charter: the score
-    starts a new series). ExamError without a charter, or when no source could be found for any core question."""
+async def ensure(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "exam") -> dict:
+    """The exam (or the practice set) for the charter as it is now: the current one, or a new version when the
+    charter's questions or depth changed, it predates sources (GROUNDED) — or `fresh` (new questions from the same
+    charter: the score starts a new series). Never from the other set's sources. ExamError without a charter, or when
+    no source could be found for any core question."""
     c = (await charter.get(db, domain))["charter"]
     if not c:
         raise ExamError("The exam is drawn from the research charter — there is none yet")
-    exam = await current(db, domain)
+    exam = await current(db, domain, kind)
     if exam and exam.get("basis") == _basis(c) and exam.get("grounded") == GROUNDED and not fresh:
         return exam
-    questions, unsourced = await _set(db, domain, c)
+    questions, unsourced = await _set(db, domain, c, await current(db, domain, _other(kind)))
     if not questions:
         raise ExamError("No authoritative source could be read for any core question — is the research service up?")
     return await _save(db, domain, {"version": (exam or {}).get("version", 0) + 1, "basis": _basis(c),
                                     "grounded": GROUNDED, "created_at": now(), "cores": list(c["questions"]),
-                                    "unsourced": unsourced, "questions": questions})
+                                    "unsourced": unsourced, "questions": questions}, kind)
 
 
-async def remove(db: ArcadeDB, domain: str, qid: str) -> dict:
+async def remove(db: ArcadeDB, domain: str, qid: str, kind: str = "exam") -> dict:
     """The user drops a question (off the mark): a new version without it — the score starts a new series."""
-    exam = await current(db, domain)
+    exam = await current(db, domain, kind)
     if not exam or not any(q["id"] == qid for q in exam["questions"]):
-        raise ExamError(f"No question {qid} in the current exam")
+        raise ExamError(f"No question {qid} in the current {kind}")
     rest = [q for q in exam["questions"] if q["id"] != qid]
     if not rest:
-        raise ExamError("That is the exam's last question — set new questions instead")
-    return await _save(db, domain, {**exam, "version": exam["version"] + 1, "created_at": now(), "questions": rest})
+        raise ExamError(f"That is the {kind}'s last question — set new questions instead")
+    return await _save(db, domain, {**exam, "version": exam["version"] + 1, "created_at": now(), "questions": rest},
+                       kind)
 
 
 # ── Taking it ──────────────────────────────────────────────────────────────
@@ -436,16 +453,17 @@ def _kept(item: dict, found: list[dict]) -> Verdict:
                    facts=[n + 1 for n, f in enumerate(found) if f["uid"] in item["facts"]])
 
 
-async def take(db: ArcadeDB, domain: str, fresh: bool = False) -> dict:
-    """One sitting: every question answered from the graph alone, graded against its reference, stored. `fresh`: new
-    questions first. ExamError without a charter; Busy while another sitting of the domain runs."""
+async def take(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "exam") -> dict:
+    """One sitting of the exam or of the practice set (`kind`): every question answered from the graph alone, graded
+    against its reference, stored. `fresh`: new questions first. ExamError without a charter; Busy while another
+    sitting of the domain runs."""
     if domain in _running:
         raise Busy(f"The exam of {domain} is being taken already")
     _running.add(domain)
     started = time.monotonic()
     try:
-        exam = await ensure(db, domain, fresh)
-        last = await latest(db, domain)
+        exam = await ensure(db, domain, fresh, kind)
+        last = await latest(db, domain, kind)
         before = {x["id"]: x for x in last["items"]} if last and last["version"] == exam["version"] else {}
         items = []
         for i, q in enumerate(exam["questions"]):
@@ -479,23 +497,27 @@ async def take(db: ArcadeDB, domain: str, fresh: bool = False) -> dict:
                "open": sum(x["points"] == 0 for x in items), "conflicts": sum(x["conflict"] for x in items),
                "total": len(items), "items": items, "cores": cores,
                "graph": {"entities": stats["entity_count"], "facts": stats["fact_count"]},
-               "seconds": round(time.monotonic() - started), "n": time.time_ns()}   # n orders sittings
+               "seconds": round(time.monotonic() - started), "n": time.time_ns(),   # n orders sittings
+               **({"kind": kind} if kind != "exam" else {})}
         return await kgdb.insert_doc(db, domain, "ExamRun", run, RUN_JSON)
     finally:
         _running.discard(domain)
 
 
-def start(db: ArcadeDB, domain: str, fresh: bool = False) -> bool:
-    """A sitting in the background (e.g. the baseline when a charter is confirmed). False if one is running."""
+def start(db: ArcadeDB, domain: str, fresh: bool = False, kinds: tuple[str, ...] = ("practice", "exam")) -> bool:
+    """Sittings in the background, one after the other (e.g. the baselines when a charter is confirmed). False if one
+    is running."""
     if domain in _running:
         return False
 
     async def sit() -> None:
-        try:
-            run = await take(db, domain, fresh)
-            print(f"[Exam] {domain}: {run['score']}/100 ({run['answered']} answered, {run['open']} open)", flush=True)
-        except Exception as e:
-            print(f"[Exam] {domain} failed: {type(e).__name__}: {e}", flush=True)
+        for kind in kinds:
+            try:
+                run = await take(db, domain, fresh, kind)
+                print(f"[Exam] {domain} {kind}: {run['score']}/100 ({run['answered']} answered, {run['open']} open)",
+                      flush=True)
+            except Exception as e:
+                print(f"[Exam] {domain} {kind} failed: {type(e).__name__}: {e}", flush=True)
 
     task = asyncio.get_running_loop().create_task(sit())
     _tasks.add(task)
@@ -505,23 +527,27 @@ def start(db: ArcadeDB, domain: str, fresh: bool = False) -> bool:
 
 # ── Reading the results ────────────────────────────────────────────────────
 
-async def history(db: ArcadeDB, domain: str, limit: int = 60) -> list[dict]:
+def _of(kind: str) -> str:
+    return "kind = 'practice'" if kind == "practice" else "kind IS NULL"   # the exam's sittings predate `kind`
+
+
+async def history(db: ArcadeDB, domain: str, limit: int = 60, kind: str = "exam") -> list[dict]:
     """Sittings, oldest first, without their answers: {uid, created_at, version, score, answered, partial, open,
     total, graph}."""
-    rows = await kgdb.find_docs(db, domain, "ExamRun", ("graph",), order="n DESC", limit=limit)
+    rows = await kgdb.find_docs(db, domain, "ExamRun", ("graph",), _of(kind), order="n DESC", limit=limit)
     keep = ("uid", "created_at", "version", "score", "answered", "partial", "open", "total", "graph")
     return [{k: r.get(k) for k in keep} for r in reversed(rows)]
 
 
-async def latest(db: ArcadeDB, domain: str) -> dict | None:
-    rows = await kgdb.find_docs(db, domain, "ExamRun", RUN_JSON, order="n DESC", limit=1)
+async def latest(db: ArcadeDB, domain: str, kind: str = "exam") -> dict | None:
+    rows = await kgdb.find_docs(db, domain, "ExamRun", RUN_JSON, _of(kind), order="n DESC", limit=1)
     return rows[0] if rows else None
 
 
 async def open_questions(db: ArcadeDB, domain: str, n: int = 8) -> list[str]:
-    """The questions of the current exam the graph could not answer at its latest sitting (then the half-answered):
-    where research should go first."""
-    run, exam = await latest(db, domain), await current(db, domain)
+    """The practice questions the graph could not answer at its latest practice sitting (then the half-answered):
+    where research should go first. Never the exam's — research aimed at them would teach to the test."""
+    run, exam = await latest(db, domain, "practice"), await current(db, domain, "practice")
     if not run or not exam or run["version"] != exam["version"]:
         return []
     ranked = sorted((x for x in run["items"] if x["points"] < 2), key=lambda x: x["points"])

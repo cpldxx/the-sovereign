@@ -1,7 +1,7 @@
 """The exam (core/exam.py): written from authoritative sources and kept only where the source states it, its sources
 held out from research, graded against reference answers from the graph's facts alone, scored the same way every
-time, and its open questions handed to the learning cycle. The model, the web and Graph RAG are stood in; db tests use
-a throwaway database (conftest.scratch)."""
+time — and a practice set from other sources, whose open questions are handed to the learning cycle. The model, the
+web and Graph RAG are stood in; db tests use a throwaway database (conftest.scratch)."""
 
 import pytest
 
@@ -217,7 +217,7 @@ async def test_a_sitting_grades_the_graph_against_the_reference(domain):
     assert answering and "[1] Leqembi showed" in answering[0] and "27%" not in answering[0]
     grading = [p for system, p in _Agent.prompts if system == exam.COMPARE and p.startswith("QUESTION: How much")]
     assert grading and "REFERENCE: 27% over 18 months" in grading[0] and "ANSWER: The graph says no benefit." in grading[0]
-    assert await exam.open_questions(db, d) == ["How much did Leqembi slow decline in Clarity AD?"]
+    assert await exam.open_questions(db, d) == []         # the exam's open questions never steer research
     assert "50/100" in await exam.line(db, d)
 
 
@@ -294,14 +294,50 @@ async def test_the_scores_history_reads_oldest_first_and_the_briefing_shows_the_
     assert "100/100 (was 50)" in await exam.line(db, d)
 
 
+NIH = "https://www.nih.gov/news/leqembi-trial"
+PRACTICE = CoreExam(
+    basic=Written(question="Which trial tested Leqembi?", answer="Clarity AD",
+                  statement="Leqembi was tested in the Clarity AD trial."),
+    working=Written(question="When was Leqembi approved?", answer="July 2023",
+                    statement="The FDA approved Leqembi in July 2023."),
+    deep=Written(question="Why is Leqembi disputed?", answer="Swelling", statement="Leqembi is disputed."))
+
+
 @pytest.mark.db
-async def test_the_open_exam_questions_are_the_first_gaps(domain):
+async def test_practice_comes_from_other_sources_and_only_its_open_questions_steer_research(domain, monkeypatch):
+    """Research aimed at the exam's open questions, and changes tried on its answers, taught to the test (2026-10-29)."""
     db, d = domain
+
+    async def search(query):
+        return [] if "blood" in query else [{"title": "Forum", "url": FORUM, "snippet": "my uncle says"},
+                                            {"title": "FDA approves Leqembi", "url": FDA, "snippet": "FDA"},
+                                            {"title": "NIH: the Leqembi trial", "url": NIH, "snippet": "NIH"}]
+
+    async def fetch(url):
+        return {"url": url, "title": "NIH: the Leqembi trial" if url == NIH else "FDA approves Leqembi",
+                "status": "ok", "markdown": PAGE}
+
+    class Agent(_Agent):
+        async def run(self, prompt):
+            if self.output_type is CoreExam and "SOURCE (NIH" in prompt:
+                return type("Run", (), {"output": PRACTICE})
+            return await super().run(prompt)
+    monkeypatch.setattr(exam, "_search", search)
+    monkeypatch.setattr(exam, "_fetch", fetch)
+    monkeypatch.setattr(exam, "Agent", Agent)
     await charter.save(db, d, CHARTER)
+    assert {q["source"]["url"] for q in (await exam.ensure(db, d))["questions"]} == {FDA}
+    practice = await exam.ensure(db, d, kind="practice")
+    assert [(q["question"], q["source"]["url"]) for q in practice["questions"]] == [
+        ("Which trial tested Leqembi?", NIH), ("When was Leqembi approved?", NIH)]       # never the exam's page
+    assert await exam.held_out(db, d) == {FDA, NIH}                                       # research skips both
     await exam.take(db, d)
+    await exam.take(db, d, kind="practice")
     g = await learning.gaps(db, d)
-    assert g["exam"] == ["How much did Leqembi slow decline in Clarity AD?"]
-    assert learning.gap_text(g).startswith("Exam questions")
+    assert g["practice"] == ["Which trial tested Leqembi?", "When was Leqembi approved?"]
+    assert learning.gap_text(g).startswith("Practice questions")
+    assert (await exam.latest(db, d))["items"][1]["question"].startswith("How much")    # each set its own sittings
+    assert [len(await exam.history(db, d)), len(await exam.history(db, d, kind="practice"))] == [1, 1]
 
 
 @pytest.mark.db

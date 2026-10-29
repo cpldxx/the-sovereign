@@ -160,12 +160,12 @@ export function LearningPanel({ domain, editable }: { domain: string; editable: 
         <div className="font-mono text-[10px] tracking-widest text-faint uppercase">What it is unsure about now</div>
         {!gaps ? <p className="text-faint">…</p> : (
           <ul className="space-y-1 text-dim">
-            {gaps.exam?.length > 0 && <li>Exam questions it can't answer yet: {gaps.exam.slice(0, 3).map(q => `“${q.slice(0, 70)}”`).join(', ')}{gaps.exam.length > 3 ? ` and ${gaps.exam.length - 3} more` : ''}</li>}
+            {gaps.practice?.length > 0 && <li>Practice questions it can't answer yet: {gaps.practice.slice(0, 3).map(q => `“${q.slice(0, 70)}”`).join(', ')}{gaps.practice.length > 3 ? ` and ${gaps.practice.length - 3} more` : ''}</li>}
             {gaps.weak.length > 0 && <li>One weak source only: {gaps.weak.slice(0, 5).map(w => w.entity).join(', ')}</li>}
             {gaps.stale.length > 0 && <li>Nothing new for a month: {gaps.stale.slice(0, 5).map(w => w.entity).join(', ')}</li>}
             {gaps.unanswered.length > 0 && <li>You asked, but it's not in the graph: {gaps.unanswered.slice(-3).map(q => `“${q.slice(0, 60)}”`).join(', ')}{gaps.unanswered_total > gaps.unanswered.length ? ` (${gaps.unanswered_total} such questions from everyone)` : ''}</li>}
             {gaps.ontology.length > 0 && <li>No words for yet: {gaps.ontology.slice(0, 5).join(', ')}</li>}
-            {!gaps.exam?.length && !gaps.weak.length && !gaps.stale.length && !gaps.unanswered.length && !gaps.ontology.length && <li className="text-faint">Nothing stands out.</li>}
+            {!gaps.practice?.length && !gaps.weak.length && !gaps.stale.length && !gaps.unanswered.length && !gaps.ontology.length && <li className="text-faint">Nothing stands out.</li>}
           </ul>
         )}
       </section>

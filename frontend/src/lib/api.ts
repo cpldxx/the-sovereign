@@ -116,7 +116,7 @@ export interface LearningCycle {
 }
 
 export interface LearningGaps {
-  exam: string[];            // the charter's exam questions the graph couldn't answer at its last sitting
+  practice: string[];        // the charter's practice questions the graph couldn't answer at its last sitting
   weak: { entity: string; weak_facts: number }[];
   stale: { entity: string; facts: number; last: string }[];
   unanswered: string[];      // the caller's own questions the graph couldn't answer
