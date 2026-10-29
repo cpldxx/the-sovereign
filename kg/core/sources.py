@@ -54,6 +54,7 @@ _BLOG = {
     "brunch.co.kr", "velog.io", "dev.to", "hashnode.dev", "ghost.io", "reddit.com", "quora.com", "x.com",
     "twitter.com", "facebook.com", "instagram.com", "tiktok.com", "youtube.com", "linkedin.com", "threads.net",
     "stackexchange.com", "stackoverflow.com", "dcinside.com", "fmkorea.com", "clien.net",
+    "t.me", "telegram.me", "discord.com", "weibo.com", "bsky.app",   # a Telegram channel set a practice question
 }
 
 

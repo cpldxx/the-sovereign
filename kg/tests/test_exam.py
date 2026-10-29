@@ -301,6 +301,12 @@ PRACTICE = CoreExam(
     working=Written(question="When was Leqembi approved?", answer="July 2023",
                     statement="The FDA approved Leqembi in July 2023."),
     deep=Written(question="Why is Leqembi disputed?", answer="Swelling", statement="Leqembi is disputed."))
+CDC = "https://www.cdc.gov/alzheimers/leqembi"
+PRACTICE_2 = CoreExam(
+    basic=Written(question="Who can take Leqembi?", answer="People with early Alzheimer's",
+                  statement="Leqembi is for people with early Alzheimer's."),
+    working=Written(question="How is Leqembi given?", answer="By infusion", statement="Leqembi is given by infusion."),
+    deep=Written(question="Why is Leqembi still disputed?", answer="Swelling", statement="It is disputed."))
 
 
 @pytest.mark.db
@@ -311,16 +317,19 @@ async def test_practice_comes_from_other_sources_and_only_its_open_questions_ste
     async def search(query):
         return [] if "blood" in query else [{"title": "Forum", "url": FORUM, "snippet": "my uncle says"},
                                             {"title": "FDA approves Leqembi", "url": FDA, "snippet": "FDA"},
-                                            {"title": "NIH: the Leqembi trial", "url": NIH, "snippet": "NIH"}]
+                                            {"title": "NIH: the Leqembi trial", "url": NIH, "snippet": "NIH"},
+                                            {"title": "CDC: Leqembi", "url": CDC, "snippet": "CDC"}]
 
     async def fetch(url):
-        return {"url": url, "title": "NIH: the Leqembi trial" if url == NIH else "FDA approves Leqembi",
-                "status": "ok", "markdown": PAGE}
+        title = {NIH: "NIH: the Leqembi trial", CDC: "CDC: Leqembi"}.get(url, "FDA approves Leqembi")
+        return {"url": url, "title": title, "status": "ok", "markdown": PAGE}
 
     class Agent(_Agent):
         async def run(self, prompt):
             if self.output_type is CoreExam and "SOURCE (NIH" in prompt:
                 return type("Run", (), {"output": PRACTICE})
+            if self.output_type is CoreExam and "SOURCE (CDC" in prompt:
+                return type("Run", (), {"output": PRACTICE_2})
             return await super().run(prompt)
     monkeypatch.setattr(exam, "_search", search)
     monkeypatch.setattr(exam, "_fetch", fetch)
@@ -328,13 +337,14 @@ async def test_practice_comes_from_other_sources_and_only_its_open_questions_ste
     await charter.save(db, d, CHARTER)
     assert {q["source"]["url"] for q in (await exam.ensure(db, d))["questions"]} == {FDA}
     practice = await exam.ensure(db, d, kind="practice")
-    assert [(q["question"], q["source"]["url"]) for q in practice["questions"]] == [
-        ("Which trial tested Leqembi?", NIH), ("When was Leqembi approved?", NIH)]       # never the exam's page
-    assert await exam.held_out(db, d) == {FDA, NIH}                                       # research skips both
+    assert [(q["question"], q["source"]["url"]) for q in practice["questions"]] == [   # two pages, never the exam's
+        ("Which trial tested Leqembi?", NIH), ("When was Leqembi approved?", NIH),
+        ("Who can take Leqembi?", CDC), ("How is Leqembi given?", CDC)]
+    assert await exam.held_out(db, d) == {FDA, NIH, CDC}                                  # research skips them all
     await exam.take(db, d)
     await exam.take(db, d, kind="practice")
     g = await learning.gaps(db, d)
-    assert g["practice"] == ["Which trial tested Leqembi?", "When was Leqembi approved?"]
+    assert g["practice"] == [q["question"] for q in practice["questions"]]
     assert learning.gap_text(g).startswith("Practice questions")
     assert (await exam.latest(db, d))["items"][1]["question"].startswith("How much")    # each set its own sittings
     assert [len(await exam.history(db, d)), len(await exam.history(db, d, kind="practice"))] == [1, 1]

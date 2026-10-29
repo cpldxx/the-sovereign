@@ -51,9 +51,10 @@ from core.database import ArcadeDB, now
 from core.llm import HANGUL, foreign_script, model_for, model_settings
 
 RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
-MAX_QUESTIONS = 36    # three per core question (basic, working, deep), twelve core questions at most
+MAX_QUESTIONS = 36    # three per core question and page (basic, working, deep), twelve core questions at most
 FACTS_SHOWN = 15      # facts the examiner sees per question (closest first, then the strongest around them)
 PAGES_TRIED = 2       # pages read per core question until one yields questions
+PAGES = {"exam": 1, "practice": 2}   # pages a core question's questions come from: practice is tuned on, so larger
 SOURCE_CHARS = 9000   # of a page the examiner reads
 MIN_PAGE = 800        # characters a page needs to be worth reading
 TRUSTED = 0.5         # the Validator's reliability a kept question needs
@@ -311,7 +312,8 @@ async def _from_page(domain: str, core: str, goal: str, page: dict) -> list[dict
             for (t, w), v in zip(tiers, verdicts) if v.supported and v.reliability >= TRUSTED]
 
 
-async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None) -> tuple[list[dict], list[int]]:
+async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None,
+               pages: int = 1) -> tuple[list[dict], list[int]]:
     """(questions, the core questions no source was found for) — none from the sources of the `other` set, or like
     its questions."""
     taken = {q["source"]["url"] for q in (other or {}).get("questions", []) if q.get("source")}
@@ -327,26 +329,29 @@ async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None) ->
             results = await _candidates(db, domain, queries.get(i) or [core], taken)
         mine: list[dict] = []
         try:
-            mine = await _core_questions(domain, core, c["goal"], results, questions + (other or {}).get("questions", []))
+            mine = await _core_questions(domain, core, c["goal"], results, questions + (other or {}).get("questions", []),
+                                         pages)
         except Exception as e:   # one core question's trouble leaves it unsourced, not the exam unset
             print(f"[Exam] {domain}: core question {i} failed: {type(e).__name__}: {e}"[:300], flush=True)
         if not mine:
             unsourced.append(i)
         questions += [{"core": i, **q} for q in mine]
-    return [{"id": f"q{k + 1}", **q} for k, q in enumerate(questions[:MAX_QUESTIONS])], unsourced
+    return [{"id": f"q{k + 1}", **q} for k, q in enumerate(questions[:MAX_QUESTIONS * pages])], unsourced
 
 
-async def _core_questions(domain: str, core: str, goal: str, results: list[dict], questions: list[dict]) -> list[dict]:
-    """From the most authoritative of the results: the questions one page states (none if no page could be read)."""
+async def _core_questions(domain: str, core: str, goal: str, results: list[dict], questions: list[dict],
+                          pages: int = 1) -> list[dict]:
+    """From the most authoritative of the results: the questions `pages` pages state (none if no page could be read).
+    A 4-question practice set came of one page per core question (2026-10-29): the exam had taken the best ones."""
     mine: list[dict] = []
     if results:
         listing = "\n".join(f"[{k + 1}] {r['title']}{'' if r['tier'] == 'paper' else ' [' + r['tier'] + ']'} — {r['url']}"
                             f"\n    {r.get('snippet', '')[:200]}" for k, r in enumerate(results[:12]))
         pick = await _ask(Pick, PICK, f"QUESTION: {core}\n\nRESULTS:\n{listing}", decisive=True)
         order = [results[k - 1] for k in dict.fromkeys(pick.picks) if 1 <= k <= min(len(results), 12)]
-        tried = 0
+        tried = kept = 0
         for r in order[:3]:
-            if tried >= PAGES_TRIED or mine:
+            if tried >= PAGES_TRIED + pages - 1 or kept >= pages:
                 break
             if r.get("markdown"):    # a paper: its abstract is the source, nothing to fetch
                 page = {"url": r["url"], "title": r["title"], "status": "full", "markdown": r["markdown"]}
@@ -359,8 +364,10 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
             if page.get("status") == "failed" or len(page.get("markdown") or "") < MIN_PAGE:
                 continue
             tried += 1
-            mine = [q for q in await _from_page(domain, core, goal, page)
-                    if not any(_alike(q["question"], x["question"]) for x in questions)]
+            new = [q for q in await _from_page(domain, core, goal, page)
+                   if not any(_alike(q["question"], x["question"]) for x in questions + mine)]
+            kept += bool(new)
+            mine += new
     return mine
 
 
@@ -384,7 +391,7 @@ async def ensure(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "ex
     exam = await current(db, domain, kind)
     if exam and exam.get("basis") == _basis(c) and exam.get("grounded") == GROUNDED and not fresh:
         return exam
-    questions, unsourced = await _set(db, domain, c, await current(db, domain, _other(kind)))
+    questions, unsourced = await _set(db, domain, c, await current(db, domain, _other(kind)), PAGES[kind])
     if not questions:
         raise ExamError("No authoritative source could be read for any core question — is the research service up?")
     return await _save(db, domain, {"version": (exam or {}).get("version", 0) + 1, "basis": _basis(c),
