@@ -72,13 +72,15 @@ def _get_client() -> DeerFlowClient:
     return _client
 
 
-def run(prompt: str, on_step: Callable[[str], None], thread_id: str | None = None) -> tuple[str, list[fetch.Page]]:
+def run(prompt: str, on_step: Callable[[str], None], thread_id: str | None = None,
+        domain: str = "") -> tuple[str, list[fetch.Page]]:
     """One research turn. Returns (the agent's report, every page it tried to read).
-    `thread_id` (the job id) groups the run's LangFuse traces into one session.
+    `thread_id` (the job id) groups the run's LangFuse traces into one session; the pages `domain`'s graph has are
+    kept from the agent (fetch.known).
 
     A run that stops early (step limit, model error) still returns the pages it read — those are
     what the graph needs; the report is only a summary. It raises only when nothing was read."""
-    capture = fetch.current = fetch.Capture()
+    capture = fetch.current = fetch.Capture(domain=domain)
     texts: dict[str, str] = {}   # ai message id → accumulated text (deltas)
     order: list[str] = []
     start = time.monotonic()

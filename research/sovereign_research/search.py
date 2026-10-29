@@ -18,6 +18,8 @@ import time
 import httpx
 from langchain.tools import tool
 
+from sovereign_research import fetch
+
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8088").rstrip("/")
 MIN_INTERVAL = float(os.getenv("RESEARCH_SEARCH_INTERVAL", "4"))  # seconds between searches
 MAX_RESULTS = 8
@@ -120,4 +122,9 @@ async def web_search_tool(query: str, time_range: str | None = None) -> str:
             "No results. " + (f"Search engines are temporarily limiting requests ({', '.join(down)}). " if down else "")
             + "Do not retry many variations: use a broader query once, or work with the pages you already have."
         )
-    return json.dumps(results, ensure_ascii=False)
+    had = await fetch.known([r["url"] for r in results])
+    results = [r for r in results if r["url"] not in had]
+    if not results:
+        return "Every result is a page the knowledge graph already has: search from another angle for new sources."
+    return json.dumps(results, ensure_ascii=False) + (
+        f"\n\n({len(had)} result(s) the knowledge graph already has were left out.)" if had else "")

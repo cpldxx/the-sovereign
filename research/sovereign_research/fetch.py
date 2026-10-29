@@ -22,6 +22,8 @@ import httpx
 from deerflow.community.url_safety import validate_public_http_url
 from langchain.tools import tool
 
+from sovereign_research import auth
+
 CRAWL4AI_URL = os.getenv("CRAWL4AI_URL", "http://localhost:11235").rstrip("/")
 CRAWL4AI_TOKEN = os.getenv("CRAWL4AI_API_TOKEN", "sovereign-local-crawl4ai")
 USER_AGENT = "SovereignBot/0.1 (research agent; respects robots.txt)"
@@ -57,8 +59,12 @@ class Page:
 
 @dataclass
 class Capture:
-    """Pages opened during one research run (one run at a time: they share the local GPU)."""
+    """Pages opened during one research run (one run at a time: they share the local GPU) — and, for its `domain`,
+    the URLs found that the graph already has."""
     pages: list[Page] = field(default_factory=list)
+    domain: str = ""
+    known: set[str] = field(default_factory=set)
+    checked: set[str] = field(default_factory=set)
 
     def add(self, page: Page) -> None:
         url = urldefrag(page.url).url        # …/ep2/ and …/ep2/#main-content are one page
@@ -81,6 +87,25 @@ _slot_lock = threading.Lock()
 def record(page: Page) -> None:
     if current is not None:
         current.add(page)
+
+
+async def known(urls: list[str]) -> set[str]:
+    """Those of `urls` the run's graph has read in full or holds out (the exam's and the practice set's sources): the
+    agent isn't shown them. Four missions read 26 pages, 10 of them pages the graph had (2026-10-28) — each a read
+    and a page of the run spent for nothing, as ingest skips them. Empty outside a run, or when the KG can't say."""
+    cap = current
+    if cap is None or not cap.domain:
+        return set()
+    ask = [u for u in dict.fromkeys(urldefrag(u).url for u in urls if u) if u not in cap.checked][:500]
+    if ask:
+        try:
+            async with httpx.AsyncClient(base_url=auth.KG_URL, headers=auth.headers(cap.domain), timeout=30) as kg:
+                r = await kg.post(f"/domains/{cap.domain}/sources", json={"urls": ask})
+            cap.known.update(r.raise_for_status().json().get("known", []))
+            cap.checked.update(ask)
+        except (httpx.HTTPError, ValueError) as e:
+            print(f"[Research] known sources unavailable ({type(e).__name__})", flush=True)
+    return {u for u in urls if u and urldefrag(u).url in cap.known}
 
 
 async def _robots_rules(site: str) -> tuple[urllib.robotparser.RobotFileParser | bool | None, float]:
@@ -196,6 +221,8 @@ async def web_fetch_tool(url: str) -> str:
     Args:
         url: The URL to fetch the contents of.
     """
+    if await known([url]):
+        return f"The knowledge graph already has {url} (or keeps it out): don't read it — find a source it lacks."
     page = await fetch_page(url)
     record(page)
     if page.status == "failed":

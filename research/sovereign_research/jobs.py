@@ -207,7 +207,7 @@ class Jobs:
         loop = asyncio.get_running_loop()
         on_step = lambda text: loop.call_soon_threadsafe(self._step, job, text)  # noqa: E731
         started = time.monotonic()
-        report, pages = await asyncio.to_thread(runner.run, prompt, on_step, job["id"])
+        report, pages = await asyncio.to_thread(runner.run, prompt, on_step, job["id"], domain)
         job["seconds"] = {"research": round(time.monotonic() - started), "ontology": 0, "ingest": 0}
         job["report"] = report
         readable = [p for p in pages if p.status != "failed"]

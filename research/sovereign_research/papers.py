@@ -233,7 +233,12 @@ async def paper_search_tool(query: str, max_results: int = 6) -> str:
     papers = await search(query, max(1, min(max_results, 10)))
     if not papers:
         return "No papers found. Try broader or English key terms — or use web_search for non-academic sources."
-    return json.dumps([brief(p) for p in papers], ensure_ascii=False)
+    had = await fetch.known([p.url for p in papers])
+    papers = [p for p in papers if p.url not in had]
+    if not papers:
+        return "The knowledge graph has every paper found: search other key terms for papers it lacks."
+    return json.dumps([brief(p) for p in papers], ensure_ascii=False) + (
+        f"\n\n({len(had)} paper(s) the knowledge graph already has were left out.)" if had else "")
 
 
 @tool("read_paper", parse_docstring=True)
@@ -246,6 +251,8 @@ async def read_paper_tool(key: str, full_text: bool = True) -> str:
         full_text: Read its open-access full text too, when there is one (the default — an abstract holds little);
             false for the abstract alone.
     """
+    if (p := _found.get(key)) and await fetch.known([p.url]):
+        return f"The knowledge graph already has {p.url}: read a paper it lacks."
     page = await read(key, full_text)
     if page.status == "failed":
         return f"Could not read {key}: {page.error}"
