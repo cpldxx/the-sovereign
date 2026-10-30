@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 
-from sovereign_research import auth, missions, runner
+from sovereign_research import auth, fetch, missions, runner
 
 KG_URL = os.getenv("SOVEREIGN_KG_URL", "http://localhost:8080").rstrip("/")
 # Pages ingested at once (the KG reads chunks in parallel, INGEST_CONCURRENCY; writes stay one at a time).
@@ -32,6 +32,15 @@ KEEP_JOBS = int(os.getenv("RESEARCH_KEEP_JOBS", "1000"))   # jobs.json keeps the
 # research is done, or pages the KG could not ingest, are tried once more this many minutes later.
 RETRY_MINUTES = float(os.getenv("RESEARCH_RETRY_MINUTES", "10"))
 MODES = ("bootstrap", "update", "mission")
+
+
+class NothingRead(RuntimeError):
+    """A run that read no page. `offline`: each page failed for want of a network, or the agent found none to open
+    (the search engines unreachable too) — worth one more run, RETRY_MINUTES later."""
+
+    def __init__(self, message: str, offline: bool) -> None:
+        super().__init__(message)
+        self.offline = offline
 
 
 def now() -> str:
@@ -135,6 +144,10 @@ class Jobs:
                     self._later(job, f"{type(e).__name__} reaching the KG — trying again in {RETRY_MINUTES:g} min",
                                 retried=True)
                     continue
+                if isinstance(e, NothingRead) and e.offline and not job.get("retried"):
+                    job["pages"] = []
+                    self._later(job, f"{e}, the network down — trying again in {RETRY_MINUTES:g} min", retried=True)
+                    continue
                 detail = str(e) or ("no answer in time — the KG or the machine was overloaded"
                                     if isinstance(e, httpx.TimeoutException) else "")
                 job.update(status="failed", error=f"{type(e).__name__}: {detail}")
@@ -214,10 +227,11 @@ class Jobs:
         if not readable:
             job["pages"] = [{"url": p.url, "title": p.title, "status": p.status, "error": p.error, "chars": 0}
                             for p in pages]
-            raise RuntimeError(
+            raise NothingRead(
                 "no page could be read — " + ("every page failed (see pages)" if pages else
                 "the agent found nothing to open (search engines may be rate-limiting; "
-                "try later, or set TAVILY_API_KEY / BRAVE_API_KEY in research/.env)"))
+                "try later, or set TAVILY_API_KEY / BRAVE_API_KEY in research/.env)"),
+                offline=all(fetch.offline(p.error) for p in pages))
         job["pages"] = [
             {"url": p.url, "title": p.title, "status": p.status, "error": p.error, "chars": len(p.markdown),
              **({"tier": p.tier} if p.tier else {})}

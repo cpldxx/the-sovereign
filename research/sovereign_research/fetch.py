@@ -12,6 +12,7 @@ and the agent is told to find the information elsewhere.
 import asyncio
 import os
 import re
+import socket
 import threading
 import time
 import urllib.robotparser
@@ -38,6 +39,13 @@ PAYWALL_BODY = 3000
 ROBOTS_TTL = 24 * 3600
 ROBOTS_ERROR_TTL = 600
 ROBOTS_REDIRECTS = 5
+# A name that doesn't resolve while a well-known one doesn't either: the machine is offline for a moment (Wi-Fi). On
+# 2026-10-29 every page of a night's ai_chips cycle failed so ("URL host could not be resolved"), and a mission lost
+# 3 of its 4 pages to a drop of seconds. The read waits it out — seconds between tries, about 5 minutes in all.
+UNRESOLVED = "Error: URL host could not be resolved"
+OFFLINE = "Error: offline — no host name resolves (waited 5 minutes)"
+NETWORK_WAITS = (5, 15, 40, 100, 140)
+REFERENCE_HOST = "doi.org"
 
 _PAYWALL = re.compile(
     r"subscribe to (continue|read)|to continue reading|sign in to (read|continue)|"
@@ -182,9 +190,36 @@ def _title(markdown: str) -> str:
     return m.group(1).strip()[:200] if m else ""
 
 
+def _resolves(host: str) -> bool:
+    try:
+        return bool(socket.getaddrinfo(host, None))
+    except (socket.gaierror, UnicodeError):
+        return False
+
+
+async def _url_error(url: str) -> str | None:
+    """validate_public_http_url, waiting while the machine is offline. A host of its own that doesn't resolve (an
+    invented URL) fails at once."""
+    for wait in NETWORK_WAITS:
+        error = await asyncio.to_thread(validate_public_http_url, url, allow_private_addresses=False)
+        if error != UNRESOLVED:
+            return error
+        if await asyncio.to_thread(_resolves, REFERENCE_HOST):
+            # (Once more: the network may have come back between the two lookups.)
+            return await asyncio.to_thread(validate_public_http_url, url, allow_private_addresses=False)
+        await asyncio.sleep(wait)
+    error = await asyncio.to_thread(validate_public_http_url, url, allow_private_addresses=False)
+    return OFFLINE if error == UNRESOLVED and not await asyncio.to_thread(_resolves, REFERENCE_HOST) else error
+
+
+def offline(error: str) -> bool:
+    """Whether a page failed because the machine was offline (or its name didn't resolve)."""
+    return error in (UNRESOLVED, OFFLINE)
+
+
 async def fetch_page(url: str) -> Page:
     """Fetch one page under Sovereign's rules. Never raises."""
-    if url_error := await asyncio.to_thread(validate_public_http_url, url, allow_private_addresses=False):
+    if url_error := await _url_error(url):
         return Page(url, "", "", "failed", url_error)
     if refusal := await robots_refusal(url):
         return Page(url, "", "", "failed", refusal)
