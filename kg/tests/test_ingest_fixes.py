@@ -135,19 +135,31 @@ async def test_a_question_is_also_searched_in_english_and_by_a_passage_that_woul
 
     async def none(*a, **k):
         return []
+    kept = []
+
+    async def find_docs(db, domain, type_, json_fields=(), where="", order="", limit=100, **params):
+        return [d for d in kept if d["key"] == params["key"]][:limit]
+
+    async def insert_doc(db, domain, type_, doc, json_fields=()):
+        kept.append(doc)
+        return doc
     monkeypatch.setattr(kg, "Agent", Searcher)
     monkeypatch.setattr(kg, "embed", embed)
+    monkeypatch.setattr(kg, "_searches", {})
     for fn, stand_in in (("search_entities", none), ("expand", none), ("get_entities", none),
-                         ("search_facts", search_facts), ("get_episodes", none)):
+                         ("search_facts", search_facts), ("get_episodes", none), ("find_docs", find_docs),
+                         ("insert_doc", insert_doc)):
         monkeypatch.setattr(kgdb, fn, stand_in)
     empty = {"entities": [], "facts": [], "episodes": []}
     out = await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
     assert [(f["uid"], f["similarity"]) for f in out["facts"]] == [("f_bonding", 0.81), ("f_answer", 0.77),
                                                                      ("f_general", 0.52)]
-    assert kg._searches["HBM4에서 범프를 대체하는 결합 방식은?"][1] == \
-        "HBM4 stacks are joined by hybrid bonding instead of microbumps."
+    assert kept[0]["texts"][1] == "HBM4 stacks are joined by hybrid bonding instead of microbumps."
     await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
     assert len(asked) == 1                                        # asked again: remembered
+    kg._searches.clear()                                          # a restart: kept in the domain's database
+    again = await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
+    assert len(asked) == 1 and again["facts"] == out["facts"]
 
 
 async def test_the_facts_around_a_question_come_closest_to_it_first(monkeypatch):

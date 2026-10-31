@@ -861,34 +861,48 @@ SEARCH = """You prepare a search of an English knowledge graph for a question. A
 QUESTION: the question in English (as it is, when it already is English), keeping every name, term and number
 PASSAGE: two or three plain sentences that would answer it, stated the way a knowledge graph's facts are — naming
 the things, processes and numbers involved. It is only used to find facts and is never shown: a best guess is fine."""
-_searches: dict[str, list[str]] = {}   # question → what else it is searched by, for the questions asked again
+_searches: dict[tuple[str, str], list[str]] = {}   # (domain, key) → what else a question is searched by
 
 
-async def _search_texts(question: str) -> list[str]:
+async def _search_texts(db: ArcadeDB, domain: str, question: str) -> list[str]:
     """What a question is searched by besides itself. Its English, when most of it isn't in Latin script — the graph
     is kept in English (agents/extractor.py), and the multilingual embedding matches poorly across languages: measured
     2026-10-28, a Korean exam question's nearest facts were about HBM4 in general (similarity 0.52) while its English
     twin found the answer (0.77). And a passage that would answer it (HyDE, Gao et al. 2022): facts read like answers,
     not like questions. Nothing when the model can't be reached (the question alone is used). With the facts around
     ranked by closeness (_query), tried on the practice set (core/exam.py) on 2026-10-29: 24 → 37, four questions up
-    — answered from facts the graph held but never showed — one down."""
-    if question not in _searches:
-        agent = Agent(model_for("searcher"), name="search_texts", system_prompt=SEARCH,
-                      model_settings={**model_settings(), "temperature": 0.0})   # one question, one search
-        try:
-            out = str((await agent.run(question)).output).strip()
-        except Exception as e:   # a search must not fail over its preparation
-            print(f"[KG] query searched as asked ({type(e).__name__})", flush=True)
-            return []
-        english = re.search(r"QUESTION:\s*(.+)", out)
-        passage = re.search(r"PASSAGE:\s*(.+)", out, re.S)
-        if not english and not passage:
-            english = re.match(r"(.+)", out, re.S)   # the question alone, translated
-        texts = [" ".join(m[1].split())[:600] for m in (english, passage) if m]
+    — answered from facts the graph held but never showed — one down.
+    Kept in the domain's database (SearchText), not only in memory: each restart wrote them anew, and a question
+    of the exam could find other facts than at its last sitting with the graph unchanged (2026-10-29)."""
+    key = hashlib.sha1(f"{SEARCH}\n{question}".encode()).hexdigest()[:16]   # a new prompt searches anew
+    if (domain, key) not in _searches:
+        kept = await kgdb.find_docs(db, domain, "SearchText", ("texts",), "key = :key", order="created_at ASC",
+                                    limit=1, key=key)
+        if kept:
+            texts = kept[0]["texts"]
+        else:
+            agent = Agent(model_for("searcher"), name="search_texts", system_prompt=SEARCH,
+                          model_settings={**model_settings(), "temperature": 0.0})   # one question, one search
+            try:
+                out = str((await agent.run(question)).output).strip()
+            except Exception as e:   # a search must not fail over its preparation
+                print(f"[KG] query searched as asked ({type(e).__name__})", flush=True)
+                return []
+            english = re.search(r"QUESTION:\s*(.+)", out)
+            passage = re.search(r"PASSAGE:\s*(.+)", out, re.S)
+            if not english and not passage:
+                english = re.match(r"(.+)", out, re.S)   # the question alone, translated
+            found = [" ".join(m[1].split())[:600] for m in (english, passage) if m]
+            texts = [t for t in dict.fromkeys(found) if t and t != question]
+            try:
+                await kgdb.insert_doc(db, domain, "SearchText", {"key": key, "question": question[:2000],
+                                                                 "texts": texts}, ("texts",))
+            except Exception as e:   # kept in memory all the same
+                print(f"[KG] search texts not kept ({type(e).__name__})", flush=True)
         if len(_searches) >= 500:
             _searches.pop(next(iter(_searches)))
-        _searches[question] = [t for t in dict.fromkeys(texts) if t and t != question]
-    return _searches[question]
+        _searches[(domain, key)] = texts
+    return _searches[(domain, key)]
 
 
 def _closest(hits: list[list[dict]], k: int) -> list[dict]:
@@ -901,7 +915,7 @@ def _closest(hits: list[list[dict]], k: int) -> list[dict]:
 
 
 async def _query(db: ArcadeDB, domain: str, question: str, k: int, empty: dict) -> dict:
-    vectors = await embed([question, *await _search_texts(question)])
+    vectors = await embed([question, *await _search_texts(db, domain, question)])
     entities = _closest([await kgdb.search_entities(db, domain, v, k) for v in vectors], k)
     hit_facts = _closest([await kgdb.search_facts(db, domain, v, k) for v in vectors], k)
     seeds = {e["uid"] for e in entities} | {u for f in hit_facts for u in (f["source_uid"], f["target_uid"])}
