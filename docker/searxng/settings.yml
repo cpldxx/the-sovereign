@@ -9,14 +9,24 @@ search:
 
 # More engines spread the load: free engines rate-limit (or CAPTCHA) a single client after
 # many queries, and Sovereign never works around that — it asks other engines instead.
+# Tried one by one on 2026-10-30: google cse, yahoo, yandex, naver and mwmbl answered; duckduckgo
+# (CAPTCHA), qwant (access denied), brave (too many requests) and bing (connection refused) refused
+# every query, so they are off rather than asked again and again. Try them again now and then.
+# (mojeek and startpage, on here before, are no longer among SearXNG's engines.)
 engines:
-  - name: bing
-    disabled: false
   - name: yahoo
     disabled: false
-  - name: mojeek
+  - name: yandex
     disabled: false
+  - name: naver
+    disabled: false
+  - name: mwmbl
+    disabled: false
+  - name: duckduckgo
+    disabled: true
   - name: qwant
-    disabled: false
-  - name: startpage
-    disabled: false
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: bing
+    disabled: true
