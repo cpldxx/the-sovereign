@@ -332,6 +332,7 @@ PRACTICE_2 = CoreExam(
 async def test_practice_comes_from_other_sources_and_only_its_open_questions_steer_research(domain, monkeypatch):
     """Research aimed at the exam's open questions, and changes tried on its answers, taught to the test (2026-10-29)."""
     db, d = domain
+    monkeypatch.setattr(exam, "PAGES", {"exam": 1, "practice": 2})   # one page each set here: three sources in all
 
     async def search(query):
         return [] if "blood" in query else [{"title": "Forum", "url": FORUM, "snippet": "my uncle says"},
@@ -404,6 +405,7 @@ async def test_official_sources_are_offered_before_other_sites_and_blogs_never(d
 @pytest.mark.db
 async def test_a_paper_comes_first_and_its_abstract_is_the_source(domain, monkeypatch):
     db, d = domain
+    monkeypatch.setattr(exam, "PAGES", {"exam": 1, "practice": 2})   # the first pick is the one page read
     paper = {"title": "Lecanemab in Early Alzheimer's Disease", "url": "https://doi.org/10.1056/NEJMoa2212948",
              "venue": "NEJM", "year": 2023, "abstract": "Lecanemab reduced amyloid…", "markdown": PAGE}
     fetched = []

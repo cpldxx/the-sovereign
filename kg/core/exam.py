@@ -54,7 +54,9 @@ RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstr
 MAX_QUESTIONS = 36    # three per core question and page (basic, working, deep), twelve core questions at most
 FACTS_SHOWN = 15      # facts the examiner sees per question (closest first, then the strongest around them)
 PAGES_TRIED = 2       # pages read per core question until one yields questions
-PAGES = {"exam": 1, "practice": 2}   # pages a core question's questions come from: practice is tuned on, so larger
+# Pages a core question's questions come from. The exam had 11 questions from one page each (2026-10-30): one question
+# moved the score by 4.5, and 41 → 55 was three questions — three pages make a point of it about 1.5.
+PAGES = {"exam": 3, "practice": 2}
 SOURCE_CHARS = 9000   # of a page the examiner reads
 MIN_PAGE = 800        # characters a page needs to be worth reading
 TRUSTED = 0.5         # the Validator's reliability a kept question needs
@@ -90,7 +92,7 @@ class Plan(BaseModel):
 
 
 class Pick(BaseModel):
-    picks: list[int] = Field(description="The numbers of the most authoritative results, best first (at most 3)")
+    picks: list[int] = Field(description="The numbers of the most authoritative results, best first (at most 6)")
 
 
 class Written(BaseModel):
@@ -352,7 +354,7 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
         pick = await _ask(Pick, PICK, f"QUESTION: {core}\n\nRESULTS:\n{listing}", decisive=True)
         order = [results[k - 1] for k in dict.fromkeys(pick.picks) if 1 <= k <= min(len(results), 12)]
         tried = kept = 0
-        for r in order[:3]:
+        for r in order[:pages + PAGES_TRIED]:
             if tried >= PAGES_TRIED + pages - 1 or kept >= pages:
                 break
             if r.get("markdown"):    # a paper: its abstract is the source, nothing to fetch
