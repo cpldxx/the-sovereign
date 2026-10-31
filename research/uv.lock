@@ -3050,6 +3050,7 @@ dependencies = [
     { name = "langchain-mcp-adapters" },
     { name = "langgraph" },
     { name = "mcp" },
+    { name = "pypdfium2" },
     { name = "python-dotenv" },
     { name = "uvicorn" },
 ]
@@ -3063,6 +3064,7 @@ requires-dist = [
     { name = "langchain-mcp-adapters", specifier = "==0.2.2" },
     { name = "langgraph", specifier = "==1.2.9" },
     { name = "mcp", specifier = ">=1.28,<2" },
+    { name = "pypdfium2", specifier = ">=5.14" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "uvicorn", specifier = ">=0.41.0" },
 ]

@@ -2,7 +2,7 @@
 
 Replaces DeerFlow's built-in fetchers so that every page the research agent opens:
 - respects robots.txt (cached per site) and is paced per site,
-- is rendered by the local crawl4ai server (JavaScript pages too) into clean markdown,
+- is rendered by the local crawl4ai server (JavaScript pages too) into clean markdown — a PDF is read here,
 - is recorded IN FULL for the knowledge graph, while the agent itself gets a trimmed copy.
 
 Nothing is bypassed: blocked, paywalled or login-only pages are recorded as failed or partial,
@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from urllib.parse import urldefrag, urljoin, urlsplit
 
 import httpx
+import pypdfium2 as pdfium
 from deerflow.community.url_safety import validate_public_http_url
 from langchain.tools import tool
 
@@ -46,6 +47,9 @@ UNRESOLVED = "Error: URL host could not be resolved"
 OFFLINE = "Error: offline — no host name resolves (waited 5 minutes)"
 NETWORK_WAITS = (5, 15, 40, 100, 140)
 REFERENCE_HOST = "doi.org"
+PDF_BYTES = 30 * 2**20   # a larger PDF isn't read
+PDF_PAGES = 60           # pages read of a PDF: a paper or a white paper whole, a book or thesis in part
+_FILE_TITLE = re.compile(r"^(microsoft \w+ - |untitled\b)|\.(docx?|pptx?|pdf|indd|tex)$|^[\w.-]+$", re.I)
 
 _PAYWALL = re.compile(
     r"subscribe to (continue|read)|to continue reading|sign in to (read|continue)|"
@@ -217,6 +221,69 @@ def offline(error: str) -> bool:
     return error in (UNRESOLVED, OFFLINE)
 
 
+def _pdf_text(data: bytes) -> tuple[str, str]:
+    """(title, text) of a PDF's first PDF_PAGES pages: lines of one paragraph joined, words split at a line end
+    mended."""
+    pdf = pdfium.PdfDocument(data)
+    try:
+        pages = []
+        for i in range(min(len(pdf), PDF_PAGES)):
+            page = pdf[i]
+            textpage = page.get_textpage()
+            pages.append(textpage.get_text_range())
+            textpage.close()
+            page.close()
+        title = (pdf.get_metadata_dict().get("Title") or "").strip()
+        if _FILE_TITLE.search(title):   # "Microsoft Word - RB_Heterogeneous_…_v3_": a file's name, not a title
+            title = ""
+    finally:
+        pdf.close()
+    text = "\n\n".join(pages).replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+    text = re.sub(r"[ \t]*(?<!\n)\n(?!\n)[ \t]*", " ", text)
+    return title, re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+async def _fetch_pdf(url: str) -> Page | None:
+    """A PDF, read here — the crawler's browser takes one for a download and fails (net::ERR_FAILED): 4 of a night's
+    47 pages, IEEE's and Springer's among them, and open-access papers were read as their abstract alone
+    (2026-10-30). Under the same rules: the bot named, redirects followed by hand and each target checked like any
+    page. None when the answer is no PDF (a landing page at a .pdf address): the crawler reads it."""
+    try:
+        async with httpx.AsyncClient(timeout=60, headers={"User-Agent": USER_AGENT}, follow_redirects=False) as c:
+            target = url
+            for _ in range(ROBOTS_REDIRECTS + 1):
+                async with c.stream("GET", target) as r:
+                    if r.is_redirect:
+                        target = urljoin(target, r.headers.get("location", ""))
+                        if refusal := await _url_error(target) or await robots_refusal(target):
+                            return Page(url, "", "", "failed", refusal)
+                        continue
+                    if r.status_code != 200:
+                        return Page(url, "", "", "failed", f"HTTP {r.status_code}")
+                    if "pdf" not in r.headers.get("content-type", "").lower():
+                        return None
+                    data = bytearray()
+                    async for part in r.aiter_bytes():
+                        data += part
+                        if len(data) > PDF_BYTES:
+                            return Page(url, "", "", "failed", f"a PDF over {PDF_BYTES // 2**20} MB")
+                    break
+            else:
+                return Page(url, "", "", "failed", "too many redirects")
+    except httpx.HTTPError as e:
+        return Page(url, "", "", "failed", f"{type(e).__name__}: {e}")
+    try:
+        title, text = await asyncio.to_thread(_pdf_text, bytes(data))
+    except pdfium.PdfiumError as e:
+        return Page(url, "", "", "failed", f"an unreadable PDF ({e})")
+    if not text:
+        return Page(url, "", "", "failed", "no readable content (a scanned PDF?)")
+    markdown = f"# {title}\n\n{text}" if title else text
+    return Page(url, _title(markdown), markdown, "partial" if len(text) < PARTIAL_BELOW else "full")
+
+
 async def fetch_page(url: str) -> Page:
     """Fetch one page under Sovereign's rules. Never raises."""
     if url_error := await _url_error(url):
@@ -224,6 +291,8 @@ async def fetch_page(url: str) -> Page:
     if refusal := await robots_refusal(url):
         return Page(url, "", "", "failed", refusal)
     await _pace(url)
+    if urlsplit(url).path.lower().endswith(".pdf") and (pdf := await _fetch_pdf(url)):
+        return pdf
     try:
         async with httpx.AsyncClient(timeout=60) as c:
             r = await c.post(
@@ -234,7 +303,12 @@ async def fetch_page(url: str) -> Page:
         body = r.json() if r.content else {}
         markdown = (body.get("markdown") or "").strip() if r.is_success and body.get("success", True) else ""
         if not r.is_success:
-            return Page(url, "", "", "failed", f"crawler HTTP {r.status_code}: {str(body.get('detail', ''))[:200]}")
+            detail = str(body.get("detail", ""))
+            if "ERR_FAILED" in detail or "ERR_ABORTED" in detail:   # a download, perhaps a PDF
+                await _pace(url)
+                if pdf := await _fetch_pdf(url):
+                    return pdf
+            return Page(url, "", "", "failed", f"crawler HTTP {r.status_code}: {detail[:200]}")
     except (httpx.HTTPError, ValueError) as e:
         return Page(url, "", "", "failed", f"{type(e).__name__}: {e}")
     if not markdown:

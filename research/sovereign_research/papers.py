@@ -96,7 +96,7 @@ async def openalex(query: str, n: int) -> list[Paper]:
     out = []
     for w in r.json().get("results", []):
         oa = w.get("best_oa_location") or {}
-        page = oa.get("landing_page_url") or ""
+        page = oa.get("pdf_url") or oa.get("landing_page_url") or ""   # the PDF is the text itself (fetch reads PDFs)
         out.append(Paper(
             key=f"openalex:{w['id'].rsplit('/', 1)[-1]}", title=_clean(w.get("display_name")),
             abstract=_clean(_abstract(w.get("abstract_inverted_index"))),
@@ -104,7 +104,7 @@ async def openalex(query: str, n: int) -> list[Paper]:
             venue=_clean(((w.get("primary_location") or {}).get("source") or {}).get("display_name")),
             authors=[_clean((a.get("author") or {}).get("display_name")) for a in w.get("authorships") or []],
             citations=w.get("cited_by_count"),
-            full_text=page if page and not page.lower().endswith(".pdf") else ""))
+            full_text=page))
     return [p for p in out if p.title and p.abstract]
 
 

@@ -14,6 +14,7 @@ dependencies = [
     "langgraph==1.2.9",   # the version DeerFlow's checkpoint patch was validated against
     "fastapi>=0.133.1",
     "httpx>=0.28.1",
+    "pypdfium2>=5.14",   # PDFs read by fetch (the crawler's browser can't); already in DeerFlow's tree
     "python-dotenv>=1.2.2",
     "uvicorn>=0.41.0",
 ]
