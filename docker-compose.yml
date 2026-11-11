@@ -12,6 +12,9 @@ services:
       - arcadedb_data:/home/arcadedb/databases
     networks:
       - sovereign-net
+    # Back after Docker restarts, like the services that need it: on 2026-11-10 Docker restarted and only the
+    # app services came back — the KG kept failing without its database for five hours.
+    restart: unless-stopped
 
   # Web search for DeerFlow (metasearch, no API key). JSON API at http://localhost:8088/search?format=json
   searxng:
@@ -25,6 +28,7 @@ services:
       - ./docker/searxng/settings.yml:/etc/searxng/settings.yml:ro
     networks:
       - sovereign-net
+    restart: unless-stopped
 
   # Page fetching for DeerFlow: renders JavaScript pages with headless Chromium, returns clean markdown.
   crawl4ai:
@@ -37,6 +41,7 @@ services:
     shm_size: 1g
     networks:
       - sovereign-net
+    restart: unless-stopped
 
   # ── Observability (optional): LangFuse traces every agent call — `docker compose --profile observability up -d`
   # UI on http://localhost:3000 (sign up there; new users join the "sovereign" project automatically).
