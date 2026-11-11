@@ -45,6 +45,14 @@ def _lab_models() -> set[str]:
     return {n if ":" in n else f"{n}:latest" for n in names if n}
 
 
+async def _kg_up() -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            return (await c.get(f"{KG_URL}/health")).is_success
+    except httpx.HTTPError:
+        return False
+
+
 async def others_loaded() -> list[str]:
     """The models in Ollama that aren't the lab's, when together they pass OTHER_MODELS_GB (else none). Nothing when
     Ollama can't say: that alone doesn't hold the lab back."""
@@ -146,7 +154,15 @@ class Jobs:
         return self.public(job)
 
     async def _room(self, job: dict) -> None:
-        """Wait while other apps' models fill the memory (others_loaded)."""
+        """Wait until the KG answers, then while other apps' models fill the memory (others_loaded). 2026-11-11:
+        after a reboot the research service came up before the KG, and nine queued runs failed to reach it at once,
+        each spending its one retry."""
+        noted = False
+        while not await _kg_up():
+            if not noted:
+                self._step(job, "waiting for the KG to answer")
+                noted = True
+            await asyncio.sleep(30)
         noted = False
         while busy := await others_loaded():
             if not noted:
