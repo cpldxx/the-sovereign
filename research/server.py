@@ -30,7 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from pydantic import BaseModel, Field  # noqa: E402
 
 from sovereign_research import auth, fetch, papers, runner, search  # noqa: E402
-from sovereign_research.jobs import KG_URL, Jobs  # noqa: E402
+from sovereign_research.jobs import KG_URL, Jobs, others_loaded  # noqa: E402
 
 # Each domain learns on its own schedule (Settings › Learning: times in the user's timezone, kept by the KG —
 # kg/core/learning.py). RESEARCH_SCHEDULE=off stops every cycle; runs can still be started by hand.
@@ -39,10 +39,14 @@ REVIEW_MINUTES = int(os.getenv("NIGHTLY_REVIEW_MINUTES", "45"))   # the Head's r
 SEARXNG_URL = os.getenv("SEARXNG_URL", "http://localhost:8088").rstrip("/")
 REPORT_WAIT = 18 * 3600  # seconds a cycle waits for its research runs before the rest of it goes ahead
 SLOTS_FILE = Path(os.getenv("RESEARCH_DATA") or HERE / ".data") / "cycles.json"
+# A cycle whose time comes while other apps' models fill the memory (jobs.others_loaded) waits for them, this long
+# at most — past it, that day's cycle is let go. (In memory: a restart meanwhile lets it go too.)
+MEMORY_WAIT_HOURS = float(os.getenv("RESEARCH_MEMORY_WAIT_HOURS", "8"))
 SELFCHECK_FILE = SLOTS_FILE.with_name("selfcheck.txt")   # the local day the security self-check last ran
 
 jobs = Jobs()
 _cycling: set[str] = set()
+_waiting: dict[str, tuple[str, float]] = {}   # domain → (slot, when it came) of cycles waiting for memory
 
 
 def _slots() -> dict[str, list[str]]:
@@ -109,9 +113,23 @@ async def scheduler() -> None:
                 for d in [d["id"] for d in r.json()["domains"]]:
                     r = await kg.get(f"/domains/{d}/learning")
                     slot = r.json().get("due") if r.is_success else None
-                    if slot and slot not in _slots().get(d, []) and d not in _cycling:
+                    if slot and slot not in _slots().get(d, []) and d not in _cycling and d not in _waiting:
                         due[d] = slot
             for d, slot in due.items():
+                _waiting[d] = (slot, time.monotonic())
+            if _waiting and (busy := await others_loaded()):
+                for d, (slot, since) in list(_waiting.items()):
+                    if d in due:
+                        print(f"[Research] {d}: learning cycle {slot} waits — other models fill the memory "
+                              f"({', '.join(busy)})", flush=True)
+                    elif time.monotonic() - since > MEMORY_WAIT_HOURS * 3600:
+                        _ran(d, slot)
+                        del _waiting[d]
+                        print(f"[Research] {d}: learning cycle {slot} let go — the memory stayed full "
+                              f"{MEMORY_WAIT_HOURS:g} h", flush=True)
+                continue
+            for d, (slot, _since) in list(_waiting.items()):
+                del _waiting[d]
                 _ran(d, slot)
                 start_cycle(d, slot)
         except httpx.HTTPError as e:

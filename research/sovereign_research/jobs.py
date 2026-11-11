@@ -32,6 +32,31 @@ KEEP_JOBS = int(os.getenv("RESEARCH_KEEP_JOBS", "1000"))   # jobs.json keeps the
 # research is done, or pages the KG could not ingest, are tried once more this many minutes later.
 RETRY_MINUTES = float(os.getenv("RESEARCH_RETRY_MINUTES", "10"))
 MODES = ("bootstrap", "update", "mission")
+# Other apps' models in the same Ollama: past this many GB loaded, the lab waits until they're unloaded. 2026-11-07:
+# a 27 GB model of the user's beside the lab's 22 GB filled the 64 GB machine — the model was killed mid-cycle
+# (every exam answer "ConnectError") and Docker froze for two days.
+OLLAMA_URL = (os.getenv("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
+OTHER_MODELS_GB = float(os.getenv("RESEARCH_OTHER_MODELS_GB", "8"))
+
+
+def _lab_models() -> set[str]:
+    names = {os.getenv("RESEARCH_OLLAMA_MODEL", ""), os.getenv("EMBEDDING_MODEL", "")}
+    names |= {v.split(":", 1)[1] for k in ("LLM_MODEL", "HEAD_MODEL") if (v := os.getenv(k, "")).startswith("ollama:")}
+    return {n if ":" in n else f"{n}:latest" for n in names if n}
+
+
+async def others_loaded() -> list[str]:
+    """The models in Ollama that aren't the lab's, when together they pass OTHER_MODELS_GB (else none). Nothing when
+    Ollama can't say: that alone doesn't hold the lab back."""
+    url = OLLAMA_URL if "://" in OLLAMA_URL else f"http://{OLLAMA_URL}"
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            models = (await c.get(f"{url}/api/ps")).raise_for_status().json().get("models") or []
+    except (httpx.HTTPError, ValueError):
+        return []
+    lab = _lab_models()
+    others = [m for m in models if m.get("name") not in lab and m.get("model") not in lab]
+    return [m.get("name", "?") for m in others] if sum(m.get("size") or 0 for m in others) > OTHER_MODELS_GB * 2**30 else []
 
 
 class NothingRead(RuntimeError):
@@ -120,10 +145,20 @@ class Jobs:
         self.queue.put_nowait(job["id"])
         return self.public(job)
 
+    async def _room(self, job: dict) -> None:
+        """Wait while other apps' models fill the memory (others_loaded)."""
+        noted = False
+        while busy := await others_loaded():
+            if not noted:
+                self._step(job, f"waiting — other models fill the memory ({', '.join(busy)})")
+                noted = True
+            await asyncio.sleep(60)
+
     async def worker(self) -> None:
         while True:
             job = self.jobs[await self.queue.get()]
             try:
+                await self._room(job)
                 await self._run(job)
                 if left := self._kept(job):
                     if not job.get("ingest_retried"):
