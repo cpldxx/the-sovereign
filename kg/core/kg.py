@@ -256,11 +256,14 @@ async def ingest(
 # skipped the URL. Now it carries a status: pending → done | failed; failed or long-pending ones are read again.
 PENDING_STALE = timedelta(hours=1)
 _active: set[str] = set()   # episodes being read in this process
+# One process reads (a single uvicorn worker): a pending episode from before it started lost its reader to the
+# restart. 2026-11-11: pages read just before a crash were skipped as "being read" for an hour after it.
+STARTED = datetime.now(timezone.utc).replace(microsecond=0)   # as precise as an episode's created_at
 
 
 def _retry(episode: dict) -> bool:
-    """Whether an existing episode with this text should be read again: it failed, or it has been pending so long
-    that its reader is gone (a restart). None = an episode from before statuses: done."""
+    """Whether an existing episode with this text should be read again: it failed, or it is pending with no reader
+    left (from before this process started, or so long ago). None = an episode from before statuses: done."""
     status = episode.get("status")
     if status == "failed":
         return episode["uid"] not in _active
@@ -272,7 +275,7 @@ def _retry(episode: dict) -> bool:
         return True
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc) - started > PENDING_STALE
+    return started < STARTED or datetime.now(timezone.utc) - started > PENDING_STALE
 
 
 async def _ingest(db, domain, grammar, description, text, source, title, content_status, episode_uid,

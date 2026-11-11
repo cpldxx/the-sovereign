@@ -70,7 +70,8 @@ def test_a_short_latin_name_is_found_only_as_a_word():
     assert not kg._in_text(["SK"], "ASK하이닉스는 부진했다.")
 
 
-def test_which_existing_episodes_are_read_again():
+def test_which_existing_episodes_are_read_again(monkeypatch):
+    monkeypatch.setattr(kg, "STARTED", datetime.now(timezone.utc) - timedelta(minutes=30))   # the KG's start
     old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(timespec="seconds")
     fresh = datetime.now(timezone.utc).isoformat(timespec="seconds")
     assert not kg._retry({"uid": "ep_1", "status": None, "created_at": old})        # legacy: done
@@ -78,6 +79,8 @@ def test_which_existing_episodes_are_read_again():
     assert kg._retry({"uid": "ep_1", "status": "failed", "created_at": fresh})
     assert not kg._retry({"uid": "ep_1", "status": "pending", "created_at": fresh})  # someone is reading it
     assert kg._retry({"uid": "ep_1", "status": "pending", "created_at": old})        # its reader is gone
+    before = (datetime.now(timezone.utc) - timedelta(minutes=35)).isoformat(timespec="seconds")
+    assert kg._retry({"uid": "ep_1", "status": "pending", "created_at": before})     # read when the KG restarted
     kg._active.add("ep_1")
     try:
         assert not kg._retry({"uid": "ep_1", "status": "failed", "created_at": old})  # being read again right now
