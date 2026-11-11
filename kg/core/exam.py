@@ -514,12 +514,21 @@ async def take(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "exam
                 v = Verdict(answer=("채점하지 못했어요" if HANGUL.search(q["question"]) else "Not graded")
                                    + f" ({type(e).__name__})")
             cited = [found[n - 1] for n in v.facts]
+            if not evidence and i + 1 >= 3 and all(not x["evidence"] for x in items):
+                # Nothing graded so far: the model (or the graph) is out of reach, and a sitting of zeros would stand
+                # in the scores and send research everywhere — 2026-11-07, the model killed for memory: 0/100, every
+                # one of 30 questions "not graded (ConnectError)". Not stored; the next sitting measures.
+                raise ExamError(f"The first {i + 1} questions could not be graded ({v.answer}) — the sitting is "
+                                "called off, not scored")
             items.append({"id": q["id"], "core": q["core"], "tier": q.get("tier"), "question": q["question"],
                           "reference": q.get("answer", ""), "source": q.get("source"), "points": v.points,
                           "conflict": v.conflict, "answer": v.answer.strip(), "facts": [f["uid"] for f in cited],
                           "sources": len({s for f in cited for s in f.get("sources") or []}),
                           "well_sourced": any((f.get("evidence") or 0) >= 2 for f in cited), "evidence": evidence,
                           "grader": GRADER})
+        if (ungraded := sum(not x["evidence"] for x in items)) * 2 > len(items):
+            raise ExamError(f"{ungraded} of {len(items)} questions could not be graded — the sitting is called off, "
+                            "not scored")
         cores = []
         for n, question in enumerate(exam["cores"], start=1):
             mine = [x["points"] for x in items if x["core"] == n]

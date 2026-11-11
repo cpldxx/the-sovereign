@@ -3,6 +3,7 @@ held out from research, graded against reference answers from the graph's facts 
 time — and a practice set from other sources, whose open questions are handed to the learning cycle. The model, the
 web and Graph RAG are stood in; db tests use a throwaway database (conftest.scratch)."""
 
+import httpx
 import pytest
 
 from core import charter, exam, learning
@@ -263,6 +264,21 @@ async def test_an_answer_written_as_before_keeps_its_grade(domain, monkeypatch):
     assert [x["points"] for x in again["items"]] == [2, 0]                     # the first kept its 2
     assert not [p for system, p in _Agent.prompts if system == exam.COMPARE and "What kind" in p]
     assert [p for system, p in _Agent.prompts if system == exam.ANSWER and "What kind" in p]   # answered anew
+
+
+@pytest.mark.db
+async def test_a_sitting_the_model_could_not_grade_is_not_scored(domain, monkeypatch):
+    """2026-11-07: the model was killed for memory and a sitting of 30 "not graded (ConnectError)" stood as 0/100."""
+    db, d = domain
+    await charter.save(db, d, CHARTER)
+    first = await exam.take(db, d)
+
+    async def unreachable(*a, **k):
+        raise httpx.ConnectError("All connection attempts failed")
+    monkeypatch.setattr(exam.kg, "query", unreachable)
+    with pytest.raises(exam.ExamError, match="called off"):
+        await exam.take(db, d)
+    assert (await exam.latest(db, d))["uid"] == first["uid"]           # the last real sitting still stands
 
 
 @pytest.mark.db
