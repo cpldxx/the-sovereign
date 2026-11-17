@@ -2,6 +2,9 @@
 
 DeerFlow's embedded client is synchronous; the service calls `run()` in a worker thread. Runs are
 sequential: research and the KG pipeline share one local model, so parallel runs would only slow both.
+
+The model is RESEARCH_MODEL, "<provider>:<model>" like the KG's and the Head's: ollama:qwen3.6:35b (the default) or
+anthropic:claude-opus-5-5 (ANTHROPIC_API_KEY). RESEARCH_OLLAMA_MODEL=<model> is the older spelling of ollama:<model>.
 """
 
 import os
@@ -18,6 +21,7 @@ CONFIG = Path(__file__).resolve().parent.parent / "config.yaml"
 # Graph steps per run (each model turn and tool call counts). The embedded client ignores config.yaml's
 # recursion_limit and defaults to 100 — too few for reading many pages — so it is passed per run.
 RECURSION_LIMIT = int(os.getenv("RESEARCH_RECURSION_LIMIT", "400"))
+DEFAULT_MODEL = "qwen3.6:35b"
 
 _client: DeerFlowClient | None = None
 
@@ -31,9 +35,34 @@ def search_provider() -> str:
     return "searxng"
 
 
+def research_model() -> tuple[str, str]:
+    """(provider, model) of the research agent."""
+    spec = os.getenv("RESEARCH_MODEL") or f"ollama:{os.getenv('RESEARCH_OLLAMA_MODEL') or DEFAULT_MODEL}"
+    provider, _, model = spec.partition(":")
+    if provider not in ("ollama", "anthropic") or not model:
+        raise ValueError(f"RESEARCH_MODEL must be ollama:<model> or anthropic:<model>, got {spec!r}")
+    return provider, model
+
+
+def _model_entry(entry: dict) -> dict:
+    """config.yaml's model, for the provider RESEARCH_MODEL names."""
+    provider, model = research_model()
+    if provider == "ollama":
+        return {**entry, "model": model}
+    # Claude through its API key (ChatAnthropic reads ANTHROPIC_API_KEY itself, so no key lands in the written file).
+    # Not DeerFlow's own claude_provider: that one signs in as Claude Code. No temperature, no thinking switch: the
+    # current Claude models reject sampling settings and disabled thinking with a 400. max_tokens as for any request
+    # that isn't streamed (the SDK refuses larger ones without streaming).
+    return {"name": entry["name"], "display_name": "Research model (Claude)",
+            "use": "langchain_anthropic:ChatAnthropic", "model": model, "max_tokens": 16000,
+            "context_window": entry.get("context_window", 65536),
+            "supports_thinking": False, "supports_vision": False}
+
+
 def _resolved_config() -> str:
-    """config.yaml with the web_search tool chosen from env, written next to DeerFlow's state."""
+    """config.yaml with the model and the web_search tool chosen from env, written next to DeerFlow's state."""
     config = yaml.safe_load(CONFIG.read_text())
+    config["models"] = [_model_entry(config["models"][0])]
     provider = search_provider()
     if provider != "searxng":
         key = os.environ["TAVILY_API_KEY" if provider == "tavily" else "BRAVE_API_KEY"]
@@ -111,7 +140,7 @@ def run(prompt: str, on_step: Callable[[str], None], thread_id: str | None = Non
 
 
 def model_name() -> str:
-    return os.getenv("RESEARCH_OLLAMA_MODEL", "")
+    return ":".join(research_model())
 
 
 def tracing() -> bool:

@@ -39,9 +39,17 @@ OLLAMA_URL = (os.getenv("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
 OTHER_MODELS_GB = float(os.getenv("RESEARCH_OTHER_MODELS_GB", "8"))
 
 
+def _local_models() -> set[str]:
+    """The lab's language models served by Ollama (none when they all run on Claude)."""
+    names = {v.split(":", 1)[1] for k in ("LLM_MODEL", "HEAD_MODEL") if (v := os.getenv(k, "")).startswith("ollama:")}
+    provider, model = runner.research_model()
+    if provider == "ollama":
+        names.add(model)
+    return names
+
+
 def _lab_models() -> set[str]:
-    names = {os.getenv("RESEARCH_OLLAMA_MODEL", ""), os.getenv("EMBEDDING_MODEL", "")}
-    names |= {v.split(":", 1)[1] for k in ("LLM_MODEL", "HEAD_MODEL") if (v := os.getenv(k, "")).startswith("ollama:")}
+    names = _local_models() | {os.getenv("EMBEDDING_MODEL", "").removeprefix("ollama:")}
     return {n if ":" in n else f"{n}:latest" for n in names if n}
 
 
@@ -55,7 +63,10 @@ async def _kg_up() -> bool:
 
 async def others_loaded() -> list[str]:
     """The models in Ollama that aren't the lab's, when together they pass OTHER_MODELS_GB (else none). Nothing when
-    Ollama can't say: that alone doesn't hold the lab back."""
+    Ollama can't say: that alone doesn't hold the lab back. Nothing when the lab's models run on Claude: only its small
+    embedding model is local then, and other models can't crowd it out."""
+    if not _local_models():
+        return []
     url = OLLAMA_URL if "://" in OLLAMA_URL else f"http://{OLLAMA_URL}"
     try:
         async with httpx.AsyncClient(timeout=10) as c:

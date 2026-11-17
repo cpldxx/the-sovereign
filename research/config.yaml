@@ -5,11 +5,13 @@
 config_version: 52
 log_level: warning
 
+# RESEARCH_MODEL picks the model (runner.py writes it in): ollama:<model> as below, or anthropic:<model> — then
+# langchain_anthropic's ChatAnthropic replaces this entry.
 models:
   - name: local
     display_name: Research model (Ollama)
     use: langchain_ollama:ChatOllama
-    model: $RESEARCH_OLLAMA_MODEL
+    model: qwen3.6:35b
     base_url: $OLLAMA_HOST
     reasoning: false          # think:false on Ollama's native API — ~9x faster, same quality (measured)
     temperature: 0.2
