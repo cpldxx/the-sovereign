@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # Sovereign — run the whole system from one place.
 #
-#   ./sovereign up [--ollama] [--observability]
+#   ./sovereign up [--claude] [--ollama] [--observability]
 #                                          EVERYTHING IN DOCKER: settings, models, images, then the whole stack;
-#                                          the UI on http://localhost:8000 (--ollama: Ollama in a container too)
+#                                          the UI on http://localhost:8000 (--ollama: Ollama in a container too;
+#                                          --claude: the agents on Claude, Ollama only for the small embedding model)
 #   ./sovereign down                       stop the containers (data stays in ./data and the volumes)
-#   ./sovereign init                       write .env (generated secrets) — `up` does it when it's missing
+#   ./sovereign init [--claude|--local]    write .env (generated secrets, the models asked for) — `up` does it when
+#                                          it's missing; with a flag on an existing .env, only the models change
 #
 #   ./sovereign start [--observability]   development: docker services, then KG, Hermes, Research and the UI as
 #                                          processes on this machine (Apple GPU voice), detached
@@ -89,9 +91,20 @@ start() {
 
 # ── Docker: init / up ─────────────────────────────────────────────────────────────────────────────────────────────
 
+CLAUDE_MODEL=claude-opus-5-5
+LOCAL_MODEL=qwen3.6:35b
+
 init_env() {
   # .env from .env.example: secrets generated, values of an existing checkout's service .env files reused.
-  if [[ -f "$ROOT/.env" ]]; then echo ".env exists — leaving it as is"; return; fi
+  local choice="${1:-}"
+  if [[ -f "$ROOT/.env" ]]; then
+    case "$choice" in
+      --claude) use_claude ;;
+      --local) use_local ;;
+      *) echo ".env exists — leaving it as is" ;;
+    esac
+    return
+  fi
   python3 - "$ROOT" <<'PY'
 import secrets, sys
 from pathlib import Path
@@ -124,6 +137,39 @@ for line in (root / ".env.example").read_text().splitlines():
 (root / ".env").chmod(0o600)
 print("wrote .env (secrets generated" + (", values reused from the service .env files)" if existing else ")"))
 PY
+  if [[ -z "$choice" && -t 0 ]]; then
+    echo
+    echo "Which models should the lab think with?"
+    echo "  1) On this machine, with Ollama — free and private; wants ~24 GB of free memory (a 64 GB Mac is comfortable)"
+    echo "  2) Claude, through Anthropic's API — any machine; you pay per token (an API key from console.anthropic.com)"
+    local answer; read -rp "1 or 2 [1]: " answer
+    [[ "$answer" == 2 ]] && choice=--claude
+  fi
+  if [[ "$choice" == --claude ]]; then use_claude; else use_local; fi
+}
+
+use_local() {
+  env_set LLM_MODEL "ollama:$LOCAL_MODEL"; env_set HEAD_MODEL "ollama:$LOCAL_MODEL"; env_set RESEARCH_MODEL "ollama:$LOCAL_MODEL"
+  echo "models: $LOCAL_MODEL on Ollama (LLM_MODEL, HEAD_MODEL, RESEARCH_MODEL in .env)"
+}
+
+use_claude() {
+  env_set LLM_MODEL "anthropic:$CLAUDE_MODEL"; env_set HEAD_MODEL "anthropic:$CLAUDE_MODEL"
+  env_set RESEARCH_MODEL "anthropic:$CLAUDE_MODEL"
+  echo "models: $CLAUDE_MODEL on Claude; embeddings on Ollama (LLM_MODEL, HEAD_MODEL, RESEARCH_MODEL in .env)"
+  if [[ -z "$(env_get ANTHROPIC_API_KEY)" ]]; then
+    if [[ -t 0 ]]; then
+      local key; read -rsp "ANTHROPIC_API_KEY (input hidden; Enter to add it to .env later): " key; echo
+      [[ -n "$key" ]] && env_set ANTHROPIC_API_KEY "$key"
+    fi
+    [[ -n "$(env_get ANTHROPIC_API_KEY)" ]] || echo "put your key in .env: ANTHROPIC_API_KEY=…"
+  fi
+}
+
+uses_claude() { env_get LLM_MODEL; env_get HEAD_MODEL; research_model; } 2>/dev/null
+research_model() {  # RESEARCH_MODEL, or the older RESEARCH_OLLAMA_MODEL=<model>
+  local m; m=$(env_get RESEARCH_MODEL || true); [[ -n "$m" ]] && { echo "$m"; return; }
+  m=$(env_get RESEARCH_OLLAMA_MODEL || true); echo "ollama:${m:-$LOCAL_MODEL}"
 }
 
 env_get() { grep -h "^$1=" "$ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2-; }
@@ -158,9 +204,10 @@ skip_stuck_helper() {
 }
 
 up() {
-  local ollama=host observability=()
+  local ollama=host observability=() choice=""
   for a in "$@"; do
     case "$a" in
+      --claude) choice=--claude ;;
       --ollama) ollama=container ;;
       --observability) observability=(--profile observability); export SOVEREIGN_TRACING=true ;;
     esac
@@ -168,7 +215,11 @@ up() {
   command -v docker >/dev/null || { echo "Docker is needed: https://docs.docker.com/get-docker/"; exit 1; }
   docker info >/dev/null 2>&1 || { echo "Docker isn't running — start Docker Desktop (or the docker service) first"; exit 1; }
   skip_stuck_helper
-  init_env
+  init_env "$choice"
+  if uses_claude | grep -q '^anthropic:' && [[ -z "$(env_get ANTHROPIC_API_KEY)" ]]; then
+    echo "The models are on Claude but .env has no ANTHROPIC_API_KEY — add it (console.anthropic.com), then run up again"
+    exit 1
+  fi
   # The development processes use the same database: never both at once.
   for s in "${SERVICES[@]}"; do [[ -n "$(port_pid "$(field "$s" 3)")" ]] && stop_service "$s" >/dev/null; done
   # A checkout's data, the first time: domains, the source catalog, research runs, Hermes' home.
@@ -182,7 +233,7 @@ up() {
     [[ -d "$ROOT/hermes/.hermes-home" ]] && cp -R "$ROOT/hermes/.hermes-home" "$ROOT/data/hermes/hermes-home"
   fi
   local profiles=(--profile app)
-  local models=("$(env_get LLM_MODEL)" "$(env_get HEAD_MODEL)" "ollama:$(env_get RESEARCH_OLLAMA_MODEL)" "ollama:$(env_get EMBEDDING_MODEL)")
+  local models=("$(env_get LLM_MODEL)" "$(env_get HEAD_MODEL)" "$(research_model)" "ollama:$(env_get EMBEDDING_MODEL)")
   if [[ "$ollama" == container ]]; then
     profiles+=(--profile ollama)
     env_set OLLAMA_BASE_URL http://ollama:11434/v1; env_set OLLAMA_HOST http://ollama:11434
@@ -196,7 +247,8 @@ up() {
     [[ "$(env_get OLLAMA_BASE_URL)" == http://ollama:11434* ]] && env_set OLLAMA_BASE_URL http://host.docker.internal:11434/v1
     [[ "$(env_get OLLAMA_HOST)" == http://ollama:11434* ]] && env_set OLLAMA_HOST http://host.docker.internal:11434
     curl -fsS -m 5 http://localhost:11434/api/tags >/dev/null 2>&1 || {
-      echo "Ollama isn't running on this machine. Install it (https://ollama.com) and start it — or use: ./sovereign up --ollama"
+      echo "Ollama isn't running on this machine (the embeddings need it, whatever the models). Install it"
+      echo "(https://ollama.com) and start it — or use: ./sovereign up --ollama"
       exit 1; }
     pull() { ollama pull "$1"; }
     have() { curl -fsS -m 5 http://localhost:11434/api/tags | python3 -c "import json,sys; n=sys.argv[1]; m=[x['name'] for x in json.load(sys.stdin)['models']]; sys.exit(0 if n in m or n+':latest' in m else 1)" "$1"; }
@@ -273,7 +325,7 @@ EOF
         echo "autostart removed" ;;
       *) echo "usage: ./sovereign autostart on|off"; exit 1 ;;
     esac ;;
-  init) init_env ;;
+  init) init_env "${2:-}" ;;
   up) up "${@:2}" ;;
   down) (cd "$ROOT" && docker compose --profile app --profile ollama --profile observability stop) ;;
   *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
