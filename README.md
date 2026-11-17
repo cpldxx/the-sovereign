@@ -2,6 +2,8 @@
 
 > A self-organizing research engine that builds domain expertise over time.
 
+**English** · [한국어](README.ko.md) · [Models: local or Claude](docs/models.md) · [Troubleshooting](docs/troubleshooting.md) · [Contributing](CONTRIBUTING.md)
+
 ---
 
 ## What Is This?
@@ -139,8 +141,8 @@ The ontology is the grammar of a domain's KG — which node categories and relat
 
 ```json
 {
-  "entity_types": ["crypto_asset", "macro_indicator", "policy_action", "systemic_liquidity", "market_regime"],
-  "relation_types": ["controls_liquidity_supply", "shapes_market_regime", "drives_valuation_trend"]
+  "entity_types": ["battery_chemistry", "material", "manufacturer", "research_group", "performance_metric"],
+  "relation_types": ["uses_material", "develops", "improves_metric", "supplies"]
 }
 ```
 
@@ -150,19 +152,32 @@ The ontology is the grammar of a domain's KG — which node categories and relat
 
 ### In Docker (one command)
 
-Requirements: [Docker](https://docs.docker.com/get-docker/) and [Ollama](https://ollama.com) running on the machine.
+Requirements: [Docker](https://docs.docker.com/get-docker/), and the models — one of:
+
+| | Local (default) | Claude |
+|---|---|---|
+| What thinks | `qwen3.6:35b` on [Ollama](https://ollama.com), on this machine | `claude-opus-5-5` through Anthropic's API |
+| Machine | ~24 GB of free memory for the model (a 64 GB Apple-silicon Mac is comfortable) | any machine that runs Docker comfortably — no GPU |
+| Cost | free | per token — [an API key](https://console.anthropic.com); set a spend limit there |
+| Privacy | nothing leaves the machine but searches and page fetches | the pages read and your questions go to Anthropic |
+
+Either way Ollama runs the small embedding model (~1 GB; Anthropic has no embedding API) — on the host, or in a
+container with `--ollama`. More in [docs/models.md](docs/models.md).
 
 ```bash
 git clone https://github.com/cpldxx/the-sovereign.git && cd the-sovereign
-./sovereign up
+./sovereign up            # first time: asks local or Claude (and the API key, hidden), then starts everything
+./sovereign up --claude   # Claude without asking
 ```
 
-`up` writes `.env` with generated secrets, pulls the models Ollama is missing (`qwen3.6:35b`, ~24 GB, and an
-embedding model — once), builds the app images, and starts everything: ArcadeDB, SearXNG, crawl4ai, the
-KG API, Hermes, Research and the web UI. Open **http://localhost:8000** and create the first account — it is the admin.
+`up` writes `.env` with generated secrets and the models you chose, pulls what Ollama is missing (once), builds the
+app images, and starts everything: ArcadeDB, SearXNG, crawl4ai, the KG API, Hermes, Research and the web UI. Open
+**http://localhost:8000** and create the first account — it is the admin. Then create a domain (a topic): the Head
+asks what you want to know, writes a research charter with you, and the lab starts researching.
 
-- `./sovereign up --ollama` — Ollama in a container too (a Linux machine; on a Mac Docker can't use the Apple GPU, so
-  keep Ollama on the host)
+- `./sovereign init --claude` / `--local` — switch the models of an existing `.env` (then `./sovereign up`)
+- `./sovereign up --ollama` — Ollama in a container too (Linux, or the embeddings alone with Claude; on a Mac Docker
+  can't use the Apple GPU, so keep a local 35B model on the host)
 - `./sovereign up --observability` — with LangFuse traces (UI on port 3000; put its keys in `.env`)
 - `./sovereign down` — stop it; data stays in `./data` and the database volume
 - Settings: `.env` (see `.env.example`) — models (or Claude via `ANTHROPIC_API_KEY`), sign-up mode, search keys,
@@ -186,7 +201,8 @@ First time — models, config, dependencies:
 ```bash
 ollama pull qwen3.6:35b              # every agent (MoE, fast); thinking off by default
 ollama pull nomic-embed-text-v2-moe  # embeddings
-# Claude instead: set LLM_MODEL / HEAD_MODEL=anthropic:<model> + ANTHROPIC_API_KEY in kg/.env and hermes/.env
+# Claude instead: LLM_MODEL / HEAD_MODEL / RESEARCH_MODEL=anthropic:claude-opus-5-5 + ANTHROPIC_API_KEY in kg/.env,
+# hermes/.env and research/.env (docs/models.md)
 
 for s in kg hermes research; do cp $s/.env.example $s/.env; (cd $s && uv sync); done
 (cd frontend && npm install)
@@ -419,7 +435,7 @@ Search uses the local SearXNG by default. Its free engines throttle heavy use (s
 | Knowledge graph + vector DB | ArcadeDB (Cypher over HTTP) | Apache 2.0 |
 | Schema enforcement | Pydantic AI 2.x | MIT |
 | API + MCP | FastAPI + MCP Python SDK | MIT |
-| LLMs + embeddings | Ollama (qwen3.6:35b, nomic-embed) by default; Claude via env | — |
+| LLMs + embeddings | Ollama (qwen3.6:35b, nomic-embed) by default; Claude (`claude-opus-5-5`) with `--claude` | — |
 | Frontend | React 19 + Vite + Tailwind + force-graph (d3-force, canvas — an Obsidian-style graph) | — |
 | Research / collection | DeerFlow 2.1 + SearXNG + crawl4ai | MIT / AGPL-3.0 (run unmodified as a separate service) / Apache 2.0 + attribution |
 | Observability | LangFuse (self-hosted, optional) | MIT (core) |
