@@ -2,7 +2,7 @@
 
 > 주제 하나를 주면, 스스로 조사하고 검증하고 기억하면서 날마다 그 분야의 전문가가 되어 가는 연구 엔진.
 
-[English](README.md) · **한국어** · [모델: 로컬 또는 Claude](docs/models.md) · [문제 해결](docs/troubleshooting.md) · [기여하기](CONTRIBUTING.md)
+[English](README.md) · **한국어** · [웹사이트](https://the-sovereign.pages.dev) · [작동 방식](docs/how-it-works.md) · [모델: 로컬 또는 Claude](docs/models.md) · [문제 해결](docs/troubleshooting.md) · [기여하기](CONTRIBUTING.md)
 
 ---
 

@@ -2,7 +2,7 @@
 
 > A self-organizing research engine that builds domain expertise over time.
 
-**English** · [한국어](README.ko.md) · [Models: local or Claude](docs/models.md) · [Troubleshooting](docs/troubleshooting.md) · [Contributing](CONTRIBUTING.md)
+**English** · [한국어](README.ko.md) · [Website](https://the-sovereign.pages.dev) · [How it works](docs/how-it-works.md) · [Models: local or Claude](docs/models.md) · [Troubleshooting](docs/troubleshooting.md) · [Contributing](CONTRIBUTING.md)
 
 ---
 
