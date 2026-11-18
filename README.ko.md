@@ -67,3 +67,7 @@ git clone https://github.com/cpldxx/the-sovereign.git && cd the-sovereign
 ## 문제가 생기면
 
 로컬 모델로 밤사이 맥이 멈추거나 서비스가 꺼졌다면 대부분 메모리 문제입니다. 다른 큰 모델과 동시에 돌면 메모리가 부족해집니다. [문제 해결](docs/troubleshooting.md)을 보세요.
+
+## 라이선스
+
+[MIT](LICENSE). 함께 돌아가는 서비스들은 각자의 라이선스를 따릅니다. SearXNG는 AGPL-3.0이며, 수정 없이 별도 컨테이너로 실행됩니다.

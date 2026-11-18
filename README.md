@@ -502,3 +502,10 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - Entity/fact extraction rules are adapted from [Graphiti](https://github.com/getzep/graphiti) by Zep Software (Apache 2.0).
 - Research runs on [DeerFlow](https://github.com/bytedance/deer-flow) (MIT); agents on [Hermes Agent](https://github.com/NousResearch/hermes-agent) (MIT); storage on [ArcadeDB](https://github.com/ArcadeData/arcadedb) (Apache 2.0).
 - Web search via a self-hosted, unmodified [SearXNG](https://github.com/searxng/searxng) (AGPL-3.0). If it is ever modified and offered to users over a network, its source must be published.
+
+---
+
+## License
+
+[MIT](LICENSE). The services it runs keep their own licenses (see the Tech Stack table): SearXNG is AGPL-3.0 and runs
+unmodified as a separate container.

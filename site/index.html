@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="ko" data-lang="ko">
+<html lang="en" data-lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>The Sovereign — 멈추지 않는 연구실</title>
-<meta name="description" content="주제 하나를 맡기면 매일 밤 스스로 조사하고, 출처로 확인하고, 지식 그래프에 기억하는 오픈소스 연구실. 얼마나 알게 됐는지는 시험으로 잽니다.">
+<title>The Sovereign — a research lab that never stops</title>
+<meta name="description" content="An open-source research lab that never stops: give it a topic, and every night it researches, checks each fact against its sources, and remembers it in a knowledge graph. An exam measures what it has learned.">
 <meta property="og:title" content="The Sovereign — a research lab that never stops">
 <meta property="og:description" content="Give it a topic. Every night it researches, checks each fact against its sources, and remembers it in a knowledge graph. An exam measures what it has learned. Open source, on your own machine.">
 <meta property="og:type" content="website">
@@ -357,11 +357,11 @@ cd the-sovereign
 
 <footer>
   <div class="wrap">
-    <p class="ko">The Sovereign은 오픈소스입니다. DeerFlow, Hermes Agent, ArcadeDB, SearXNG, crawl4ai, Graphiti의 작업 위에 서 있습니다.</p>
-    <p class="en">The Sovereign is open source, built on the work of DeerFlow, Hermes Agent, ArcadeDB, SearXNG, crawl4ai and Graphiti.</p>
+    <p class="ko">The Sovereign은 MIT 라이선스의 오픈소스입니다. DeerFlow, Hermes Agent, ArcadeDB, SearXNG, crawl4ai, Graphiti의 작업 위에 서 있습니다.</p>
+    <p class="en">The Sovereign is open source under the MIT license, built on the work of DeerFlow, Hermes Agent, ArcadeDB, SearXNG, crawl4ai and Graphiti.</p>
     <nav aria-label="Footer">
       <a href="https://github.com/cpldxx/the-sovereign">GitHub</a>
-      <a href="https://github.com/cpldxx/the-sovereign/blob/main/README.ko.md"><span class="ko">문서</span><span class="en">Docs</span></a>
+      <a class="ko" href="https://github.com/cpldxx/the-sovereign/blob/main/README.ko.md">문서</a><a class="en" href="https://github.com/cpldxx/the-sovereign#readme">Docs</a>
       <a href="https://github.com/cpldxx/the-sovereign/blob/main/CONTRIBUTING.md"><span class="ko">기여하기</span><span class="en">Contribute</span></a>
     </nav>
   </div>
@@ -372,7 +372,7 @@ cd the-sovereign
   var root = document.documentElement;
   root.classList.add("js");
 
-  // Language: a saved choice, else the browser's; Korean for Korean browsers, English otherwise.
+  // Language: English unless the visitor picked Korean with the toggle.
   function setLang(lang) {
     root.setAttribute("data-lang", lang);
     root.setAttribute("lang", lang);
@@ -381,7 +381,7 @@ cd the-sovereign
   }
   var saved = null;
   try { saved = localStorage.getItem("lang"); } catch (e) {}
-  setLang(saved || ((navigator.language || "en").toLowerCase().indexOf("ko") === 0 ? "ko" : "en"));
+  setLang(saved === "ko" ? "ko" : "en");
   document.getElementById("lang").addEventListener("click", function () {
     setLang(root.getAttribute("data-lang") === "ko" ? "en" : "ko");
   });
