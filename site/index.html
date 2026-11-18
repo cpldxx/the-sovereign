@@ -1,355 +1,544 @@
 <!doctype html>
-<html lang="en" data-lang="en">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Sovereign — a research lab that never stops</title>
-<meta name="description" content="An open-source research lab that never stops: give it a topic, and every night it researches, checks each fact against its sources, and remembers it in a knowledge graph. An exam measures what it has learned.">
+<meta name="description" content="An open-source research lab that never stops: give it a topic, and every night it reads papers and the web, keeps every fact with its source in a knowledge graph, and sits an exam to show what it has learned.">
 <meta property="og:title" content="The Sovereign — a research lab that never stops">
-<meta property="og:description" content="Give it a topic. Every night it researches, checks each fact against its sources, and remembers it in a knowledge graph. An exam measures what it has learned. Open source, on your own machine.">
+<meta property="og:description" content="Give it a topic. Every night it researches, keeps every fact with its source, and sits an exam to show what it has learned. Open source, on your own machine.">
 <meta property="og:type" content="website">
+<meta property="og:url" content="https://the-sovereign.pages.dev/">
 <meta name="theme-color" content="#E6E9EA">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23262B30'/%3E%3Ccircle cx='11' cy='12' r='3' fill='%23EDE7DA'/%3E%3Ccircle cx='22' cy='10' r='2' fill='%23EDE7DA' opacity='.6'/%3E%3Ccircle cx='19' cy='22' r='3.4' fill='%23EDE7DA'/%3E%3Cpath d='M11 12L19 22M22 10L19 22M11 12L22 10' stroke='%23EDE7DA' stroke-width='1.2' opacity='.55'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Noto+Serif+KR:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap" rel="stylesheet">
 <style>
 :root {
-  --paper: #E6E9EA;      /* the bench: a cool, pale grey */
+  --paper: #E6E9EA;      /* the page: a cool, pale grey */
   --sheet: #EEF0F1;      /* a raised surface on it */
   --ink: #202428;        /* graphite */
-  --lead: #5C636A;       /* secondary text */
+  --lead: #555C63;       /* secondary text */
   --rule: #BFC6CB;
-  --night: #262B30;      /* the lab after hours */
-  --night-rule: #3A4047;
-  --bone: #EDE7DA;       /* the one accent: bone-white, on the night panel */
-  --bone-dim: #A7A398;
+  --night: #24292E;      /* the product: the app is graphite */
+  --night-2: #2C3238;    /* a surface inside it */
+  --night-rule: #3B424A;
+  --bone: #EDE7DA;       /* the one accent: bone-white */
+  --bone-2: #B9B4A8;     /* secondary text on night */
+  --bone-3: #858278;     /* faint text on night */
   --focus: #3D6FB0;
-  --display: "Newsreader", "Noto Serif KR", "Apple SD Gothic Neo", serif;
-  --text: "IBM Plex Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+  --display: "Newsreader", Georgia, serif;
+  --text: "IBM Plex Sans", system-ui, sans-serif;
   --code: "IBM Plex Mono", ui-monospace, monospace;
-  --measure: 34rem;
+  --measure: 36rem;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --paper: #1C2024; --sheet: #23282D; --ink: #E3E6E8; --lead: #9AA2A9; --rule: #3A4148;
-    --night: #121518; --night-rule: #2C3238; --focus: #7FA8DE; color-scheme: dark;
+    --paper: #1C2024; --sheet: #23282D; --ink: #E3E6E8; --lead: #A0A7AE; --rule: #3A4148;
+    --night: #121518; --night-2: #1A1E22; --night-rule: #2E343A; --focus: #7FA8DE; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --paper: #1C2024; --sheet: #23282D; --ink: #E3E6E8; --lead: #9AA2A9; --rule: #3A4148;
-  --night: #121518; --night-rule: #2C3238; --focus: #7FA8DE; color-scheme: dark;
+  --paper: #1C2024; --sheet: #23282D; --ink: #E3E6E8; --lead: #A0A7AE; --rule: #3A4148;
+  --night: #121518; --night-2: #1A1E22; --night-rule: #2E343A; --focus: #7FA8DE; color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-body {
-  margin: 0; background: var(--paper); color: var(--ink);
-  font: 400 1rem/1.7 var(--text); font-feature-settings: "tnum" 0;
-  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
-}
+body { margin: 0; background: var(--paper); color: var(--ink); font: 400 1rem/1.65 var(--text); -webkit-font-smoothing: antialiased; }
 a { color: inherit; text-underline-offset: .2em; text-decoration-thickness: 1px; }
 a:hover { text-decoration-thickness: 2px; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 2px; }
-
-/* one language at a time: the toggle sets data-lang on <html> */
-html[data-lang="ko"] .en, html[data-lang="en"] .ko { display: none !important; }
-
-.wrap { max-width: 72rem; margin: 0 auto; padding: 0 2rem; }
-@media (max-width: 40rem) { .wrap { padding: 0 1rem; } }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
+.skip { position: absolute; left: 1rem; top: -4rem; background: var(--ink); color: var(--paper); padding: .6rem 1rem; border-radius: 6px; z-index: 10; }
+.skip:focus { top: 1rem; }
+.wrap { max-width: 72rem; margin: 0 auto; padding-inline: 2rem; }
+@media (max-width: 40rem) { .wrap { padding-inline: 1rem; } }
 
 /* ── top bar ─────────────────────────────────────────────── */
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: 1.25rem; }
 .mark { font: 600 1.25rem/1 var(--display); letter-spacing: -.01em; text-decoration: none; }
-.bar nav { display: flex; align-items: center; gap: 1.5rem; font-size: .9375rem; }
-.bar nav a { text-decoration: none; color: var(--lead); }
-.bar nav a:hover { color: var(--ink); }
-.lang {
-  font: 500 .8125rem/1 var(--text); color: var(--ink); background: transparent;
-  border: 1px solid var(--rule); border-radius: 999px; padding: .45rem .8rem; cursor: pointer;
-}
-.lang:hover { border-color: var(--ink); }
-@media (max-width: 40rem) { .bar nav .hide-sm { display: none; } .bar nav { gap: 1rem; } }
+.bar nav { display: flex; align-items: center; gap: .25rem; font-size: .9375rem; }
+.bar nav a { text-decoration: none; color: var(--lead); padding: .7rem .75rem; border-radius: 6px; }
+.bar nav a:hover { color: var(--ink); background: var(--sheet); }
+@media (max-width: 40rem) { .bar nav .hide-sm { display: none; } }
 
 /* ── hero ────────────────────────────────────────────────── */
-.hero {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: 4rem;
-  align-items: start; padding-block: 4.5rem 5.5rem;
-}
-@media (max-width: 60rem) { .hero { grid-template-columns: 1fr; gap: 3rem; padding-block: 2.5rem 4rem; } }
-h1 {
-  font: 600 clamp(2.75rem, 6.4vw, 4.75rem)/1.06 var(--display); letter-spacing: -.025em; margin: 0 0 1.75rem;
-}
-html[lang="ko"] h1 { letter-spacing: -.045em; line-height: 1.14; word-break: keep-all; }
-.lede { font-size: 1.1875rem; line-height: 1.7; color: var(--ink); max-width: var(--measure); margin: 0 0 2.25rem; word-break: keep-all; }
+.hero { padding-block: 3.5rem 2.75rem; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 1.5rem 4rem; align-items: end; }
+@media (max-width: 56rem) { .hero { grid-template-columns: 1fr; padding-block: 2rem 2rem; } }
+h1 { font: 600 clamp(2.6rem, 6vw, 4.5rem)/1.04 var(--display); letter-spacing: -.028em; margin: 0; }
+.lede { font-size: 1.1875rem; line-height: 1.65; margin: 0 0 1.5rem; max-width: var(--measure); }
 .actions { display: flex; flex-wrap: wrap; gap: .75rem; }
-.btn {
-  display: inline-flex; align-items: center; gap: .55rem; padding: .8rem 1.2rem; border-radius: 6px;
-  font: 500 .9375rem/1 var(--text); text-decoration: none; border: 1px solid var(--ink);
-}
+.btn { display: inline-flex; align-items: center; gap: .55rem; min-height: 2.875rem; padding: 0 1.2rem; border-radius: 6px; font: 500 .9375rem/1 var(--text); text-decoration: none; border: 1px solid var(--ink); }
 .btn.primary { background: var(--ink); color: var(--paper); }
 .btn.primary:hover { background: transparent; color: var(--ink); }
 .btn.quiet:hover { background: var(--sheet); }
 .btn svg { width: 1.05em; height: 1.05em; }
-.note { margin: 1.5rem 0 0; font-size: .875rem; color: var(--lead); max-width: var(--measure); }
 
-/* the night log — the page's one moving part */
-.log {
-  background: var(--night); color: var(--bone); border-radius: 10px; padding: 1.75rem 1.75rem 1.5rem;
-  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 30px 60px -30px rgba(20,24,28,.45);
+/* ── the demo: the product, one step at a time ───────────── */
+.demo { margin-bottom: 5rem; }
+.window { background: var(--night); color: var(--bone); border-radius: 12px; overflow: hidden; box-shadow: 0 40px 80px -40px rgba(20,24,28,.55), 0 0 0 1px rgba(0,0,0,.06); }
+.chrome { display: flex; align-items: center; gap: 1rem; padding: .7rem 1rem; border-bottom: 1px solid var(--night-rule); font-size: .8125rem; color: var(--bone-3); }
+.chrome .dots { display: flex; gap: 6px; }
+.chrome .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--night-rule); }
+.chrome .where { color: var(--bone-2); }
+.chrome .where b { color: var(--bone); font-weight: 500; }
+.chrome .ex { margin-left: auto; border: 1px solid var(--night-rule); border-radius: 999px; padding: .15rem .6rem; }
+
+.tabs { display: flex; align-items: stretch; border-bottom: 1px solid var(--night-rule); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab {
+  position: relative; flex: 1 0 auto; min-height: 3.25rem; padding: .55rem 1.1rem; background: transparent; border: 0;
+  color: var(--bone-3); font: 500 .9375rem/1.2 var(--text); text-align: left; cursor: pointer; display: flex; align-items: center; gap: .6rem;
 }
-.log h2 { font: 500 1.0625rem/1.4 var(--display); margin: 0; color: var(--bone); }
-.log .src { font-size: .8125rem; color: var(--bone-dim); margin: .35rem 0 1.25rem; }
-.log ol { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--night-rule); }
-.log li {
-  display: grid; grid-template-columns: 1fr auto; gap: .25rem 1rem; padding: .8rem 0;
-  border-bottom: 1px solid var(--night-rule); font-size: .9375rem; line-height: 1.5;
+.tab .n { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 1px solid var(--night-rule); font-size: .75rem; font-feature-settings: "tnum" 1; }
+.tab:hover { color: var(--bone-2); }
+.tab[aria-selected="true"] { color: var(--bone); }
+.tab[aria-selected="true"] .n { background: var(--bone); color: var(--night); border-color: var(--bone); }
+.tab.done .n { border-color: var(--bone-3); color: var(--bone-2); }
+.tab .bar-fill { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--bone); transform-origin: left; transform: scaleX(0); }
+.tab[aria-selected="true"] .bar-fill { transform: scaleX(1); }
+.playing .tab[aria-selected="true"] .bar-fill { animation: fill var(--step-ms, 7000ms) linear forwards; }
+@keyframes fill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.tab:focus-visible { outline-offset: -3px; }
+.play { flex: none; min-width: 3.25rem; border: 0; border-left: 1px solid var(--night-rule); background: transparent; color: var(--bone-2); cursor: pointer; display: grid; place-items: center; }
+.play:hover { color: var(--bone); }
+.play svg { width: 1rem; height: 1rem; }
+
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); min-height: 30rem; }
+@media (max-width: 56rem) { .stage { grid-template-columns: 1fr; min-height: 0; } .graph { order: -1; border-left: 0 !important; border-bottom: 1px solid var(--night-rule); } }
+.panes { padding: 1.75rem 1.75rem 1.5rem; }
+.pane h3 { font: 500 1.375rem/1.3 var(--display); margin: 0 0 .4rem; color: var(--bone); }
+.pane > p.say { margin: 0 0 1.25rem; color: var(--bone-2); font-size: .9375rem; }
+.pane[hidden] { display: none; }
+.js .pane:not([hidden]) { animation: in .35s ease both; }
+@keyframes in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* step 1: the conversation */
+.chat { display: grid; gap: .6rem; margin: 0 0 1rem; }
+.msg { max-width: 92%; padding: .6rem .85rem; border-radius: 10px; font-size: .9375rem; line-height: 1.5; }
+.msg.you { justify-self: end; background: var(--bone); color: var(--night); border-bottom-right-radius: 3px; }
+.msg.head { background: var(--night-2); border: 1px solid var(--night-rule); border-bottom-left-radius: 3px; }
+.msg .who { display: block; font-size: .75rem; color: var(--bone-3); margin-bottom: .1rem; }
+.msg.you .who { color: #6B675E; }
+.charter { border: 1px solid var(--night-rule); border-radius: 8px; padding: .85rem 1rem; font-size: .875rem; line-height: 1.55; margin: 0; }
+.charter dt { color: var(--bone-3); font-size: .75rem; margin-top: .45rem; }
+.charter dt:first-child { margin-top: 0; }
+.charter dd { margin: 0; color: var(--bone); }
+
+/* step 2: sources */
+.reads { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; }
+.reads li { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; align-items: center; gap: .75rem; padding: .55rem .75rem; background: var(--night-2); border: 1px solid var(--night-rule); border-radius: 8px; font-size: .875rem; }
+.tier { font-size: .75rem; font-weight: 500; border-radius: 4px; padding: .15rem .4rem; text-align: center; }
+.tier.t1 { background: var(--bone); color: var(--night); }
+.tier.t2 { background: var(--bone-2); color: var(--night); }
+.tier.t3 { border: 1px solid var(--bone-2); color: var(--bone); }
+.tier.t4 { border: 1px dashed var(--bone-3); color: var(--bone-2); }
+.reads .st { font-size: .75rem; color: var(--bone-2); white-space: nowrap; }
+.reads li.skip-row { background: transparent; border-style: dashed; color: var(--bone-3); }
+.reads li.skip-row .st { color: var(--bone-3); }
+.reads .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* step 3: facts */
+.facts { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; }
+.facts li { padding: .6rem .8rem; border: 1px solid var(--night-rule); border-radius: 8px; font-size: .875rem; background: var(--night-2); }
+.facts .f { display: block; color: var(--bone); }
+.facts .f b { font-weight: 500; }
+.facts .ev { display: flex; align-items: center; gap: .5rem; margin-top: .3rem; font-size: .75rem; color: var(--bone-2); }
+.meter { display: inline-flex; gap: 2px; }
+.meter i { width: 14px; height: 4px; border-radius: 2px; background: var(--night-rule); }
+.meter i.on { background: var(--bone); }
+.facts li.weak { border-style: dashed; }
+.facts li.gone { background: transparent; }
+.facts li.gone .f { color: var(--bone-3); text-decoration: line-through; text-decoration-color: var(--bone-3); }
+
+/* step 4: exam */
+.qgrid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; margin: 0 0 .75rem; max-width: 20rem; }
+.qgrid span { aspect-ratio: 1; border-radius: 3px; border: 1.5px solid var(--bone); }
+.qgrid .a { background: var(--bone); }
+.qgrid .p { background: linear-gradient(to top, var(--bone) 50%, transparent 50%); }
+.qgrid .o { border-color: var(--bone-3); }
+.qkey { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: .8125rem; color: var(--bone-2); margin: 0 0 1.1rem; }
+.next { border-top: 1px solid var(--night-rule); padding-top: .9rem; font-size: .875rem; }
+.next p { margin: 0 0 .5rem; color: var(--bone-2); }
+.next ul { margin: 0; padding-left: 1.1rem; color: var(--bone); }
+.next li { margin-bottom: .25rem; }
+
+/* step 5: answer */
+.answer { background: var(--night-2); border: 1px solid var(--night-rule); border-radius: 10px; padding: 1rem 1.1rem; font-size: .9375rem; line-height: 1.6; }
+.answer p { margin: 0 0 .7rem; }
+.answer p:last-of-type { margin-bottom: .85rem; }
+.answer .weak { color: var(--bone-2); }
+.cite { display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 .25rem; border-radius: 4px; background: var(--bone); color: var(--night); font-size: .6875rem; font-weight: 600; vertical-align: .12em; margin-left: .15rem; }
+.srcs { display: flex; flex-wrap: wrap; gap: .4rem; }
+.srcs span { font-size: .75rem; border: 1px solid var(--night-rule); border-radius: 999px; padding: .2rem .6rem; color: var(--bone-2); }
+.srcs span b { color: var(--bone); font-weight: 600; margin-right: .3rem; }
+
+/* the graph */
+.graph { position: relative; border-left: 1px solid var(--night-rule); background:
+  radial-gradient(circle at 50% 50%, rgba(237,231,218,.06), transparent 60%), var(--night); }
+.graph svg { display: block; width: 100%; height: 100%; min-height: 20rem; }
+.graph .cap { position: absolute; left: 1rem; bottom: .85rem; font-size: .75rem; color: var(--bone-3); }
+.graph .count { position: absolute; right: 1rem; top: .85rem; font-size: .8125rem; color: var(--bone-2); font-feature-settings: "tnum" 1; text-align: right; }
+.graph .count b { display: block; font: 500 1.5rem/1.1 var(--display); color: var(--bone); }
+.g-el { opacity: 0; transition: opacity .6s ease; }
+.g-el.on { opacity: 1; }
+.focusing .g-el.on:not(.hot) { opacity: .2; }
+.g-el.hot { opacity: 1; }
+.edge { stroke: var(--bone); fill: none; stroke-linecap: round; }
+.edge.thin { stroke-width: 1; stroke: var(--bone-3); }
+.edge.s1 { stroke-width: 1.4; stroke-dasharray: 4 4; stroke: var(--bone-2); }
+.edge.s2 { stroke-width: 2.4; }
+.edge.s3 { stroke-width: 4; }
+.edge.reading { stroke: var(--bone-3); stroke-width: 1; stroke-dasharray: 2 5; }
+.node circle { fill: var(--night-2); stroke: var(--bone); stroke-width: 1.5; }
+.node.topic circle { fill: var(--bone); }
+.node.topic text { fill: var(--night); font-weight: 600; }
+.node text { fill: var(--bone); font: 500 12px var(--text); }
+.node text.sub { fill: var(--bone-2); font-weight: 400; font-size: 11px; }
+.src rect { fill: var(--night); stroke: var(--bone-2); stroke-width: 1.2; }
+.src text { fill: var(--bone-2); font: 500 10.5px var(--text); }
+.src.x rect { stroke: var(--bone-3); stroke-dasharray: 3 3; }
+.src.x text { fill: var(--bone-3); }
+.elabel { fill: var(--bone-2); font: 400 10.5px var(--text); }
+.gap circle { fill: none; stroke: var(--bone-3); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.gap text { fill: var(--bone-2); font: 600 13px var(--text); }
+@media (prefers-reduced-motion: reduce) { .g-el, .js .pane:not([hidden]) { transition: none; animation: none; } }
+/* on a phone the graph is drawn at ~60%: its words grow to stay readable */
+@media (max-width: 40rem) {
+  .node text { font-size: 18px; } .node text.sub { font-size: 15px; } .elabel { font-size: 15px; } .src text { font-size: 15px; }
+  .node.topic circle { r: 50px; } .node.topic text { font-size: 15px; }
+  .panes { padding: 1.25rem 1rem 1.25rem; } .tab { padding-inline: .9rem; }
 }
-.log li .what { word-break: keep-all; }
-.log li .what small { display: block; color: var(--bone-dim); font-size: .8125rem; margin-top: .15rem; }
-.log li .num { text-align: right; font-feature-settings: "tnum" 1; color: var(--bone); white-space: nowrap; }
-.log li .num small { display: block; color: var(--bone-dim); font-size: .75rem; }
-.log li.total { border-bottom: 0; padding-bottom: 0; color: var(--bone-dim); }
-.log li.total .num { color: var(--bone); font-weight: 600; }
-.js .log li.pending { opacity: 0; transform: translateY(4px); }
-.log li { transition: opacity .45s ease, transform .45s ease; }
-@media (prefers-reduced-motion: reduce) { .js .log li.pending { opacity: 1; transform: none; } .log li { transition: none; } }
+
+.demo-note { margin: .9rem 0 0; font-size: .875rem; color: var(--lead); }
 
 /* ── sections ────────────────────────────────────────────── */
-section.band { padding: 5.5rem 0; border-top: 1px solid var(--rule); }
-@media (max-width: 40rem) { section.band { padding: 3.75rem 0; } }
-h2.big {
-  font: 600 clamp(1.875rem, 3.6vw, 2.625rem)/1.2 var(--display); letter-spacing: -.02em; margin: 0 0 1.25rem;
-  max-width: 22ch; word-break: keep-all;
-}
-html[lang="ko"] h2.big { letter-spacing: -.035em; line-height: 1.28; }
-.body { max-width: var(--measure); color: var(--ink); word-break: keep-all; }
+section.band { padding-block: 5rem; border-top: 1px solid var(--rule); }
+@media (max-width: 40rem) { section.band { padding-block: 3.5rem; } }
+h2.big { font: 600 clamp(1.875rem, 3.6vw, 2.625rem)/1.18 var(--display); letter-spacing: -.02em; margin: 0 0 1rem; max-width: 24ch; }
+.body { max-width: var(--measure); }
 .body p { margin: 0 0 1rem; }
-.muted { color: var(--lead); }
 
-/* the exam: state as brightness — answered solid, partial half-tone, open an outline */
-.exam { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 4rem; align-items: start; }
-@media (max-width: 60rem) { .exam { grid-template-columns: 1fr; gap: 2.5rem; } }
-.sheet { background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; padding: 1.75rem; }
-.grid30 { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; margin: 0 0 1.25rem; }
+/* one real night */
+.real { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 1.5rem; margin-top: 2.25rem; align-items: start; }
+@media (max-width: 56rem) { .real { grid-template-columns: 1fr; } }
+.log { background: var(--night); color: var(--bone); border-radius: 10px; padding: 1.5rem 1.5rem 1.25rem; }
+.log h3, .sheet h3 { font: 500 1.0625rem/1.4 var(--display); margin: 0; }
+.log .src-note { font-size: .8125rem; color: var(--bone-2); margin: .3rem 0 1rem; }
+.log ol { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--night-rule); }
+.log li { display: grid; grid-template-columns: 1fr auto; gap: .25rem 1rem; padding: .7rem 0; border-bottom: 1px solid var(--night-rule); font-size: .9375rem; line-height: 1.5; }
+.log li small { display: block; color: var(--bone-2); font-size: .8125rem; }
+.log li .num { text-align: right; font-feature-settings: "tnum" 1; white-space: nowrap; }
+.log li .num small { font-size: .75rem; }
+.log li.total { border-bottom: 0; padding-bottom: 0; color: var(--bone-2); }
+.log li.total .num { color: var(--bone); font-weight: 600; }
+.sheet { background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; padding: 1.5rem; }
+.sheet .muted { font-size: .8125rem; color: var(--lead); margin: .3rem 0 1rem; }
+.score { display: flex; align-items: baseline; gap: .5rem; margin: 0 0 1rem; }
+.score strong { font: 600 3rem/1 var(--display); letter-spacing: -.02em; }
+.score span { color: var(--lead); font-size: .9375rem; }
+.grid30 { display: grid; grid-template-columns: repeat(10, 1fr); gap: 6px; margin: 0 0 1rem; }
 .q { aspect-ratio: 1; border-radius: 3px; border: 1.5px solid var(--ink); }
 .q.a { background: var(--ink); }
 .q.p { background: linear-gradient(to top, var(--ink) 50%, transparent 50%); }
 .q.o { border-color: var(--lead); opacity: .55; }
-.key { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: 0; padding: 0; list-style: none; font-size: .9375rem; }
-.key li { display: flex; align-items: center; gap: .5rem; }
-.key .q { width: .85rem; height: .85rem; aspect-ratio: auto; flex: none; }
-.key b { font-weight: 600; font-feature-settings: "tnum" 1; }
-.score { display: flex; align-items: baseline; gap: .6rem; margin: 0 0 1.25rem; }
-.score strong { font: 600 3.25rem/1 var(--display); letter-spacing: -.02em; }
-.score span { color: var(--lead); font-size: .9375rem; }
-.history { margin: 1.75rem 0 0; padding-top: 1.25rem; border-top: 1px solid var(--rule); }
-.history p { margin: 0 0 .9rem; font-size: .875rem; color: var(--lead); }
-.bars { display: grid; grid-template-columns: repeat(6, 1fr); gap: .75rem; align-items: end; height: 7.5rem; }
-.bars div { display: flex; flex-direction: column; justify-content: flex-end; align-items: stretch; height: 100%; text-align: center; }
-.bars i { display: block; background: var(--ink); border-radius: 3px 3px 0 0; opacity: .82; }
+.key { display: flex; flex-wrap: wrap; gap: .4rem 1.25rem; margin: 0; padding: 0; list-style: none; font-size: .875rem; }
+.key li { display: flex; align-items: center; gap: .45rem; }
+.key .q { width: .8rem; height: .8rem; aspect-ratio: auto; flex: none; }
+.history { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+.history p { margin: 0 0 .75rem; font-size: .8125rem; color: var(--lead); }
+.bars { display: grid; grid-template-columns: repeat(6, 1fr); gap: .6rem; align-items: end; height: 6.5rem; }
+.bars div { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; text-align: center; }
+.bars i { display: block; background: var(--ink); border-radius: 3px 3px 0 0; opacity: .8; }
 .bars div:last-child i { opacity: 1; }
-.bars b { font: 600 .875rem/1.2 var(--text); font-feature-settings: "tnum" 1; margin-bottom: .3rem; }
-.bars span { font-size: .75rem; color: var(--lead); margin-top: .4rem; font-feature-settings: "tnum" 1; }
-
-/* how it works — a real sequence, so it is numbered */
-.steps { list-style: none; margin: 3rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; counter-reset: step; }
-@media (max-width: 60rem) { .steps { grid-template-columns: 1fr; } }
-.steps li { counter-increment: step; padding: 1.5rem 1.5rem 0 0; border-top: 2px solid var(--ink); margin-right: 1rem; word-break: keep-all; }
-@media (max-width: 60rem) { .steps li { margin-right: 0; padding: 1.25rem 0 1.5rem; } }
-.steps li::before { content: counter(step); display: block; font: 500 1rem/1 var(--display); color: var(--lead); margin-bottom: .9rem; }
-.steps h3 { font: 600 1.25rem/1.3 var(--display); margin: 0 0 .5rem; }
-.steps p { margin: 0; font-size: .9375rem; color: var(--lead); }
+.bars b { font: 600 .8125rem/1.2 var(--text); font-feature-settings: "tnum" 1; margin-bottom: .25rem; }
+.bars span { font-size: .75rem; color: var(--lead); margin-top: .35rem; }
 
 /* what it keeps to */
-.rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2.5rem 4rem; margin: 3rem 0 0; }
-@media (max-width: 48rem) { .rules { grid-template-columns: 1fr; gap: 2rem; } }
-.rules h3 { font: 600 1.1875rem/1.35 var(--display); margin: 0 0 .5rem; word-break: keep-all; }
-.rules p { margin: 0; color: var(--lead); max-width: var(--measure); word-break: keep-all; }
+.rules { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2.25rem 4rem; margin-top: 2.5rem; }
+@media (max-width: 48rem) { .rules { grid-template-columns: 1fr; gap: 1.75rem; } }
+.rules h3 { font: 600 1.1875rem/1.35 var(--display); margin: 0 0 .4rem; }
+.rules p { margin: 0; color: var(--lead); max-width: var(--measure); }
 
 /* run it */
-.paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; margin: 3rem 0 1.5rem; }
+.paths { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; margin: 2.5rem 0 1.5rem; }
 @media (max-width: 52rem) { .paths { grid-template-columns: 1fr; } }
-.path { background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; padding: 1.75rem; display: flex; flex-direction: column; }
-.path h3 { font: 600 1.375rem/1.3 var(--display); margin: 0 0 .35rem; }
-.path .fit { margin: 0 0 1.25rem; color: var(--lead); word-break: keep-all; }
-.path dl { display: grid; grid-template-columns: auto 1fr; gap: .4rem 1rem; margin: 0 0 1.5rem; font-size: .9375rem; }
+.path { background: var(--sheet); border: 1px solid var(--rule); border-radius: 10px; padding: 1.5rem; display: flex; flex-direction: column; }
+.path h3 { font: 600 1.375rem/1.3 var(--display); margin: 0 0 .3rem; }
+.path .fit { margin: 0 0 1.1rem; color: var(--lead); }
+.path dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; margin: 0 0 1.25rem; font-size: .9375rem; }
 .path dt { color: var(--lead); }
-.path dd { margin: 0; word-break: keep-all; }
+.path dd { margin: 0; }
 .cmd { margin-top: auto; background: var(--night); color: var(--bone); border-radius: 8px; display: flex; align-items: flex-start; gap: .75rem; padding: 1rem 1rem 1rem 1.25rem; }
 .cmd pre { flex: 1; min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 400 .8125rem/1.75 var(--code); }
-.copy {
-  flex: none; font: 500 .75rem/1 var(--text); color: var(--bone);
-  background: transparent; border: 1px solid var(--night-rule); border-radius: 5px; padding: .45rem .6rem; cursor: pointer;
-}
-.copy:hover { border-color: var(--bone-dim); }
-.after { max-width: 44rem; color: var(--lead); word-break: keep-all; }
-.after code, .body code, .rules code { font: 400 .875em/1 var(--code); background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: .12em .35em; color: var(--ink); }
+.copy { flex: none; min-height: 2.25rem; font: 500 .75rem/1 var(--text); color: var(--bone); background: transparent; border: 1px solid var(--night-rule); border-radius: 5px; padding: 0 .7rem; cursor: pointer; }
+.copy:hover { border-color: var(--bone-2); }
+.after { max-width: 46rem; color: var(--lead); }
+.after code { font: 400 .875em/1 var(--code); background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: .12em .35em; color: var(--ink); }
 
 /* inside */
-.parts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 4rem; margin: 2.5rem 0 0; }
+.parts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 4rem; margin: 2.25rem 0 0; }
 @media (max-width: 48rem) { .parts { grid-template-columns: 1fr; } }
-.parts div { display: grid; grid-template-columns: 7.5rem 1fr; gap: 1rem; padding: 1rem 0; border-top: 1px solid var(--rule); }
+.parts div { display: grid; grid-template-columns: 7rem 1fr; gap: 1rem; padding: .9rem 0; border-top: 1px solid var(--rule); }
 .parts dt { font: 600 1rem/1.5 var(--display); }
-.parts dd { margin: 0; color: var(--lead); word-break: keep-all; }
+.parts dd { margin: 0; color: var(--lead); }
 
-footer { border-top: 1px solid var(--rule); padding: 2.5rem 0 3.5rem; font-size: .875rem; color: var(--lead); }
+footer { border-top: 1px solid var(--rule); padding-block: 2.25rem 3.25rem; font-size: .875rem; color: var(--lead); }
 footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem 2rem; }
-footer p { margin: 0; max-width: 40rem; word-break: keep-all; }
+footer p { margin: 0; max-width: 40rem; }
 footer nav { display: flex; gap: 1.5rem; }
-.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 </style>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <header class="wrap bar">
-  <a class="mark" href="#top" aria-label="The Sovereign">The Sovereign</a>
+  <a class="mark" href="#top">The Sovereign</a>
   <nav aria-label="Main">
-    <a class="hide-sm" href="#how"><span class="ko">작동 방식</span><span class="en">How it works</span></a>
-    <a class="hide-sm" href="#run"><span class="ko">설치</span><span class="en">Install</span></a>
+    <a class="hide-sm" href="#demo">How it works</a>
+    <a class="hide-sm" href="#run">Install</a>
     <a href="https://github.com/cpldxx/the-sovereign">GitHub</a>
-    <button class="lang" type="button" id="lang" aria-label="Switch language"><span class="ko">English</span><span class="en">한국어</span></button>
   </nav>
 </header>
 
-<main id="top">
-  <div class="wrap hero">
+<main id="main">
+  <div class="wrap hero" id="top">
+    <h1>A research lab that never stops</h1>
     <div>
-      <h1><span class="ko">멈추지 않는<br>연구실</span><span class="en">A research lab that never stops</span></h1>
-      <p class="lede ko">주제 하나를 맡기면 매일 밤 스스로 조사하고, 출처로 하나하나 확인하고, 지식 그래프에 기억합니다. 얼마나 알게 됐는지는 시험으로 잽니다. 내 컴퓨터에서 돌아가는 오픈소스입니다.</p>
-      <p class="lede en">Give it a topic. Every night it researches, checks each fact against its sources, and remembers it in a knowledge graph. An exam measures what it has learned. Open source, running on your own machine.</p>
+      <p class="lede">Give it a topic. Every night it reads papers and the web, keeps every fact with its source in a knowledge graph, and sits an exam to show what it has learned. Ask it anything about the topic and it answers from what it knows, with sources.</p>
       <div class="actions">
-        <a class="btn primary" href="#run"><span class="ko">설치하기</span><span class="en">Install it</span></a>
+        <a class="btn primary" href="#run">Install it</a>
         <a class="btn quiet" href="https://github.com/cpldxx/the-sovereign">
           <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-          <span class="ko">GitHub에서 보기</span><span class="en">View on GitHub</span>
+          View on GitHub
         </a>
       </div>
-      <p class="note ko">로컬 모델(Ollama)로 무료로, 또는 Claude API로 돌릴 수 있습니다.</p>
-      <p class="note en">Run it free on local models with Ollama, or on Claude through Anthropic's API.</p>
     </div>
-
-    <figure class="log" aria-labelledby="log-title" style="margin:0">
-      <h2 id="log-title"><span class="ko">학습 사이클 한 번</span><span class="en">One learning cycle</span></h2>
-      <p class="src"><span class="ko">실험 도메인(반도체 패키징)의 실제 기록, 2026년 11월 11일</span><span class="en">The real record of a test domain on chip packaging, 11 November 2026</span></p>
-      <ol id="log">
-        <li><span class="what"><span class="ko">미션: 하이브리드 본딩 전 구리 표면 준비의 표준과 청정도 기준</span><span class="en">Mission: standards and cleanliness limits for copper surface prep before hybrid bonding</span></span><span class="num">16<small class="ko">페이지</small><small class="en">pages</small></span></li>
-        <li><span class="what"><span class="ko">미션: Cu-Cu 하이브리드 본딩을 쓴 AI 가속기·HBM 사례</span><span class="en">Mission: AI accelerators and HBM stacks that use Cu-Cu hybrid bonding</span></span><span class="num">7<small class="ko">페이지</small><small class="en">pages</small></span></li>
-        <li><span class="what"><span class="ko">미션: 칩렛 이종 통합의 공정 병목과 해결 기술</span><span class="en">Mission: the process bottlenecks of chiplet integration, and their fixes</span></span><span class="num">7<small class="ko">페이지</small><small class="en">pages</small></span></li>
-        <li><span class="what"><span class="ko">미션: HBM4 스펙 확정 사항과 미세 범프를 쓰는 이유</span><span class="en">Mission: what is settled in the HBM4 spec, and why fine-pitch bumps</span></span><span class="num">8<small class="ko">페이지</small><small class="en">pages</small></span></li>
-        <li><span class="what"><span class="ko">이번 주에 바뀐 것 확인</span><span class="en">What changed this week</span></span><span class="num">9<small class="ko">페이지</small><small class="en">pages</small></span></li>
-        <li><span class="what"><span class="ko">읽은 내용을 사실로 쪼개 출처와 함께 저장</span><span class="en">Split what it read into facts, each kept with its source</span><small class="ko">여러 출처가 확인한 사실은 강해집니다</small><small class="en">A fact confirmed by more sources grows stronger</small></span><span class="num">1,010<small class="ko">사실</small><small class="en">facts</small></span></li>
-        <li><span class="what"><span class="ko">끝내 확인되지 않은 사실을 잊음</span><span class="en">Forgot what never held up</span></span><span class="num">1<small class="ko">사실</small><small class="en">fact</small></span></li>
-        <li><span class="what"><span class="ko">시험 30문항을 그래프만 보고 풂</span><span class="en">Sat a 30-question exam from the graph alone</span><small class="ko">정답 7, 부분 정답 7, 미해결 16</small><small class="en">7 answered, 7 in part, 16 open</small></span><span class="num">35<small class="ko">점</small><small class="en">of 100</small></span></li>
-        <li class="total"><span class="what"><span class="ko">브리핑을 쓰고 다음 사이클을 기다림</span><span class="en">Wrote the briefing, and waits for the next cycle</span></span><span class="num">47<small class="ko">페이지 읽음</small><small class="en">pages read</small></span></li>
-      </ol>
-    </figure>
   </div>
 
-  <section class="band" id="exam" aria-labelledby="exam-title">
-    <div class="wrap exam">
-      <div>
-        <h2 class="big" id="exam-title"><span class="ko">얼마나 알게 됐는지, 시험으로 잽니다</span><span class="en">What it has learned, measured by an exam</span></h2>
-        <div class="body ko">
-          <p>시험 문제는 연구에 쓰지 않는 권위 있는 자료에서 따로 만듭니다. 사이클이 끝날 때마다 연구실은 자기 그래프만 보고 같은 시험을 풉니다.</p>
-          <p>못 푼 문제는 다음 연구 주제가 됩니다. 점수가 매일 오르지는 않습니다. 그래도 매번 같은 잣대로 잽니다.</p>
-        </div>
-        <div class="body en">
-          <p>The questions are written from authoritative sources the research never reads. After every cycle the lab sits the same exam, answering from its own graph alone.</p>
-          <p>What it can't answer becomes what it researches next. The score doesn't rise every night, but it is always measured the same way.</p>
-        </div>
+  <section class="wrap demo" id="demo" aria-label="How it works, step by step">
+    <div class="window" id="win">
+      <div class="chrome" aria-hidden="true">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span class="where">Domain: <b>Solid-state batteries</b></span>
+        <span class="ex">Example</span>
       </div>
-      <div class="sheet">
-        <p class="score"><strong>35</strong><span class="ko">/ 100점, 2026년 11월 11일</span><span class="en">of 100, 11 November 2026</span></p>
-        <div class="grid30" id="grid30" role="img" aria-label="30 questions: 7 answered, 7 answered in part, 16 open"></div>
-        <ul class="key">
-          <li><span class="q a"></span><span class="ko">정답 <b>7</b></span><span class="en">Answered <b>7</b></span></li>
-          <li><span class="q p"></span><span class="ko">부분 정답 <b>7</b></span><span class="en">In part <b>7</b></span></li>
-          <li><span class="q o"></span><span class="ko">미해결 <b>16</b></span><span class="en">Open <b>16</b></span></li>
-        </ul>
-        <div class="history">
-          <p class="ko">같은 시험의 최근 여섯 번 점수</p>
-          <p class="en">The last six sittings of the same exam</p>
-          <div class="bars" id="bars" role="img" aria-label="Scores: 2 Nov 32, 3 Nov 32, 4 Nov 28, 5 Nov 33, 6 Nov 32, 11 Nov 35"></div>
+      <div class="tabs" role="tablist" aria-label="Steps of a learning cycle">
+        <button class="tab" role="tab" id="t1" aria-controls="p1" aria-selected="true"><span class="n">1</span>You give a topic<span class="bar-fill"></span></button>
+        <button class="tab" role="tab" id="t2" aria-controls="p2" aria-selected="false" tabindex="-1"><span class="n">2</span>It researches<span class="bar-fill"></span></button>
+        <button class="tab" role="tab" id="t3" aria-controls="p3" aria-selected="false" tabindex="-1"><span class="n">3</span>It learns facts<span class="bar-fill"></span></button>
+        <button class="tab" role="tab" id="t4" aria-controls="p4" aria-selected="false" tabindex="-1"><span class="n">4</span>It sits an exam<span class="bar-fill"></span></button>
+        <button class="tab" role="tab" id="t5" aria-controls="p5" aria-selected="false" tabindex="-1"><span class="n">5</span>You ask<span class="bar-fill"></span></button>
+        <button class="play" id="play" type="button" aria-label="Pause the walkthrough">
+          <svg class="i-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>
+          <svg class="i-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="display:none"><path d="M4 2.6v10.8a.6.6 0 00.9.5l8.6-5.4a.6.6 0 000-1L4.9 2.1a.6.6 0 00-.9.5z"/></svg>
+        </button>
+      </div>
+
+      <div class="stage">
+        <div class="panes">
+          <div class="pane" role="tabpanel" id="p1" aria-labelledby="t1">
+            <h3>You give it a topic</h3>
+            <p class="say">The Head, the lab's lead agent, asks what you actually want to know and writes a research charter with you.</p>
+            <div class="chat">
+              <div class="msg you"><span class="who">You</span>Solid-state batteries.</div>
+              <div class="msg head"><span class="who">Head</span>What matters most to you: which materials win, who ships first, or what still blocks mass production?</div>
+              <div class="msg you"><span class="who">You</span>What blocks mass production, and who is closest.</div>
+            </div>
+            <dl class="charter">
+              <dt>Goal</dt><dd>Know what stands between solid-state cells and mass production.</dd>
+              <dt>Core questions</dt><dd>Which electrolytes lead, and why? What limits yield? Who runs pilot lines?</dd>
+              <dt>Leave out</dt><dd>Consumer product rumours.</dd>
+            </dl>
+          </div>
+
+          <div class="pane" role="tabpanel" id="p2" aria-labelledby="t2" hidden>
+            <h3>Every night, it researches</h3>
+            <p class="say">It searches the web and the scholarly databases, reads what it finds, and weighs each source by kind.</p>
+            <ul class="reads">
+              <li><span class="tier t1">Paper</span><span class="t">A review of sulfide solid electrolytes</span><span class="st">read</span></li>
+              <li><span class="tier t2">Official</span><span class="t">A cell maker's pilot-line announcement</span><span class="st">read</span></li>
+              <li><span class="tier t3">News</span><span class="t">Trade press on production costs</span><span class="st">read</span></li>
+              <li><span class="tier t4">Blog</span><span class="t">An engineer's notes on dry rooms</span><span class="st">read</span></li>
+              <li class="skip-row"><span class="tier t4">Journal</span><span class="t">A paywalled article</span><span class="st">skipped: paywall</span></li>
+              <li class="skip-row"><span class="tier t4">Site</span><span class="t">A site that keeps bots out</span><span class="st">skipped: robots.txt</span></li>
+            </ul>
+          </div>
+
+          <div class="pane" role="tabpanel" id="p3" aria-labelledby="t3" hidden>
+            <h3>It learns facts, each with its source</h3>
+            <p class="say">Pages become facts in a knowledge graph. More sources make a fact stronger; a newer report replaces an older one.</p>
+            <ul class="facts">
+              <li><span class="f"><b>Sulfide electrolytes</b> reach liquid-like ionic conductivity</span><span class="ev"><span class="meter"><i class="on"></i><i class="on"></i><i class="on"></i></span>3 sources, strong</span></li>
+              <li><span class="f"><b>Lithium-metal anodes</b> are limited by dendrites</span><span class="ev"><span class="meter"><i class="on"></i><i class="on"></i><i></i></span>2 sources</span></li>
+              <li class="weak"><span class="f"><b>Dry-room production</b> raises cell cost</span><span class="ev"><span class="meter"><i class="on"></i><i></i><i></i></span>1 source, a weak signal</span></li>
+              <li class="gone"><span class="f">A pilot line targets 2026</span><span class="ev">replaced by a newer report: 2027</span></li>
+            </ul>
+          </div>
+
+          <div class="pane" role="tabpanel" id="p4" aria-labelledby="t4" hidden>
+            <h3>It sits an exam it never studied for</h3>
+            <p class="say">The questions come from authoritative sources the research is never allowed to read. It answers from its graph alone.</p>
+            <div class="qgrid" aria-hidden="true" id="qgrid"></div>
+            <p class="qkey">Filled: answered. Half: in part. Outline: still open.</p>
+            <div class="next">
+              <p>What it can't answer becomes tonight's research:</p>
+              <ul><li>Which separator coatings survive 1,000 cycles?</li><li>Who supplies sulfide powder at scale?</li></ul>
+            </div>
+          </div>
+
+          <div class="pane" role="tabpanel" id="p5" aria-labelledby="t5" hidden>
+            <h3>You ask, it answers with sources</h3>
+            <p class="say">Ask the Head anything about the topic. It answers from the graph, says how sure it is, and shows where each part came from.</p>
+            <div class="chat"><div class="msg you"><span class="who">You</span>What still blocks mass production?</div></div>
+            <div class="answer">
+              <p>Mostly manufacturing. Sulfide electrolytes need moisture-free dry rooms<span class="cite">1</span><span class="cite">2</span>, and lithium-metal anodes still grow dendrites<span class="cite">3</span>.</p>
+              <p class="weak">That dry rooms make cells much more expensive rests on a single report, so treat it as a weak signal<span class="cite">4</span>.</p>
+              <div class="srcs"><span><b>1</b>Paper</span><span><b>2</b>Official</span><span><b>3</b>Paper</span><span><b>4</b>News</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="graph" aria-hidden="true">
+          <div class="count"><b id="gcount">1</b><span id="glabel">topic</span></div>
+          <svg viewBox="0 0 560 440" id="g" preserveAspectRatio="xMidYMid meet">
+            <!-- step 2: reading lines and the sources -->
+            <g class="g-el" data-from="2" data-until="2">
+              <path class="edge reading" d="M280 220 L84 78"/><path class="edge reading" d="M280 220 L478 78"/>
+              <path class="edge reading" d="M280 220 L486 372"/><path class="edge reading" d="M280 220 L74 372"/>
+            </g>
+            <g class="g-el src" data-from="2" data-hot="5"><rect x="58" y="62" width="52" height="22" rx="4"/><text x="84" y="77" text-anchor="middle">Paper</text></g>
+            <g class="g-el src" data-from="2" data-hot="5"><rect x="446" y="62" width="64" height="22" rx="4"/><text x="478" y="77" text-anchor="middle">Official</text></g>
+            <g class="g-el src" data-from="2" data-hot="5"><rect x="458" y="362" width="56" height="22" rx="4"/><text x="486" y="377" text-anchor="middle">News</text></g>
+            <g class="g-el src" data-from="2"><rect x="50" y="362" width="48" height="22" rx="4"/><text x="74" y="377" text-anchor="middle">Blog</text></g>
+            <g class="g-el src x" data-from="2" data-until="2"><rect x="246" y="22" width="68" height="22" rx="4"/><text x="280" y="37" text-anchor="middle">paywall</text></g>
+            <g class="g-el src x" data-from="2" data-until="2"><rect x="244" y="404" width="72" height="22" rx="4"/><text x="280" y="419" text-anchor="middle">robots.txt</text></g>
+
+            <!-- step 3: facts (edges thicken with evidence) -->
+            <g class="g-el" data-from="3"><path class="edge thin" d="M280 220 L170 140"/><path class="edge thin" d="M280 220 L392 140"/><path class="edge thin" d="M280 220 L372 290"/><path class="edge thin" d="M280 220 L205 300"/></g>
+            <g class="g-el" data-from="3" data-hot="4"><path class="edge s3" d="M170 140 L104 232"/><text class="elabel" x="100" y="180">reaches</text></g>
+            <g class="g-el" data-from="3" data-hot="4 5"><path class="edge s2" d="M392 140 L462 228"/><text class="elabel" x="436" y="176">limited by</text></g>
+            <g class="g-el" data-from="3" data-hot="5"><path class="edge s2" d="M170 140 L205 300"/><text class="elabel" x="196" y="244">needs</text></g>
+            <g class="g-el" data-from="3" data-hot="5"><path class="edge s1" d="M205 300 L330 336"/><text class="elabel" x="236" y="338">raises</text></g>
+            <g class="g-el" data-from="3" data-hot="4"><path class="edge s2" d="M372 290 L392 140"/><text class="elabel" x="388" y="222">runs</text></g>
+
+            <!-- step 4: what the exam found open -->
+            <g class="g-el gap" data-from="4" data-until="4" data-hot="4"><circle cx="500" cy="300" r="18"/><text x="500" y="305" text-anchor="middle">?</text></g>
+            <g class="g-el gap" data-from="4" data-until="4" data-hot="4"><circle cx="90" cy="300" r="18"/><text x="90" y="305" text-anchor="middle">?</text></g>
+
+            <!-- nodes -->
+            <g class="g-el node" data-from="3" data-hot="4 5"><circle cx="170" cy="140" r="9"/><text x="170" y="122" text-anchor="middle">Sulfide electrolyte</text></g>
+            <g class="g-el node" data-from="3" data-hot="4"><circle cx="104" cy="232" r="7"/><text x="104" y="256" text-anchor="middle">Ionic conductivity</text></g>
+            <g class="g-el node" data-from="3" data-hot="4 5"><circle cx="392" cy="140" r="8"/><text x="392" y="122" text-anchor="middle">Lithium-metal anode</text></g>
+            <g class="g-el node" data-from="3" data-hot="4 5"><circle cx="462" cy="228" r="7"/><text x="462" y="252" text-anchor="middle">Dendrites</text></g>
+            <g class="g-el node" data-from="3" data-hot="5"><circle cx="205" cy="300" r="8"/><text x="205" y="324" text-anchor="middle">Dry rooms</text></g>
+            <g class="g-el node" data-from="3" data-hot="5"><circle cx="330" cy="336" r="7"/><text x="330" y="360" text-anchor="middle">Cell cost</text><text class="sub" x="330" y="374" text-anchor="middle">weak signal</text></g>
+            <g class="g-el node" data-from="3" data-hot="4"><circle cx="372" cy="290" r="7"/><text x="372" y="312" text-anchor="middle">Pilot lines</text></g>
+            <g class="g-el node topic" data-from="1" data-hot="4 5"><circle cx="280" cy="220" r="34"/><text x="280" y="216" text-anchor="middle">Solid-state</text><text x="280" y="231" text-anchor="middle">batteries</text></g>
+          </svg>
+          <span class="cap" id="gcap">The knowledge graph</span>
         </div>
       </div>
     </div>
+    <p class="demo-note">An example topic, simplified. The lab's own screens show the same steps live: the team at work, the graph, the Head's answers.</p>
   </section>
 
-  <section class="band" id="how" aria-labelledby="how-title">
+  <section class="band" aria-labelledby="real-title">
     <div class="wrap">
-      <h2 class="big" id="how-title"><span class="ko">주제 하나가 전문 분야가 되기까지</span><span class="en">How a topic becomes expertise</span></h2>
-      <ol class="steps">
-        <li><h3><span class="ko">헌장</span><span class="en">Charter</span></h3><p class="ko">Head 에이전트가 무엇을 알고 싶은지 묻고, 목표와 핵심 질문, 다루지 않을 것을 함께 정합니다.</p><p class="en">The Head asks what you want to know, and writes down the goal, the core questions and what to leave out with you.</p></li>
-        <li><h3><span class="ko">연구</span><span class="en">Research</span></h3><p class="ko">웹과 논문(OpenAlex, arXiv, PubMed), 공식 자료를 찾아 읽습니다.</p><p class="en">It searches and reads the web, papers (OpenAlex, arXiv, PubMed) and official sources.</p></li>
-        <li><h3><span class="ko">학습</span><span class="en">Learning</span></h3><p class="ko">사실마다 출처를 붙여 그래프에 넣습니다. 여러 출처가 확인하면 강해지고, 끝내 확인되지 않으면 잊습니다.</p><p class="en">Every fact enters the graph with its source. More sources make it stronger; what never holds up is forgotten.</p></li>
-        <li><h3><span class="ko">시험</span><span class="en">Exam</span></h3><p class="ko">따로 떼어 둔 문제를 그래프만 보고 풀고, 못 푼 문제를 다음 연구로 넘깁니다.</p><p class="en">It answers held-out questions from the graph alone, and hands the open ones to the next round of research.</p></li>
-        <li><h3><span class="ko">답변</span><span class="en">Answers</span></h3><p class="ko">물으면 그래프에서 출처와 확신 정도를 붙여 답합니다.</p><p class="en">Ask, and it answers from the graph, with its sources and how sure it is.</p></li>
-      </ol>
+      <h2 class="big" id="real-title">Not a mock-up: one real night</h2>
+      <div class="body"><p>The record of a real learning cycle, from a test domain on chip packaging. The exam is the same 30 questions every time, so the score shows what the graph knows, not what it was told.</p></div>
+      <div class="real">
+        <figure class="log" style="margin:0" aria-labelledby="log-title">
+          <h3 id="log-title">One learning cycle, 11 November 2026</h3>
+          <p class="src-note">Four research missions, a check on what changed this week, the exam and a briefing.</p>
+          <ol>
+            <li><span>Mission: standards for copper surface prep before hybrid bonding</span><span class="num">16<small>pages</small></span></li>
+            <li><span>Mission: AI accelerators and HBM stacks that use Cu-Cu hybrid bonding</span><span class="num">7<small>pages</small></span></li>
+            <li><span>Mission: process bottlenecks of chiplet integration, and their fixes</span><span class="num">7<small>pages</small></span></li>
+            <li><span>Mission: what is settled in the HBM4 spec, and why fine-pitch bumps</span><span class="num">8<small>pages</small></span></li>
+            <li><span>What changed this week</span><span class="num">9<small>pages</small></span></li>
+            <li><span>Facts stored, each with its source<small>A fact more sources confirm grows stronger</small></span><span class="num">1,010<small>facts</small></span></li>
+            <li><span>Forgot what never held up</span><span class="num">1<small>fact</small></span></li>
+            <li class="total"><span>Pages read in all</span><span class="num">47<small>pages</small></span></li>
+          </ol>
+        </figure>
+        <div class="sheet">
+          <h3>The exam that night</h3>
+          <p class="muted">30 questions from held-out sources, answered from the graph alone.</p>
+          <p class="score"><strong>35</strong><span>of 100</span></p>
+          <div class="grid30" id="grid30" role="img" aria-label="30 questions: 7 answered, 7 answered in part, 16 open"></div>
+          <ul class="key">
+            <li><span class="q a"></span>Answered <b>7</b></li>
+            <li><span class="q p"></span>In part <b>7</b></li>
+            <li><span class="q o"></span>Open <b>16</b></li>
+          </ul>
+          <div class="history">
+            <p>The last six sittings of the same exam. It doesn't rise every night; it is always measured the same way.</p>
+            <div class="bars" id="bars" role="img" aria-label="Scores: 2 Nov 32, 3 Nov 32, 4 Nov 28, 5 Nov 33, 6 Nov 32, 11 Nov 35"></div>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
   <section class="band" aria-labelledby="rules-title">
     <div class="wrap">
-      <h2 class="big" id="rules-title"><span class="ko">연구실이 지키는 것</span><span class="en">What the lab keeps to</span></h2>
+      <h2 class="big" id="rules-title">What the lab keeps to</h2>
       <div class="rules">
-        <div><h3><span class="ko">막힌 곳은 우회하지 않습니다</span><span class="en">It never goes around a block</span></h3><p class="ko">robots.txt, 로그인, 유료 장벽, 봇 차단을 넘지 않습니다. 못 읽은 페이지는 못 읽었다고 기록합니다.</p><p class="en">No getting past robots.txt, logins, paywalls or bot checks. A page it couldn't read is recorded as unread.</p></div>
-        <div><h3><span class="ko">출처의 무게를 따집니다</span><span class="en">It weighs its sources</span></h3><p class="ko">논문, 공식 자료, 뉴스, 블로그 순으로 믿고, 출처가 하나뿐인 주장은 약한 신호로 둡니다.</p><p class="en">Papers, then official sources, then news, then blogs. A claim with one source stays a weak signal.</p></div>
-        <div><h3><span class="ko">세상에 손대지 않습니다</span><span class="en">It doesn't act in the world</span></h3><p class="ko">메시지를 보내거나 주문하거나 예약하지 않습니다. 무엇이 사실인지 알아내고 설명할 뿐입니다.</p><p class="en">No messages, orders or bookings. It finds out what is true and explains it.</p></div>
-        <div><h3><span class="ko">내 컴퓨터에 남습니다</span><span class="en">It stays on your machine</span></h3><p class="ko">그래프와 기록은 직접 띄운 서버에만 있습니다. 로컬 모델을 쓰면 질문과 읽은 페이지도 밖으로 나가지 않습니다.</p><p class="en">The graph and its records live on the server you run. With local models, your questions and the pages it reads stay there too.</p></div>
+        <div><h3>It never goes around a block</h3><p>No getting past robots.txt, logins, paywalls or bot checks. A page it couldn't read is recorded as unread.</p></div>
+        <div><h3>It weighs its sources</h3><p>Papers, then official sources, then news, then blogs. A claim with one source stays a weak signal until others confirm it.</p></div>
+        <div><h3>It doesn't act in the world</h3><p>No messages, orders or bookings. It finds out what is true and explains it.</p></div>
+        <div><h3>It stays on your machine</h3><p>The graph and its records live on the server you run. With local models, your questions and the pages it reads stay there too.</p></div>
       </div>
     </div>
   </section>
 
   <section class="band" id="run" aria-labelledby="run-title">
     <div class="wrap">
-      <h2 class="big" id="run-title"><span class="ko">내 컴퓨터에서 돌리기</span><span class="en">Run it yourself</span></h2>
-      <div class="body ko"><p>필요한 건 <a href="https://docs.docker.com/get-docker/">Docker</a>뿐입니다. 생각하는 모델은 둘 중에 고르세요.</p></div>
-      <div class="body en"><p>All it needs is <a href="https://docs.docker.com/get-docker/">Docker</a>. Then choose what does the thinking.</p></div>
+      <h2 class="big" id="run-title">Run it yourself</h2>
+      <div class="body"><p>All it needs is <a href="https://docs.docker.com/get-docker/">Docker</a>. Then choose what does the thinking.</p></div>
       <div class="paths">
         <article class="path">
-          <h3><span class="ko">로컬 모델</span><span class="en">Local models</span></h3>
-          <p class="fit ko">무료이고, 질문과 페이지가 밖으로 나가지 않습니다.</p>
-          <p class="fit en">Free, and your questions and pages never leave the machine.</p>
+          <h3>Local models</h3>
+          <p class="fit">Free, and your questions and pages never leave the machine.</p>
           <dl>
-            <dt><span class="ko">모델</span><span class="en">Model</span></dt><dd><a href="https://ollama.com">Ollama</a>의 qwen3.6:35b</dd>
-            <dt><span class="ko">메모리</span><span class="en">Memory</span></dt><dd><span class="ko">여유 메모리 약 24 GB (64 GB Mac이면 넉넉함)</span><span class="en">about 24 GB free (a 64 GB Mac is comfortable)</span></dd>
-            <dt><span class="ko">비용</span><span class="en">Cost</span></dt><dd><span class="ko">없음</span><span class="en">none</span></dd>
+            <dt>Model</dt><dd>qwen3.6:35b on <a href="https://ollama.com">Ollama</a></dd>
+            <dt>Memory</dt><dd>about 24 GB free (a 64 GB Mac is comfortable)</dd>
+            <dt>Cost</dt><dd>none</dd>
           </dl>
           <div class="cmd"><pre><code>git clone https://github.com/cpldxx/the-sovereign.git
 cd the-sovereign
-./sovereign up</code></pre><button class="copy" type="button"><span class="ko">복사</span><span class="en">Copy</span></button></div>
+./sovereign up</code></pre><button class="copy" type="button">Copy</button></div>
         </article>
         <article class="path">
           <h3>Claude</h3>
-          <p class="fit ko">어떤 컴퓨터에서든 돌아가고, 쓴 만큼 냅니다.</p>
-          <p class="fit en">Runs on any machine; you pay for what it uses.</p>
+          <p class="fit">Runs on any machine; you pay for what it uses.</p>
           <dl>
-            <dt><span class="ko">모델</span><span class="en">Model</span></dt><dd><span class="ko">Anthropic API의 claude-opus-5-5</span><span class="en">claude-opus-5-5 through Anthropic's API</span></dd>
-            <dt><span class="ko">메모리</span><span class="en">Memory</span></dt><dd><span class="ko">GPU 불필요, 작은 임베딩 모델(~1 GB)만 로컬</span><span class="en">no GPU; only a small embedding model (~1 GB) runs locally</span></dd>
-            <dt><span class="ko">비용</span><span class="en">Cost</span></dt><dd><span class="ko">토큰당 과금, <a href="https://console.anthropic.com">API 키</a> 필요</span><span class="en">per token, with <a href="https://console.anthropic.com">an API key</a></span></dd>
+            <dt>Model</dt><dd>claude-opus-5-5 through Anthropic's API</dd>
+            <dt>Memory</dt><dd>no GPU; only a small embedding model (~1 GB) runs locally</dd>
+            <dt>Cost</dt><dd>per token, with <a href="https://console.anthropic.com">an API key</a></dd>
           </dl>
           <div class="cmd"><pre><code>git clone https://github.com/cpldxx/the-sovereign.git
 cd the-sovereign
-./sovereign up --claude</code></pre><button class="copy" type="button"><span class="ko">복사</span><span class="en">Copy</span></button></div>
+./sovereign up --claude</code></pre><button class="copy" type="button">Copy</button></div>
         </article>
       </div>
-      <p class="after ko">처음 실행하면 설정 파일을 만들고 필요한 모델과 이미지를 받은 뒤 전부 띄웁니다. 브라우저에서 <code>http://localhost:8000</code>을 열고 첫 계정을 만들면 관리자가 됩니다. 도메인을 하나 만들면 Head가 헌장을 함께 쓰자고 합니다. 자세한 내용은 <a href="https://github.com/cpldxx/the-sovereign/blob/main/docs/models.md">모델 가이드</a>와 <a href="https://github.com/cpldxx/the-sovereign/blob/main/docs/troubleshooting.md">문제 해결</a>에 있습니다.</p>
-      <p class="after en">The first run writes its settings, pulls the models and images it needs, and starts everything. Open <code>http://localhost:8000</code> and create the first account; it becomes the admin. Create a domain and the Head offers to write its charter with you. More in the <a href="https://github.com/cpldxx/the-sovereign/blob/main/docs/models.md">models guide</a> and <a href="https://github.com/cpldxx/the-sovereign/blob/main/docs/troubleshooting.md">troubleshooting</a>.</p>
+      <p class="after">The first run writes its settings, pulls the models and images it needs, and starts everything. Open <code>http://localhost:8000</code> and create the first account; it becomes the admin. Create a domain and the Head offers to write its charter with you. More in the <a href="https://github.com/cpldxx/the-sovereign/blob/main/docs/models.md">models guide</a> and <a href="https://github.com/cpldxx/the-sovereign/blob/main/docs/troubleshooting.md">troubleshooting</a>.</p>
     </div>
   </section>
 
   <section class="band" aria-labelledby="parts-title">
     <div class="wrap">
-      <h2 class="big" id="parts-title"><span class="ko">안에 든 것</span><span class="en">What's inside</span></h2>
+      <h2 class="big" id="parts-title">What's inside</h2>
       <dl class="parts">
-        <div><dt>kg</dt><dd class="ko">지식 그래프 API. 인제스트, 그래프 검색, 온톨로지, 시험, 학습 일정 (FastAPI, MCP, Pydantic AI)</dd><dd class="en">The knowledge graph API: ingest, graph search, ontology, exam, learning schedule (FastAPI, MCP, Pydantic AI)</dd></div>
-        <div><dt>research</dt><dd class="ko">연구원. 검색하고 읽고 논문을 찾아 페이지를 그래프로 보냄 (DeerFlow, SearXNG, crawl4ai)</dd><dd class="en">The researcher: searches, reads, finds papers, and sends the pages to the graph (DeerFlow, SearXNG, crawl4ai)</dd></div>
-        <div><dt>hermes</dt><dd class="ko">Head 에이전트. 대화하고 팀을 이끌고, 음성으로도 답함 (Hermes Agent)</dd><dd class="en">The Head: talks with you, leads the team, answers by voice too (Hermes Agent)</dd></div>
-        <div><dt>ArcadeDB</dt><dd class="ko">도메인마다 데이터베이스 하나. 그래프와 벡터를 함께 저장</dd><dd class="en">One database per domain, graph and vectors together</dd></div>
-        <div><dt>frontend</dt><dd class="ko">에이전트 현황, 그래프, Head 채팅, 브리핑, 설정 (React, Vite)</dd><dd class="en">The team at work, the graph, the Head's chat, briefings, settings (React, Vite)</dd></div>
-        <div><dt>sovereign</dt><dd class="ko">설치부터 실행, 테스트, 보안 점검까지 명령 하나</dd><dd class="en">One command to set it up, run it, test it and check its security</dd></div>
+        <div><dt>kg</dt><dd>The knowledge graph API: ingest, graph search, ontology, exam, learning schedule (FastAPI, MCP, Pydantic AI)</dd></div>
+        <div><dt>research</dt><dd>The researcher: searches, reads, finds papers, and sends the pages to the graph (DeerFlow, SearXNG, crawl4ai)</dd></div>
+        <div><dt>hermes</dt><dd>The Head: talks with you, leads the team, answers by voice too (Hermes Agent)</dd></div>
+        <div><dt>ArcadeDB</dt><dd>One database per domain, graph and vectors together</dd></div>
+        <div><dt>frontend</dt><dd>The team at work, the graph, the Head's chat, briefings, settings (React, Vite)</dd></div>
+        <div><dt>sovereign</dt><dd>One command to set it up, run it, test it and check its security</dd></div>
       </dl>
     </div>
   </section>
@@ -357,12 +546,11 @@ cd the-sovereign
 
 <footer>
   <div class="wrap">
-    <p class="ko">The Sovereign은 MIT 라이선스의 오픈소스입니다. DeerFlow, Hermes Agent, ArcadeDB, SearXNG, crawl4ai, Graphiti의 작업 위에 서 있습니다.</p>
-    <p class="en">The Sovereign is open source under the MIT license, built on the work of DeerFlow, Hermes Agent, ArcadeDB, SearXNG, crawl4ai and Graphiti.</p>
+    <p>The Sovereign is open source under the MIT license, built on the work of DeerFlow, Hermes Agent, ArcadeDB, SearXNG, crawl4ai and Graphiti.</p>
     <nav aria-label="Footer">
       <a href="https://github.com/cpldxx/the-sovereign">GitHub</a>
-      <a class="ko" href="https://github.com/cpldxx/the-sovereign/blob/main/README.ko.md">문서</a><a class="en" href="https://github.com/cpldxx/the-sovereign#readme">Docs</a>
-      <a href="https://github.com/cpldxx/the-sovereign/blob/main/CONTRIBUTING.md"><span class="ko">기여하기</span><span class="en">Contribute</span></a>
+      <a href="https://github.com/cpldxx/the-sovereign#readme">Docs</a>
+      <a href="https://github.com/cpldxx/the-sovereign/blob/main/CONTRIBUTING.md">Contribute</a>
     </nav>
   </div>
 </footer>
@@ -371,54 +559,105 @@ cd the-sovereign
 (function () {
   var root = document.documentElement;
   root.classList.add("js");
+  var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-  // Language: English unless the visitor picked Korean with the toggle.
-  function setLang(lang) {
-    root.setAttribute("data-lang", lang);
-    root.setAttribute("lang", lang);
-    document.title = lang === "ko" ? "The Sovereign — 멈추지 않는 연구실" : "The Sovereign — a research lab that never stops";
-    try { localStorage.setItem("lang", lang); } catch (e) {}
-  }
-  var saved = null;
-  try { saved = localStorage.getItem("lang"); } catch (e) {}
-  setLang(saved === "ko" ? "ko" : "en");
-  document.getElementById("lang").addEventListener("click", function () {
-    setLang(root.getAttribute("data-lang") === "ko" ? "en" : "ko");
-  });
+  // ── the walkthrough ───────────────────────────────────────
+  var STEP_MS = 7000;
+  var win = document.getElementById("win");
+  win.style.setProperty("--step-ms", STEP_MS + "ms");
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
+  var panes = tabs.map(function (t) { return document.getElementById(t.getAttribute("aria-controls")); });
+  var els = Array.prototype.slice.call(document.querySelectorAll("#g .g-el"));
+  var svg = document.getElementById("g");
+  var count = document.getElementById("gcount"), label = document.getElementById("glabel"), cap = document.getElementById("gcap");
+  var COUNTS = [["1", "topic"], ["4", "sources read"], ["7", "entities, 5 facts"], ["14 / 30", "questions answered, at least in part"], ["3", "facts behind the answer"]];
+  var CAPS = ["The knowledge graph, empty so far", "Sources it read, and two it left alone", "Thicker line: more sources. Dashed: a weak signal", "Bright: what it could answer. ?: what it couldn't", "The facts and sources behind the answer"];
+  var current = 0, timer = null, playing = false, inView = false;
 
-  // The exam sheet: 30 questions, in the state the 11 November sitting left them.
-  var grid = document.getElementById("grid30");
-  var states = [];
-  for (var i = 0; i < 30; i++) states.push(i < 7 ? "a" : i < 14 ? "p" : "o");
-  grid.innerHTML = states.map(function (s) { return '<span class="q ' + s + '"></span>'; }).join("");
-
-  // The last six sittings of the same 30-question exam.
-  var runs = [["11.2", 32], ["11.3", 32], ["11.4", 28], ["11.5", 33], ["11.6", 32], ["11.11", 35]];
-  var max = 40;
-  document.getElementById("bars").innerHTML = runs.map(function (r) {
-    return '<div><b>' + r[1] + '</b><i style="height:' + (r[1] / max * 100).toFixed(1) + '%"></i><span>' + r[0] + '</span></div>';
+  // the example exam: 9 answered, 5 in part, 16 open
+  document.getElementById("qgrid").innerHTML = Array.apply(null, Array(30)).map(function (_, i) {
+    return '<span class="' + (i < 9 ? "a" : i < 14 ? "p" : "o") + '"></span>';
   }).join("");
 
-  // Copy buttons
+  function show(i, focus) {
+    current = i;
+    var step = i + 1;
+    tabs.forEach(function (t, n) {
+      t.setAttribute("aria-selected", n === i ? "true" : "false");
+      t.tabIndex = n === i ? 0 : -1;
+      t.classList.toggle("done", n < i);
+      var bar = t.querySelector(".bar-fill"); bar.style.animation = "none"; void bar.offsetWidth; bar.style.animation = "";
+    });
+    panes.forEach(function (p, n) { p.hidden = n !== i; });
+    svg.classList.toggle("focusing", step >= 4);
+    els.forEach(function (el) {
+      var from = +el.getAttribute("data-from"), until = el.getAttribute("data-until");
+      var on = step >= from && (!until || step <= +until);
+      el.classList.toggle("on", on);
+      var hot = (el.getAttribute("data-hot") || "").split(" ").indexOf(String(step)) > -1;
+      el.classList.toggle("hot", on && hot);
+    });
+    count.textContent = COUNTS[i][0]; label.textContent = COUNTS[i][1]; cap.textContent = CAPS[i];
+    // a phone shows two or three tabs at a time: bring the current one into view
+    var strip = tabs[i].parentNode, sr = strip.getBoundingClientRect(), tr = tabs[i].getBoundingClientRect();
+    if (tr.left < sr.left || tr.right > sr.right) {
+      strip.scrollTo({ left: Math.max(0, strip.scrollLeft + tr.left - sr.left - 12), behavior: still ? "auto" : "smooth" });
+    }
+    if (focus) tabs[i].focus();
+  }
+  function schedule() {
+    clearTimeout(timer);
+    if (playing && inView && !document.hidden) timer = setTimeout(function () { show((current + 1) % tabs.length); schedule(); }, STEP_MS);
+  }
+  var playBtn = document.getElementById("play");
+  function setPlaying(p) {
+    playing = p;
+    win.classList.toggle("playing", p && inView);
+    playBtn.setAttribute("aria-label", p ? "Pause the walkthrough" : "Play the walkthrough");
+    playBtn.querySelector(".i-pause").style.display = p ? "" : "none";
+    playBtn.querySelector(".i-play").style.display = p ? "none" : "";
+    schedule();
+  }
+  tabs.forEach(function (t, n) {
+    t.addEventListener("click", function () { setPlaying(false); show(n); });
+    t.addEventListener("keydown", function (e) {
+      var k = e.key, to = null;
+      if (k === "ArrowRight") to = (current + 1) % tabs.length;
+      else if (k === "ArrowLeft") to = (current - 1 + tabs.length) % tabs.length;
+      else if (k === "Home") to = 0;
+      else if (k === "End") to = tabs.length - 1;
+      if (to !== null) { e.preventDefault(); setPlaying(false); show(to, true); }
+    });
+  });
+  playBtn.addEventListener("click", function () { setPlaying(!playing); });
+  document.addEventListener("visibilitychange", schedule);
+  if ("IntersectionObserver" in window) {
+    new IntersectionObserver(function (es) {
+      inView = es[0].isIntersecting; win.classList.toggle("playing", playing && inView); schedule();
+    }, { threshold: 0.35 }).observe(win);
+  } else { inView = true; }
+  show(0);
+  setPlaying(!still);   // under reduced motion it waits for a click
+
+  // ── one real night: the exam and its history ──────────────
+  document.getElementById("grid30").innerHTML = Array.apply(null, Array(30)).map(function (_, i) {
+    return '<span class="q ' + (i < 7 ? "a" : i < 14 ? "p" : "o") + '"></span>';
+  }).join("");
+  var runs = [["2 Nov", 32], ["3 Nov", 32], ["4 Nov", 28], ["5 Nov", 33], ["6 Nov", 32], ["11 Nov", 35]];
+  document.getElementById("bars").innerHTML = runs.map(function (r) {
+    return '<div><b>' + r[1] + '</b><i style="height:' + (r[1] / 40 * 100).toFixed(1) + '%"></i><span>' + r[0] + '</span></div>';
+  }).join("");
+
+  // ── copy buttons ──────────────────────────────────────────
   Array.prototype.forEach.call(document.querySelectorAll(".copy"), function (b) {
     b.addEventListener("click", function () {
       var text = b.parentNode.querySelector("code").innerText;
-      var done = function () {
-        var ko = b.querySelector(".ko"), en = b.querySelector(".en");
-        ko.textContent = "복사됨"; en.textContent = "Copied";
-        setTimeout(function () { ko.textContent = "복사"; en.textContent = "Copy"; }, 1800);
-      };
-      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+      if (!navigator.clipboard) return;
+      navigator.clipboard.writeText(text).then(function () {
+        b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1800);
+      }, function () {});
     });
   });
-
-  // The night log writes itself, once.
-  var items = Array.prototype.slice.call(document.querySelectorAll("#log li"));
-  var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  if (!still) {
-    items.forEach(function (li) { li.classList.add("pending"); });
-    items.forEach(function (li, n) { setTimeout(function () { li.classList.remove("pending"); }, 500 + n * 380); });
-  }
 })();
 </script>
 </body>
