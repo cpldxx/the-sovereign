@@ -65,7 +65,7 @@ p { text-wrap: pretty; }
 .wrap { max-width: 72rem; margin: 0 auto; padding-inline: 2rem; }
 @media (max-width: 40rem) { .wrap { padding-inline: 1rem; } }
 .tnum { font-feature-settings: "tnum" 1; }
-[id] { scroll-margin-top: 4.5rem; }   /* anchors land below the sticky bar */
+html { scroll-padding-top: 4.5rem; }   /* anchors and keyboard focus land below the sticky bar */
 
 /* buttons: a press answers at once; hover only where there is a pointer to hover with */
 .btn, .bar nav a, .copy, .seg button, .play {
@@ -74,7 +74,7 @@ p { text-wrap: pretty; }
 .btn:active, .bar nav a.cta:active, .copy:active, .seg button:active { transform: scale(.97); transition-duration: .08s; }
 .play svg { transition: transform .16s var(--ease-out); }
 .play:active svg { transform: scale(.92); }
-@media (prefers-reduced-motion: reduce) { .btn:active, .bar nav a.cta:active, .copy:active, .seg button:active, .play:active svg { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .btn:active, .bar nav a.cta:active, .copy:active, .seg button:active, .play:active svg, .tab:active .n { transform: none; } }
 
 /* top bar */
 .top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(8px); }
@@ -88,11 +88,13 @@ p { text-wrap: pretty; }
   .bar nav a.cta:hover, .btn.primary:hover { background: color-mix(in srgb, var(--ink) 84%, var(--paper)); }
   .copy:hover { border-color: currentColor; }
   .play:hover { color: var(--bone); }
+  .seg button[aria-pressed="false"]:hover { color: var(--ink); }
+  footer nav a:hover, .then a:hover, .sec-head a:hover { color: var(--ink); text-decoration-thickness: 2px; }
 }
 @media (max-width: 52rem) { .bar nav .wide { display: none; } }
 
 /* hero */
-.hero { padding-block: 3rem 2.25rem; text-align: center; }
+.hero { padding-block: 2.25rem; text-align: center; }
 @media (max-width: 40rem) { .hero { padding-block: 2rem 1.75rem; } }
 h1 { font: 600 clamp(2.6rem, 6.5vw, 4.5rem)/1.02 var(--display); letter-spacing: -.03em; margin: 0 auto 1rem; max-width: 14ch; }
 .lede { font-size: 1.1875rem; margin: 0 auto 1.5rem; color: var(--lead); max-width: 38rem; }
@@ -112,7 +114,7 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 4.5rem)/1.02 var(--display); letter-spacing:
   #win { animation: settle .9s var(--ease-out) .2s both; }
 }
 @keyframes rise { from { opacity: 0; transform: translateY(12px); } }
-@keyframes settle { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+@keyframes settle { from { transform: translateY(10px) scale(.985); } }   /* the product is never hidden, only settles */
 
 /* ── the live demo: a learning cycle playing out ─────────────────────── */
 .demo { margin-bottom: 1rem; }
@@ -139,12 +141,15 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 4.5rem)/1.02 var(--display); letter-spacing:
 .tab.done .n { border-color: var(--bone-3); color: var(--bone-2); }
 .tab .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--bone); transform-origin: left; transform: scaleX(0); }
 .tab:focus-visible, .play:focus-visible { outline-offset: -3px; }
-@media (hover: hover) and (pointer: fine) { .tab:hover { color: var(--bone-2); } }
+@media (hover: hover) and (pointer: fine) { .tab:not([aria-selected="true"]):hover { color: var(--bone-2); } }
+.tab .n { transition: transform .16s var(--ease-out); }
+.tab:active .n { transform: scale(.9); transition-duration: .08s; }
 .play { flex: none; min-width: 3.25rem; border: 0; border-left: 1px solid var(--night-rule); background: transparent; color: var(--bone-2); cursor: pointer; display: grid; place-items: center; }
 .play svg { width: 1rem; height: 1rem; }
 .stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); height: 36rem; }
 @media (max-width: 56rem) { .stage { grid-template-columns: 1fr; height: auto; } .graph { order: -1; border-left: 0 !important; border-bottom: 1px solid var(--night-rule); height: 19rem; } #pane { height: 26rem; } }
-@media (max-width: 40rem) { .graph { height: 17rem; } #pane { height: 22rem; } }
+/* on a phone the log comes first: the conversation is what a visitor reads; the graph follows it */
+@media (max-width: 40rem) { .graph { height: 17rem; order: 0; border-bottom: 0; border-top: 1px solid var(--night-rule); } .graph svg { height: calc(100% - 2rem); } #pane { height: 22rem; } }
 /* the title stays; below it the step runs like a log, gliding after its newest line */
 #pane { padding: 1.6rem 1.75rem 1.25rem; display: flex; flex-direction: column; min-height: 0; }
 @media (max-width: 40rem) { #pane { padding: 1.25rem 1rem; } }
@@ -174,7 +179,7 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 4.5rem)/1.02 var(--display); letter-spacing:
 @keyframes blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
 /* streamed text: the whole text is laid out from the first frame, the unwritten part invisible */
 .rest { opacity: 0; }
-.writing .shown::after { content: ""; display: inline-block; width: 1.5px; height: 1em; background: currentColor; margin-left: 1px; vertical-align: -.15em; }
+.writing .shown::after { content: ""; display: inline-block; width: 1.5px; height: 1em; background: currentColor; margin: 0 -2.5px 0 1px; vertical-align: -.15em; }   /* takes no width: lines never re-wrap */
 .done-line { display: flex; align-items: center; gap: .5rem; font-size: .875rem; color: var(--bone-2); margin: 0; }
 .done-line svg { width: 1rem; height: 1rem; color: var(--bone); flex: none; }
 .calls { display: grid; gap: .35rem; margin: 0 0 1rem; }
@@ -210,7 +215,7 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 4.5rem)/1.02 var(--display); letter-spacing:
 .qgrid .p { background-size: 100% 50%; border-color: var(--bone); }
 .qgrid .o { border-color: var(--bone-3); }
 .scoreline { margin: 0 0 1rem; color: var(--bone-2); font-size: .875rem; }
-.scoreline b { font: 600 2rem/1 var(--display); color: var(--bone); margin-right: .3rem; font-feature-settings: "tnum" 1; }
+.scoreline b { font: 600 2rem/1 var(--display); color: var(--bone); margin-right: .1rem; font-feature-settings: "tnum" 1; }
 .next p { margin: 0 0 .4rem; color: var(--bone-2); font-size: .875rem; }
 .next ul { margin: 0; padding-left: 1.1rem; font-size: .875rem; }
 .answer { background: var(--night-2); border: 1px solid var(--night-rule); border-radius: 10px; padding: .9rem 1rem; font-size: .9375rem; line-height: 1.6; }
@@ -219,7 +224,7 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 4.5rem)/1.02 var(--display); letter-spacing:
 .cite { display: inline-grid; place-items: center; min-width: 1.2rem; height: 1.2rem; padding: 0 .25rem; border-radius: 4px; background: var(--bone); color: var(--night); font-size: .75rem; font-weight: 600; vertical-align: .1em; margin-left: .15rem; }
 .srcs { display: flex; flex-wrap: wrap; gap: .4rem; }
 .srcs span { font-size: .75rem; border: 1px solid var(--night-rule); border-radius: 999px; padding: .2rem .6rem; color: var(--bone-2); }
-.srcs b { color: var(--bone); margin-right: .3rem; }
+.srcs b { color: var(--bone); margin-right: .1rem; }
 
 /* the graph: built up by the script */
 .graph { position: relative; border-left: 1px solid var(--night-rule); background: radial-gradient(circle at 50% 50%, rgba(237,231,218,.06), transparent 60%), var(--night); }
@@ -236,7 +241,7 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 4.5rem)/1.02 var(--display); letter-spacing:
 .gn.src text { fill: var(--bone-2); font-size: 10.5px; }
 .gn.x rect { stroke: var(--bone-3); stroke-dasharray: 3 3; }
 .gn.x text { fill: var(--bone-3); }
-.gn.gap circle { fill: none; stroke: var(--bone-3); stroke-dasharray: 3 3; }
+.gn.gap circle { fill: var(--night); stroke: var(--bone-3); stroke-dasharray: 3 3; }
 .gn.gap text { fill: var(--bone-2); font-weight: 600; font-size: 13px; }
 .gn.ping circle, .gn.ping rect { stroke-width: 4; fill: #4A4F55; transition-duration: 80ms; }
 .gn.topic.ping circle { fill: var(--bone); }
@@ -289,9 +294,11 @@ h2 { font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--display); letter-spacing: -.025e
 .charter dt:first-child { margin-top: 0; }
 .charter dd { margin: 0; }
 .panel .charter { margin: 0; }
-.bars { display: grid; grid-template-columns: repeat(6, 1fr); gap: .6rem; align-items: end; height: 6.5rem; margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--night-rule); }
-.bars div { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; text-align: center; }
-.bars i { display: block; background: var(--bone); border-radius: 3px 3px 0 0; opacity: .7; }
+@media (min-width: 56.01rem) { .panel .qgrid { max-width: none; grid-template-columns: repeat(15, 1fr); } }
+.bars { display: grid; grid-template-columns: repeat(6, 1fr); gap: .6rem; align-items: end; margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--night-rule); }
+.bars div { display: flex; flex-direction: column; justify-content: flex-end; text-align: center; }
+/* bars start at zero and keep their true heights (4rem = 40 points) */
+.bars i { display: block; flex: none; background: var(--bone); border-radius: 3px 3px 0 0; opacity: .7; }
 .bars div:last-child i { opacity: 1; }
 .bars b { font: 600 .8125rem/1.2 var(--text); margin-bottom: .25rem; }
 .bars span { font-size: .75rem; color: var(--bone-3); margin-top: .35rem; }
@@ -344,7 +351,7 @@ h2 { font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--display); letter-spacing: -.025e
 .final .wrap { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 3.5rem; align-items: start; }
 @media (max-width: 56rem) { .final .wrap { grid-template-columns: 1fr; gap: 0; } }
 .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; padding: 3px; margin: 0 0 .75rem; background: var(--sheet); }
-.seg button { min-height: 2.5rem; padding: 0 .9rem; border: 0; border-radius: 6px; background: transparent; color: var(--lead); font: 500 .875rem/1 var(--text); cursor: pointer; }
+.seg button { min-height: 2.75rem; padding: 0 .9rem; border: 0; border-radius: 6px; background: transparent; color: var(--lead); font: 500 .875rem/1 var(--text); cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .cmd { background: var(--night); color: var(--bone); border-radius: 10px; display: flex; align-items: flex-start; gap: .75rem; padding: 1.1rem 1rem 1.1rem 1.25rem; }
 .cmd pre { flex: 1; min-width: 0; margin: 0; overflow-x: auto; font-size: .875rem; line-height: 1.75; }
@@ -356,7 +363,9 @@ code.inline { font-size: .875em; background: var(--sheet); border: 1px solid var
 footer { border-top: 1px solid var(--rule); padding-block: 2rem 3rem; font-size: .875rem; color: var(--lead); }
 footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem 2rem; }
 footer p { margin: 0; }
-footer nav { display: flex; gap: 1.5rem; }
+footer nav { display: flex; gap: 1rem; }
+footer nav a { display: inline-block; padding-block: .7rem; }
+@media (max-width: 40rem) { .copy { min-height: 2.75rem; } }
 </style>
 </head>
 <body>
@@ -411,7 +420,7 @@ footer nav { display: flex; gap: 1.5rem; }
       <div class="stage">
         <div id="pane" role="tabpanel" aria-labelledby="t0"></div>
         <div class="graph" aria-hidden="true">
-          <svg viewBox="0 0 560 440" id="g" preserveAspectRatio="xMidYMid meet"><g id="g-edges"></g><g id="g-nodes"></g></svg>
+          <svg viewBox="0 0 560 440" id="g" preserveAspectRatio="xMidYMin meet"><g id="g-edges"></g><g id="g-nodes"></g></svg>
           <span class="gcap" id="gcap">The knowledge graph</span>
         </div>
       </div>
@@ -507,8 +516,8 @@ footer nav { display: flex; gap: 1.5rem; }
           </div>
           <div class="panel">
             <div class="ph"><b>Exam, 30 questions</b><span>7 answered, 7 in part, 16 open</span></div>
-            <div class="qgrid" id="exam-grid" role="img" aria-label="30 questions: 7 answered, 7 in part, 16 open"></div>
-            <div class="bars" id="bars" role="img" aria-label="Last six sittings: 32, 32, 28, 33, 32, 35"></div>
+            <div class="qgrid" role="img" aria-label="30 questions: 7 answered, 7 in part, 16 open"><span class="a"></span><span class="a"></span><span class="a"></span><span class="a"></span><span class="a"></span><span class="a"></span><span class="a"></span><span class="p"></span><span class="p"></span><span class="p"></span><span class="p"></span><span class="p"></span><span class="p"></span><span class="p"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span><span class="o"></span></div>
+            <div class="bars" role="img" aria-label="Last six sittings: 32, 32, 28, 33, 32, 35"><div><b>32</b><i style="height:3.20rem"></i><span>2 Nov</span></div><div><b>32</b><i style="height:3.20rem"></i><span>3 Nov</span></div><div><b>28</b><i style="height:2.80rem"></i><span>4 Nov</span></div><div><b>33</b><i style="height:3.30rem"></i><span>5 Nov</span></div><div><b>32</b><i style="height:3.20rem"></i><span>6 Nov</span></div><div><b>35</b><i style="height:3.50rem"></i><span>11 Nov</span></div></div>
           </div>
         </article>
 
@@ -523,9 +532,9 @@ footer nav { display: flex; gap: 1.5rem; }
             <div class="ph"><b>Head</b><span>Example</span></div>
             <div class="chat"><div class="msg you"><span class="who">You</span>Who is closest to mass production?</div></div>
             <div class="answer">
-              <p>Two makers run pilot lines<span class="cite">1</span><span class="cite">2</span>; one has moved its target to 2027<span class="cite">3</span>.</p>
+              <p>Two makers run pilot lines<span class="cite"><span class="sr-only"> source </span>1</span><span class="cite"><span class="sr-only"> source </span>2</span>; one has moved its target to 2027<span class="cite"><span class="sr-only"> source </span>3</span>.</p>
               <p class="sure">Confirmed by three sources. The newer date replaced an older report.</p>
-              <div class="srcs"><span><b>1</b>Official</span><span><b>2</b>News</span><span><b>3</b>Official</span></div>
+              <div class="srcs"><span><b>1</b> Official</span><span><b>2</b> News</span><span><b>3</b> Official</span></div>
             </div>
           </div>
         </article>
@@ -569,7 +578,7 @@ footer nav { display: flex; gap: 1.5rem; }
         <div class="tile">
           <div class="big tnum">22<small>to</small>35</div>
           <h3>The same exam, sitting after sitting</h3>
-          <p>On the current 30-question exam: 22 at its first sitting, 35 on 11 November. The questions never changed.</p>
+          <p>On the current 30-question exam: 22 at its first sitting, 35 on 11 November. The questions stayed the same.</p>
           <span class="real">Real runs, Nov 2026</span>
         </div>
         <div class="tile">
@@ -662,6 +671,7 @@ cd the-sovereign
       </div>
     </div>
   </section>
+  <p class="sr-only" id="announce" aria-live="polite"></p>
 </main>
 
 <footer>
@@ -679,11 +689,6 @@ cd the-sovereign
   "use strict";
   var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   function $(id) { return document.getElementById(id); }
-  function grid(el, a, p) {
-    el.innerHTML = Array.apply(null, Array(30)).map(function (_, i) {
-      return '<span class="' + (i < a ? "a" : i < a + p ? "p" : "o") + '"></span>';
-    }).join("");
-  }
   var CHECK = '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg>';
 
   /* ════════════════════════════════════════════════════════════════════
@@ -793,7 +798,7 @@ cd the-sovereign
     var out = "";
     for (var i = from; i < to; i++) {
       var w = list[i];
-      if (typeof w === "number") out += '<span class="cite">' + w + "</span>";
+      if (typeof w === "number") out += '<span class="cite"><span class="sr-only"> source </span>' + w + "</span>";
       else out += (i && w !== "," && w !== "." ? " " : "") + w;
     }
     return out;
@@ -838,7 +843,7 @@ cd the-sovereign
     var b = body();
     if (!b || !playing) return;
     var to = b.scrollHeight - b.clientHeight, d = to - b.scrollTop;
-    if (d > 0) b.scrollTop += dt ? Math.max(1, d * (1 - Math.exp(-dt / 90))) : d;
+    if (d > 0) b.scrollTop += dt && !still ? Math.max(1, d * (1 - Math.exp(-dt / 90))) : d;
     b.classList.toggle("scrolled", b.scrollTop > 0);
   }
 
@@ -907,7 +912,7 @@ cd the-sovereign
       dur: 9200, clock: [3 * 60, 3 * 60 + 41], when: "overnight", cap: "Sources it read, and two it left alone",
       pane: '<h3>Every night, it researches</h3><div class="pbody"><div class="calls" id="calls"></div><ul class="rows" id="reads"></ul></div>',
       events: [
-        { at: 0, g: function (i) { drop(["c0", "c1", "c2", "C1", "C2", "C3"], i); } },
+        { at: 0, g: function (i) { drop(["c0", "c1", "c2"], i); } },   // the questions stay open until a fact lands on them
         { at: 200, p: function (i) { call("web_search", '"solid-state battery mass production"', "12 results", i, 800); } },
         { at: 1000, p: function (i) { call("search_papers", '"sulfide electrolyte manufacturing"', "4 papers", i, 800); } },
         { at: 7700, p: function (i) { done("4 pages read, 2 left alone", i); } }
@@ -933,9 +938,9 @@ cd the-sovereign
       pane: '<h3>It turns pages into facts</h3><div class="pbody"><ul class="rows facts" id="facts"></ul></div>',
       events: [
         { at: 0, g: function (i) { drop(["rP1", "rP2", "rO1", "rN1", "X1", "X2"], i); } },
-        { at: 300, g: function (i) { learn("P1", ["E1", "Sulfide electrolyte"], ["E2", "Conductivity", true], ["eA", "E1", "E2"], 1, "solid", i); },
+        { at: 300, g: function (i) { drop(["C1"], i); learn("P1", ["E1", "Sulfide electrolyte"], ["E2", "Conductivity", true], ["eA", "E1", "E2"], 1, "solid", i); },
           p: function (i) { fact("fA", "Sulfide electrolytes reach high conductivity", 1, false, i); } },
-        { at: 1500, g: function (i) { learn("O1", ["E3", "Lithium-metal anode"], ["E4", "Dendrites", true], ["eB", "E3", "E4"], 1, "solid", i); },
+        { at: 1500, g: function (i) { drop(["C2"], i); learn("O1", ["E3", "Lithium-metal anode"], ["E4", "Dendrites", true], ["eB", "E3", "E4"], 1, "solid", i); },
           p: function (i) { fact("fB", "Lithium-metal anodes grow dendrites", 1, false, i); } },
         { at: 2700, g: function (i) { weight("eA", 2); ping("P2", i); }, p: function (i) { strengthen("fA", 2, null, i); } },
         { at: 3800, g: function (i) { learn("P2", null, ["E5", "Dry rooms", true, true], ["eC", "E1", "E5"], 1, "solid", i); },
@@ -944,7 +949,7 @@ cd the-sovereign
         { at: 6000, g: function (i) { learn("N1", null, ["E6", "Cell cost", true], ["eD", "E5", "E6"], 1, "dash", i); },
           p: function (i) { fact("fD", "Dry rooms raise cell cost", 1, true, i); } },
         { at: 7100, g: function (i) { weight("eB", 2); ping("P1", i); }, p: function (i) { strengthen("fB", 2, null, i); } },
-        { at: 8100, g: function (i) { learn("O1", ["E7", "Pilot lines", true], null, null, 0, "", i); },
+        { at: 8100, g: function (i) { drop(["C3"], i); learn("O1", ["E7", "Pilot lines", true], null, null, 0, "", i); },
           p: function (i) { fact("fE", "A pilot line targets 2026", 1, false, i); } },
         { at: 9200, g: function (i) { ping("E7", i); meters.facts++; },
           p: function (i) {
@@ -957,7 +962,7 @@ cd the-sovereign
     },
     { // 4 — it sits an exam
       dur: 9600, clock: [4 * 60 + 30, 4 * 60 + 48], when: "overnight", cap: "Bright: what it can answer. ?: still open",
-      pane: '<h3>It tests itself</h3><div class="pbody"><p class="sub">30 questions from sources the research never reads, answered from the graph alone.</p><div class="qgrid" id="qg"></div><p class="scoreline"><b id="sc">0</b>of 100</p><div class="next" id="next"></div></div>',
+      pane: '<h3>It tests itself</h3><div class="pbody"><p class="sub">30 questions from sources the research doesn\'t read, answered from the graph alone.</p><div class="qgrid" id="qg"></div><p class="scoreline"><b id="sc">0</b> of 100</p><div class="next" id="next"></div></div>',
       events: [
         { at: 0, p: function () { $("qg").innerHTML = Array.apply(null, Array(30)).map(function () { return "<span></span>"; }).join(""); } },
         { at: 400, p: function (i) {
@@ -972,7 +977,10 @@ cd the-sovereign
               var s = Math.round(pts / 60 * 100);
               $("sc").textContent = s; $("m-score").textContent = s;
             }
-            if (i) upto(30); else tween(5600, function (p) { upto(Math.round(30 * p)); });
+            if (i) { upto(30); return; }
+            // a question it knows is graded with a beat of thought, one it can't is passed over quickly
+            var at = 0;
+            GRADES.forEach(function (g, k) { at += g === "a" ? 260 : g === "p" ? 230 : 140; later(at, function () { upto(k + 1); }); });
           } },
         { at: 6100, g: function (i) {
             meters.score = SCORE;
@@ -989,7 +997,7 @@ cd the-sovereign
       dur: 10500, clock: [8 * 60 + 15, 8 * 60 + 16], when: "next morning", cap: "The facts behind the answer",
       pane: '<h3>You ask, it answers</h3><div class="pbody"><div class="chat" id="chat"></div><div class="calls" id="calls"></div><div id="ans"></div></div>',
       events: [
-        { at: 0, g: function () { svg.classList.remove("focusing"); Array.prototype.forEach.call(svg.querySelectorAll(".hot"), function (e) { e.classList.remove("hot"); }); drop(["Q1", "Q2"], true); } },
+        { at: 0, g: function (i) { svg.classList.remove("focusing"); Array.prototype.forEach.call(svg.querySelectorAll(".hot"), function (e) { e.classList.remove("hot"); }); drop(["Q1", "Q2"], i); } },
         { at: 300, p: function (i) { say("you", "What still blocks mass production?", i); } },
         { at: 1500, g: function () { hot(["T"]); },
           p: function (i) { call("query_knowledge_graph", '"mass production blockers"', "6 facts, 4 sources", i, 1300); } },
@@ -1003,7 +1011,7 @@ cd the-sovereign
             stream(box.querySelector(".a1"), ANSWER1, i, 0, onWord);
             stream(box.querySelector(".a2"), ANSWER2, i, 80 * ANSWER1.length + 300, onWord);
           } },
-        { at: 7400, p: function (i) { put($("ans").firstChild, '<div class="srcs"><span><b>1</b>Paper</span><span><b>2</b>Paper</span><span><b>3</b>Official</span><span><b>4</b>News</span></div>', i); } }
+        { at: 7400, p: function (i) { put($("ans").firstChild, '<div class="srcs"><span><b>1</b> Paper</span><span><b>2</b> Paper</span><span><b>3</b> Official</span><span><b>4</b> News</span></div>', i); } }
       ]
     }
   ];
@@ -1041,7 +1049,9 @@ cd the-sovereign
     }
     showMeters(); progress();
   }
+  var warm = still ? 0 : 700;   // the first beat waits for the window to settle into place
   function tick(dt) {
+    if (warm > 0) { warm -= dt; return; }
     var S = STEPS[cur];
     t += dt;
     while (fired < S.events.length && S.events[fired].at <= t) {
@@ -1093,7 +1103,7 @@ cd the-sovereign
   }
   function open(k, focus) {
     // a chosen step plays once and stays; paused, or under reduced motion, it opens finished
-    picked = true;
+    picked = true; warm = 0;
     var quiet = still || held;
     load(k, quiet);
     setPlaying(!quiet);
@@ -1102,7 +1112,7 @@ cd the-sovereign
   tabs.forEach(function (b, n) {
     b.addEventListener("click", function () { open(n); });
     b.addEventListener("keydown", function (e) {
-      var to = { ArrowRight: (cur + 1) % 5, ArrowLeft: (cur + 4) % 5, Home: 0, End: 4 }[e.key];
+      var to = { ArrowRight: (n + 1) % 5, ArrowLeft: (n + 4) % 5, Home: 0, End: 4 }[e.key];   // from the tab that has focus
       if (to !== undefined) { e.preventDefault(); open(to, true); }
     });
   });
@@ -1113,19 +1123,18 @@ cd the-sovereign
     setPlaying(true);
   });
   document.addEventListener("visibilitychange", kick);
+  // a keyboard user arriving on the tabs gets the step they are on, not a moving target
+  win.addEventListener("focusin", function (e) {
+    if (playing && !picked && e.target.classList.contains("tab") && e.target.matches(":focus-visible")) { held = true; setPlaying(false); }
+  });
+  // the top fade follows the log however it moved, including by hand while paused
+  pane.addEventListener("scroll", function (e) { if (e.target.classList && e.target.classList.contains("pbody")) e.target.classList.toggle("scrolled", e.target.scrollTop > 0); }, true);
   if ("IntersectionObserver" in window) {
     new IntersectionObserver(function (es) { inView = es[0].isIntersecting; kick(); }, { threshold: 0.3 }).observe(win);
   } else { inView = true; }
   // under reduced motion the demo opens on its fullest frame: the answer, with the whole graph behind it
   if (still) { load(4, true); setPlaying(false); }
   else { load(0, false); setPlaying(true); }
-
-  // ── the real exam, and its last six sittings ──────────────
-  grid($("exam-grid"), 7, 7);
-  var runs = [["2 Nov", 32], ["3 Nov", 32], ["4 Nov", 28], ["5 Nov", 33], ["6 Nov", 32], ["11 Nov", 35]];
-  $("bars").innerHTML = runs.map(function (r) {
-    return '<div><b>' + r[1] + '</b><i style="height:' + (r[1] / 40 * 100).toFixed(1) + '%"></i><span>' + r[0] + '</span></div>';
-  }).join("");
 
   // ── get started: local or Claude ──────────────────────────
   var MODES = {
@@ -1144,10 +1153,14 @@ cd the-sovereign
   Array.prototype.forEach.call(document.querySelectorAll(".copy"), function (b) {
     b.addEventListener("click", function () {
       var src = $(b.getAttribute("data-copy"));
-      if (!src || !navigator.clipboard) return;
-      navigator.clipboard.writeText(src.textContent).then(function () {
-        b.textContent = "Copied"; setTimeout(function () { b.textContent = "Copy"; }, 1800);
-      }, function () {});
+      if (!src) return;
+      function say(word) { b.textContent = word; $("announce").textContent = word; setTimeout(function () { b.textContent = "Copy"; }, 1800); }
+      function select() {   // no clipboard: select the command so it can be copied by hand
+        var r = document.createRange(); r.selectNodeContents(src);
+        getSelection().removeAllRanges(); getSelection().addRange(r); say("Selected");
+      }
+      if (!navigator.clipboard) { select(); return; }
+      navigator.clipboard.writeText(src.textContent).then(function () { say("Copied"); }, select);
     });
   });
 })();
