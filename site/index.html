@@ -4,16 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The Sovereign — a research lab that never stops</title>
-<meta name="description" content="Give it a topic. Every night it reads the web and the literature, keeps each fact with its source, and proves what it learned on an exam. Open source, on your own machine.">
+<meta name="description" content="Open source and self-hosted. Give it a topic: every night it reads the web and the literature, keeps each fact with its source, and proves what it learned on an exam.">
 <meta property="og:title" content="The Sovereign — a research lab that never stops">
-<meta property="og:description" content="Give it a topic. Every night it reads the web and the literature, keeps each fact with its source, and proves what it learned on an exam.">
+<meta property="og:description" content="Open source and self-hosted. Give it a topic: every night it reads the web and the literature, keeps each fact with its source, and proves what it learned on an exam.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://the-sovereign.pages.dev/">
-<meta name="theme-color" content="#E6E9EA">
+<meta name="theme-color" content="#E6E9EA" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1C2024" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23262B30'/%3E%3Ccircle cx='11' cy='12' r='3' fill='%23EDE7DA'/%3E%3Ccircle cx='22' cy='10' r='2' fill='%23EDE7DA' opacity='.6'/%3E%3Ccircle cx='19' cy='22' r='3.4' fill='%23EDE7DA'/%3E%3Cpath d='M11 12L19 22M22 10L19 22M11 12L22 10' stroke='%23EDE7DA' stroke-width='1.2' opacity='.55'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
 <style>
 :root {
   --paper: #E6E9EA;      /* the page: a cool, pale grey */
@@ -26,8 +27,10 @@
   --night-rule: #3B424A;
   --bone: #EDE7DA;       /* the one accent: bone-white */
   --bone-2: #B9B4A8;
-  --bone-3: #858278;
-  --focus: #3D6FB0;
+  --bone-3: #A09C92;     /* 5.3:1 on night, 4.7:1 on night-2 */
+  --focus: var(--ink);   /* focus is drawn in brightness, like every other state */
+  --ease-out: cubic-bezier(.23, 1, .32, 1);
+  --ease-draw: cubic-bezier(.645, .045, .355, 1);
   --display: "Newsreader", Georgia, serif;
   --text: "IBM Plex Sans", system-ui, sans-serif;
   --code: "IBM Plex Mono", ui-monospace, monospace;
@@ -36,20 +39,27 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --paper: #1C2024; --sheet: #23282D; --ink: #E3E6E8; --lead: #A0A7AE; --rule: #3A4148;
-    --night: #121518; --night-2: #1A1E22; --night-rule: #2E343A; --focus: #7FA8DE; color-scheme: dark;
+    --night: #121518; --night-2: #1A1E22; --night-rule: #2E343A; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --paper: #1C2024; --sheet: #23282D; --ink: #E3E6E8; --lead: #A0A7AE; --rule: #3A4148;
-  --night: #121518; --night-2: #1A1E22; --night-rule: #2E343A; --focus: #7FA8DE; color-scheme: dark;
+  --night: #121518; --night-2: #1A1E22; --night-rule: #2E343A; color-scheme: dark;
 }
+.window, .panel, .cmd, .cmdline, .said { --focus: var(--bone); }
 
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
 body { margin: 0; background: var(--paper); color: var(--ink); font: 400 1rem/1.6 var(--text); -webkit-font-smoothing: antialiased; }
 a { color: inherit; text-underline-offset: .2em; text-decoration-thickness: 1px; }
+pre, code { font-family: var(--code); }
+::selection { background: var(--ink); color: var(--paper); }
+.window ::selection, .panel ::selection, .cmd ::selection, .said ::selection { background: var(--bone); color: var(--night); }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .skip { position: absolute; left: 1rem; top: -4rem; background: var(--ink); color: var(--paper); padding: .6rem 1rem; border-radius: 6px; z-index: 20; }
 .skip:focus { top: 1rem; }
 .wrap { max-width: 72rem; margin: 0 auto; padding-inline: 2rem; }
@@ -57,31 +67,52 @@ a { color: inherit; text-underline-offset: .2em; text-decoration-thickness: 1px;
 .tnum { font-feature-settings: "tnum" 1; }
 [id] { scroll-margin-top: 4.5rem; }   /* anchors land below the sticky bar */
 
+/* buttons: a press answers at once; hover only where there is a pointer to hover with */
+.btn, .bar nav a, .copy, .seg button, .play {
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease, transform .16s var(--ease-out);
+}
+.btn:active, .bar nav a.cta:active, .copy:active, .seg button:active { transform: scale(.97); transition-duration: .08s; }
+.play svg { transition: transform .16s var(--ease-out); }
+.play:active svg { transform: scale(.92); }
+@media (prefers-reduced-motion: reduce) { .btn:active, .bar nav a.cta:active, .copy:active, .seg button:active, .play:active svg { transform: none; } }
+
 /* top bar */
 .top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(8px); }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: .85rem; }
 .mark { font: 600 1.25rem/1 var(--display); letter-spacing: -.01em; text-decoration: none; }
 .bar nav { display: flex; align-items: center; gap: .15rem; font-size: .9375rem; }
 .bar nav a { text-decoration: none; color: var(--lead); padding: .65rem .7rem; border-radius: 6px; }
-.bar nav a:hover { color: var(--ink); background: var(--sheet); }
 .bar nav a.cta { background: var(--ink); color: var(--paper); margin-left: .5rem; padding-inline: 1rem; }
-.bar nav a.cta:hover { background: var(--lead); color: var(--paper); }
+@media (hover: hover) and (pointer: fine) {
+  .bar nav a:not(.cta):hover { color: var(--ink); background: var(--sheet); }
+  .bar nav a.cta:hover, .btn.primary:hover { background: color-mix(in srgb, var(--ink) 84%, var(--paper)); }
+  .copy:hover { border-color: currentColor; }
+  .play:hover { color: var(--bone); }
+}
 @media (max-width: 52rem) { .bar nav .wide { display: none; } }
 
 /* hero */
-.hero { padding-block: 4rem 3rem; text-align: center; }
-@media (max-width: 40rem) { .hero { padding-block: 2.25rem 2rem; } }
-h1 { font: 600 clamp(2.6rem, 6.5vw, 5rem)/1.02 var(--display); letter-spacing: -.03em; margin: 0 auto 1.1rem; max-width: 14ch; }
-.lede { font-size: 1.1875rem; margin: 0 auto 2rem; color: var(--lead); max-width: 36rem; }
+.hero { padding-block: 3rem 2.25rem; text-align: center; }
+@media (max-width: 40rem) { .hero { padding-block: 2rem 1.75rem; } }
+h1 { font: 600 clamp(2.6rem, 6.5vw, 4.5rem)/1.02 var(--display); letter-spacing: -.03em; margin: 0 auto 1rem; max-width: 14ch; }
+.lede { font-size: 1.1875rem; margin: 0 auto 1.5rem; color: var(--lead); max-width: 38rem; }
 .actions { display: flex; flex-wrap: wrap; justify-content: center; gap: .75rem; }
 .btn { display: inline-flex; align-items: center; gap: .55rem; min-height: 2.875rem; padding: 0 1.25rem; border-radius: 6px; font: 500 .9375rem/1 var(--text); text-decoration: none; border: 1px solid var(--ink); cursor: pointer; }
 .btn.primary { background: var(--ink); color: var(--paper); }
-.btn.primary:hover { background: transparent; color: var(--ink); }
-.chip { display: inline-flex; align-items: center; gap: .6rem; max-width: 100%; min-height: 2.875rem; padding: 0 .4rem 0 1rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--sheet); font: 400 .8125rem/1 var(--code); }
+.chip { display: inline-flex; align-items: center; gap: .6rem; max-width: 100%; min-height: 2.875rem; padding: 0 .4rem 0 1rem; border: 1px solid var(--rule); border-radius: 6px; background: var(--sheet); font-size: .8125rem; }
 .chip code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chip .p { color: var(--lead); }
-.copy { flex: none; min-height: 2.1rem; font: 500 .75rem/1 var(--text); color: inherit; background: transparent; border: 1px solid var(--rule); border-radius: 5px; padding: 0 .7rem; cursor: pointer; }
-.copy:hover { border-color: var(--ink); }
+.chip .p { color: var(--lead); font-family: var(--code); }
+.copy { flex: none; min-width: 4.5rem; min-height: 2.1rem; font: 500 .75rem/1 var(--text); color: inherit; background: transparent; border: 1px solid var(--rule); border-radius: 5px; padding: 0 .7rem; cursor: pointer; }
+@media (max-width: 40rem) { .hero .chip { display: none; } }
+/* the one entrance on the page: the headline, then the line under it, then the window settles */
+@media (prefers-reduced-motion: no-preference) {
+  .hero h1 { animation: rise .7s var(--ease-out) both; }
+  .hero .lede { animation: rise .52s var(--ease-out) .3s both; }
+  .hero .actions { animation: rise .52s var(--ease-out) .38s both; }
+  #win { animation: settle .9s var(--ease-out) .2s both; }
+}
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } }
+@keyframes settle { from { opacity: 0; transform: translateY(10px) scale(.985); } }
 
 /* ── the live demo: a learning cycle playing out ─────────────────────── */
 .demo { margin-bottom: 1rem; }
@@ -97,31 +128,38 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 5rem)/1.02 var(--display); letter-spacing: -
 .meters span { color: var(--bone-3); }
 .meters b { margin-left: .35rem; font-feature-settings: "tnum" 1; display: inline-block; min-width: 1.4ch; }
 .ex { border: 1px solid var(--night-rule); border-radius: 999px; padding: .1rem .55rem; color: var(--bone-3); }
-@media (max-width: 40rem) { .meters { order: 4; width: 100%; margin-left: 0; } .chrome .dots { display: none; } }
-.tabs { display: flex; align-items: stretch; border-bottom: 1px solid var(--night-rule); overflow-x: auto; scrollbar-width: none; }
+@media (max-width: 40rem) { .chrome .dots { display: none; } .meters { order: 4; flex: 1; margin-left: 0; } .ex { order: 5; } }
+.tabbar { display: flex; border-bottom: 1px solid var(--night-rule); }
+.tabs { display: flex; align-items: stretch; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
 .tab { position: relative; flex: 1 0 auto; min-height: 3.25rem; padding: .55rem 1rem; background: transparent; border: 0; color: var(--bone-3); font: 500 .9375rem/1.2 var(--text); cursor: pointer; display: flex; align-items: center; gap: .6rem; }
 .tab .n { display: inline-grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; border: 1px solid var(--night-rule); font-size: .75rem; }
-.tab:hover { color: var(--bone-2); }
 .tab[aria-selected="true"] { color: var(--bone); }
 .tab[aria-selected="true"] .n { background: var(--bone); color: var(--night); border-color: var(--bone); }
 .tab.done .n { border-color: var(--bone-3); color: var(--bone-2); }
 .tab .fill { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--bone); transform-origin: left; transform: scaleX(0); }
-.tab:focus-visible { outline-offset: -3px; }
+.tab:focus-visible, .play:focus-visible { outline-offset: -3px; }
+@media (hover: hover) and (pointer: fine) { .tab:hover { color: var(--bone-2); } }
 .play { flex: none; min-width: 3.25rem; border: 0; border-left: 1px solid var(--night-rule); background: transparent; color: var(--bone-2); cursor: pointer; display: grid; place-items: center; }
-.play:hover { color: var(--bone); }
 .play svg { width: 1rem; height: 1rem; }
-.stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); height: 32rem; }
-@media (max-width: 56rem) { .stage { grid-template-columns: 1fr; height: auto; } .graph { order: -1; border-left: 0 !important; border-bottom: 1px solid var(--night-rule); height: 19rem; } #pane { height: 28rem; } }
-/* the title stays; below it the step runs like a log, following its newest line */
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); height: 36rem; }
+@media (max-width: 56rem) { .stage { grid-template-columns: 1fr; height: auto; } .graph { order: -1; border-left: 0 !important; border-bottom: 1px solid var(--night-rule); height: 19rem; } #pane { height: 26rem; } }
+@media (max-width: 40rem) { .graph { height: 17rem; } #pane { height: 22rem; } }
+/* the title stays; below it the step runs like a log, gliding after its newest line */
 #pane { padding: 1.6rem 1.75rem 1.25rem; display: flex; flex-direction: column; min-height: 0; }
-.pbody { flex: 1; min-height: 0; overflow: hidden; }
-.pbody.scrolled { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.5rem); mask-image: linear-gradient(to bottom, transparent 0, #000 1.5rem); }
 @media (max-width: 40rem) { #pane { padding: 1.25rem 1rem; } }
 #pane h3 { font: 500 1.5rem/1.25 var(--display); margin: 0 0 1.1rem; }
 #pane .sub { margin: 0 0 1rem; color: var(--bone-2); font-size: .875rem; }
-.enter { animation: in .3s ease both; }
-@keyframes in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+.pbody { flex: 1; min-height: 0; overflow: hidden; }
+.pbody.scrolled { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 1.25rem); mask-image: linear-gradient(to bottom, transparent 0, #000 1.25rem); }
+#win.paused .pbody { overflow-y: auto; }
+#win.paused .spin, #win.paused .dotdot i { animation-play-state: paused; }
+#pane > * { transition: opacity .2s var(--ease-out); }
+#pane.leaving > * { opacity: 0; }
+#g > g { transition: opacity .4s var(--ease-out); }
+#g.leaving > g { opacity: 0; }
+.enter { animation: in .28s var(--ease-out) both; }
+@keyframes in { from { opacity: 0; transform: translateY(5px); } }
 
 /* pieces of the demo and the panels */
 .chat { display: grid; gap: .55rem; margin: 0 0 1rem; }
@@ -129,12 +167,14 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 5rem)/1.02 var(--display); letter-spacing: -
 .msg.you { justify-self: end; background: var(--bone); color: var(--night); border-bottom-right-radius: 3px; }
 .msg.head { justify-self: start; background: var(--night-2); border: 1px solid var(--night-rule); border-bottom-left-radius: 3px; }
 .msg .who { display: block; font-size: .75rem; color: var(--bone-3); }
-.msg.you .who { color: #6B675E; }
+.msg.you .who { color: #5F5B53; }
 .dotdot { display: inline-flex; gap: 4px; padding: .3rem 0; }
 .dotdot i { width: 6px; height: 6px; border-radius: 50%; background: var(--bone-2); animation: blink 1s infinite; }
 .dotdot i:nth-child(2) { animation-delay: .15s; } .dotdot i:nth-child(3) { animation-delay: .3s; }
 @keyframes blink { 0%, 100% { opacity: .25; } 50% { opacity: 1; } }
-.caret::after { content: ""; display: inline-block; width: 1.5px; height: 1em; background: currentColor; margin-left: 2px; vertical-align: -.15em; animation: blink .8s infinite; }
+/* streamed text: the whole text is laid out from the first frame, the unwritten part invisible */
+.rest { opacity: 0; }
+.writing .shown::after { content: ""; display: inline-block; width: 1.5px; height: 1em; background: currentColor; margin-left: 1px; vertical-align: -.15em; }
 .done-line { display: flex; align-items: center; gap: .5rem; font-size: .875rem; color: var(--bone-2); margin: 0; }
 .done-line svg { width: 1rem; height: 1rem; color: var(--bone); flex: none; }
 .calls { display: grid; gap: .35rem; margin: 0 0 1rem; }
@@ -155,28 +195,28 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 5rem)/1.02 var(--display); letter-spacing: -
 .tier.t2 { background: var(--bone-2); color: var(--night); }
 .tier.t3 { border: 1px solid var(--bone-2); }
 .tier.t4 { border: 1px dashed var(--bone-3); color: var(--bone-2); }
-.facts li { display: block; transition: background .4s ease; }
+.facts li { display: block; transition: background-color .6s ease; }
+.facts li.flash { background: #3A4048; transition-duration: 80ms; }
 .facts .ev { display: flex; align-items: center; gap: .5rem; margin-top: .25rem; font-size: .75rem; color: var(--bone-2); }
 .facts li.weak { border-style: dashed; }
 .facts li.gone { background: transparent; color: var(--bone-3); }
 .facts li.gone > span:first-child { text-decoration: line-through; }
-.facts li.flash { background: #3A4048; }
 .meter { display: inline-flex; gap: 2px; }
-.meter i { width: 14px; height: 4px; border-radius: 2px; background: var(--night-rule); transition: background .3s ease; }
+.meter i { width: 14px; height: 4px; border-radius: 2px; background: var(--night-rule); transition: background-color .3s var(--ease-out); }
 .meter i.on { background: var(--bone); }
 .qgrid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 5px; margin: 0 0 1rem; max-width: 20rem; }
-.qgrid span { aspect-ratio: 1; border-radius: 3px; border: 1.5px solid var(--night-rule); transition: background .25s ease, border-color .25s ease; }
-.qgrid .a { background: var(--bone); border-color: var(--bone); }
-.qgrid .p { background: linear-gradient(to top, var(--bone) 50%, transparent 50%); border-color: var(--bone); }
+.qgrid span { aspect-ratio: 1; border-radius: 3px; border: 1.5px solid var(--night-rule); background: linear-gradient(var(--bone), var(--bone)) bottom / 100% 0 no-repeat; transition: background-size .25s var(--ease-out), border-color .25s var(--ease-out); }
+.qgrid .a { background-size: 100% 100%; border-color: var(--bone); }
+.qgrid .p { background-size: 100% 50%; border-color: var(--bone); }
 .qgrid .o { border-color: var(--bone-3); }
 .scoreline { margin: 0 0 1rem; color: var(--bone-2); font-size: .875rem; }
 .scoreline b { font: 600 2rem/1 var(--display); color: var(--bone); margin-right: .3rem; font-feature-settings: "tnum" 1; }
 .next p { margin: 0 0 .4rem; color: var(--bone-2); font-size: .875rem; }
 .next ul { margin: 0; padding-left: 1.1rem; font-size: .875rem; }
 .answer { background: var(--night-2); border: 1px solid var(--night-rule); border-radius: 10px; padding: .9rem 1rem; font-size: .9375rem; line-height: 1.6; }
-.answer p { margin: 0 0 .75rem; min-height: 1.6em; }
+.answer p { margin: 0 0 .75rem; }
 .answer .sure { color: var(--bone-2); font-size: .8125rem; }
-.cite { display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 .25rem; border-radius: 4px; background: var(--bone); color: var(--night); font-size: .6875rem; font-weight: 600; vertical-align: .12em; margin-left: .15rem; }
+.cite { display: inline-grid; place-items: center; min-width: 1.2rem; height: 1.2rem; padding: 0 .25rem; border-radius: 4px; background: var(--bone); color: var(--night); font-size: .75rem; font-weight: 600; vertical-align: .1em; margin-left: .15rem; }
 .srcs { display: flex; flex-wrap: wrap; gap: .4rem; }
 .srcs span { font-size: .75rem; border: 1px solid var(--night-rule); border-radius: 999px; padding: .2rem .6rem; color: var(--bone-2); }
 .srcs b { color: var(--bone); margin-right: .3rem; }
@@ -185,44 +225,47 @@ h1 { font: 600 clamp(2.6rem, 6.5vw, 5rem)/1.02 var(--display); letter-spacing: -
 .graph { position: relative; border-left: 1px solid var(--night-rule); background: radial-gradient(circle at 50% 50%, rgba(237,231,218,.06), transparent 60%), var(--night); }
 .graph svg { display: block; width: 100%; height: 100%; }
 .gcap { position: absolute; left: 1rem; bottom: .85rem; font-size: .75rem; color: var(--bone-3); }
-.gn { opacity: 0; transform: scale(.55); transform-box: fill-box; transform-origin: center; transition: opacity .45s ease, transform .5s cubic-bezier(.2,.9,.3,1.35); }
-.gn.in { opacity: 1; transform: none; }
-.gn circle { fill: var(--night-2); stroke: var(--bone); stroke-width: 1.5; transition: stroke-width .3s ease, fill .3s ease; }
+/* a node arrives (opacity, then a scale from .8 with no overshoot) and leaves faster than it came */
+.gn { opacity: 0; transform: scale(.8); transform-box: fill-box; transform-origin: center; transition: opacity .2s var(--ease-out), transform .2s var(--ease-out); }
+.gn.in { opacity: 1; transform: none; transition: opacity .3s var(--ease-out), transform .42s var(--ease-out); }
+.gn circle { fill: var(--night-2); stroke: var(--bone); stroke-width: 1.5; transition: stroke-width .45s var(--ease-out), fill .45s var(--ease-out); }
 .gn.topic circle { fill: var(--bone); }
 .gn.topic text { fill: var(--night); font-weight: 600; }
 .gn text { fill: var(--bone); font: 500 12px var(--text); }
-.gn.src rect { fill: var(--night); stroke: var(--bone-2); stroke-width: 1.2; transition: stroke-width .3s ease, fill .3s ease; }
+.gn.src rect { fill: var(--night); stroke: var(--bone-2); stroke-width: 1.2; transition: stroke-width .45s var(--ease-out), fill .45s var(--ease-out); }
 .gn.src text { fill: var(--bone-2); font-size: 10.5px; }
 .gn.x rect { stroke: var(--bone-3); stroke-dasharray: 3 3; }
 .gn.x text { fill: var(--bone-3); }
 .gn.gap circle { fill: none; stroke: var(--bone-3); stroke-dasharray: 3 3; }
 .gn.gap text { fill: var(--bone-2); font-weight: 600; font-size: 13px; }
-.gn.ping circle, .gn.ping rect { stroke-width: 4; fill: #4A4F55; }
+.gn.ping circle, .gn.ping rect { stroke-width: 4; fill: #4A4F55; transition-duration: 80ms; }
 .gn.topic.ping circle { fill: var(--bone); }
-.ge { fill: none; stroke: var(--bone); stroke-linecap: round; opacity: 0; transition: opacity .5s ease, stroke-dashoffset .8s ease, stroke-width .5s ease; }
+.ge { fill: none; stroke: var(--bone); stroke-linecap: round; opacity: 0; transition: opacity .3s var(--ease-out), stroke-dashoffset .45s var(--ease-draw), stroke-width .35s var(--ease-out); }
 .ge.in { opacity: 1; }
 .ge.thin { stroke: var(--bone-3); }
 .ge.dash { stroke: var(--bone-2); stroke-dasharray: 4 4; }
 .ge.read { stroke: var(--bone-3); stroke-dasharray: 2 5; }
 #g.focusing .gn.in:not(.hot), #g.focusing .ge.in:not(.hot) { opacity: .15; }
+#g.focusing .hot { transition-duration: .2s; }
 @media (max-width: 40rem) {
   .gn text { font-size: 18px; } .gn.src text { font-size: 15px; } .gn.topic text { font-size: 15px; }
   .gn.topic circle { r: 50px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .gn, .ge, .enter, .facts li, .qgrid span { transition: none; animation: none; }
+  .gn, .ge, .facts li, .qgrid span, #pane > *, #g > g { transition: none; }
   .gn { transform: none; }
+  .enter { animation: fade .2s ease both; }
 }
-.under { margin: .9rem 0 0; text-align: center; font-size: .875rem; color: var(--lead); }
+@keyframes fade { from { opacity: 0; } }
 
-/* sections */
-section.band { padding-block: 5.5rem; border-top: 1px solid var(--rule); }
+/* sections: rhythm from space, not from rules */
+section.band { padding-block: 5.5rem; }
 @media (max-width: 40rem) { section.band { padding-block: 3.75rem; } }
-.sec-head { text-align: center; max-width: 40rem; margin: 0 auto 3.25rem; }
+.sec-head { max-width: 40rem; margin: 0 0 3rem; }
 h2 { font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--display); letter-spacing: -.025em; margin: 0 0 .9rem; }
 .sec-head p { margin: 0; color: var(--lead); font-size: 1.0625rem; }
 
-/* what it does: number, claim, measured figure, picture */
+/* what it does: the claim, a figure when there is a measured one, and the product doing it */
 .feats { display: grid; gap: 4.5rem; }
 @media (max-width: 40rem) { .feats { gap: 3.25rem; } }
 .feat { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 3.5rem; align-items: center; }
@@ -233,24 +276,26 @@ h2 { font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--display); letter-spacing: -.025e
 .stat { display: flex; align-items: baseline; gap: .75rem; flex-wrap: wrap; border-top: 1px solid var(--rule); padding-top: 1rem; }
 .stat b { font: 600 clamp(2.5rem, 5vw, 3.5rem)/1 var(--display); letter-spacing: -.02em; font-feature-settings: "tnum" 1; }
 .stat span { color: var(--lead); font-size: .9375rem; max-width: 18rem; line-height: 1.45; }
+.stat.plain { display: block; }
+.stat.plain p { margin: 0; color: var(--lead); font-size: .9375rem; max-width: 26rem; }
+.stat.plain b { font: 600 .9375rem/1.45 var(--text); letter-spacing: 0; color: var(--ink); }
 .real { display: inline-block; font-size: .75rem; color: var(--lead); border: 1px solid var(--rule); border-radius: 999px; padding: .1rem .55rem; margin-top: .6rem; }
 .panel { padding: 1.5rem; }
-.panel .ph { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; margin-bottom: 1rem; font-size: .8125rem; color: var(--bone-3); }
+.panel .ph { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: .25rem 1rem; margin-bottom: 1rem; font-size: .8125rem; color: var(--bone-3); }
 .panel .ph b { color: var(--bone); font-weight: 500; font-size: .875rem; }
 .panel .rows { margin: 0; }
-.panel .qgrid span.a { background: var(--bone); border-color: var(--bone); }
 .charter { border: 1px solid var(--night-rule); border-radius: 8px; padding: .8rem 1rem; font-size: .875rem; line-height: 1.5; margin: 0 0 1rem; }
 .charter dt { color: var(--bone-3); font-size: .75rem; margin-top: .4rem; }
 .charter dt:first-child { margin-top: 0; }
-.charter dd { margin: 0; min-height: 1.3em; }
+.charter dd { margin: 0; }
 .panel .charter { margin: 0; }
 .bars { display: grid; grid-template-columns: repeat(6, 1fr); gap: .6rem; align-items: end; height: 6.5rem; margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--night-rule); }
 .bars div { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; text-align: center; }
 .bars i { display: block; background: var(--bone); border-radius: 3px 3px 0 0; opacity: .7; }
 .bars div:last-child i { opacity: 1; }
 .bars b { font: 600 .8125rem/1.2 var(--text); margin-bottom: .25rem; }
-.bars span { font-size: .6875rem; color: var(--bone-3); margin-top: .35rem; }
-.code { background: var(--night-2); border: 1px solid var(--night-rule); border-radius: 8px; padding: .9rem 1rem; font: 400 .78rem/1.65 var(--code); overflow-x: auto; margin: 0 0 1rem; color: var(--bone-2); }
+.bars span { font-size: .75rem; color: var(--bone-3); margin-top: .35rem; }
+.code { background: var(--night-2); border: 1px solid var(--night-rule); border-radius: 8px; padding: .9rem 1rem; font-size: .78rem; line-height: 1.65; overflow-x: auto; margin: 0 0 1rem; color: var(--bone-2); }
 .code .s { color: var(--bone); }
 .tools { display: flex; flex-wrap: wrap; gap: .4rem; }
 .tools span { font: 400 .75rem/1 var(--code); border: 1px solid var(--night-rule); border-radius: 5px; padding: .4rem .5rem; color: var(--bone); }
@@ -266,7 +311,7 @@ h2 { font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--display); letter-spacing: -.025e
 .tile p { margin: 0; color: var(--lead); font-size: .9375rem; }
 .tile .real { align-self: flex-start; margin-top: auto; }
 .tile p + .real { margin-top: 1rem; }
-.honest { text-align: center; color: var(--lead); font-size: .9375rem; margin: 1.75rem auto 0; max-width: 40rem; }
+.honest { color: var(--lead); font-size: .9375rem; margin: 1.75rem 0 0; max-width: 40rem; }
 
 /* models */
 .models { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
@@ -277,34 +322,36 @@ h2 { font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--display); letter-spacing: -.025e
 .model ul { list-style: none; margin: 0 0 1.25rem; padding: 0; display: grid; gap: .55rem; }
 .model li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1rem; font-size: .9375rem; border-top: 1px solid var(--rule); padding-top: .55rem; }
 .model li span:first-child { color: var(--lead); }
-.cmdline { display: flex; align-items: center; gap: .6rem; background: var(--night); color: var(--bone); border-radius: 8px; padding: .55rem .55rem .55rem 1rem; font: 400 .8125rem/1.4 var(--code); }
+.cmdline { display: flex; align-items: center; gap: .6rem; background: var(--night); color: var(--bone); border-radius: 8px; padding: .55rem .55rem .55rem 1rem; font-size: .8125rem; line-height: 1.4; }
 .cmdline code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; }
 .cmdline .copy { color: var(--bone); border-color: var(--night-rule); }
 
-/* what it can do */
-.reach { list-style: none; margin: 0 auto; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 3rem; max-width: 60rem; }
+/* what else it can do */
+.reach { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 3rem; }
 @media (max-width: 48rem) { .reach { grid-template-columns: 1fr; } }
 .reach li { display: grid; grid-template-columns: 1.25rem 1fr; gap: .75rem; padding: .9rem 0; border-top: 1px solid var(--rule); }
 .reach svg { width: 1.1rem; height: 1.1rem; margin-top: .2rem; }
 .reach b { font-weight: 600; }
 .reach span { color: var(--lead); }
-.limits { text-align: center; margin: 2rem 0 0; font-size: .9375rem; color: var(--lead); }
+
+/* what it never does: the page's one dark band */
+.said { background: var(--night); color: var(--bone); padding-block: 6.5rem; }
+@media (max-width: 40rem) { .said { padding-block: 4.5rem; } }
+.said p { font: 600 clamp(1.875rem, 4vw, 3rem)/1.15 var(--display); letter-spacing: -.02em; max-width: 26ch; margin: 0; }
+.said p span { color: var(--bone-3); }
 
 /* get started */
-.final { text-align: center; }
-.trio { display: flex; justify-content: center; gap: 3.5rem; flex-wrap: wrap; margin: 0 0 2.5rem; }
-.trio div { text-align: center; }
-.trio b { display: block; font: 600 3rem/1 var(--display); letter-spacing: -.02em; }
-.trio span { font-size: .875rem; color: var(--lead); }
-.starter { max-width: 40rem; margin: 0 auto; text-align: left; }
+.final .wrap { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 3.5rem; align-items: start; }
+@media (max-width: 56rem) { .final .wrap { grid-template-columns: 1fr; gap: 0; } }
 .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 8px; padding: 3px; margin: 0 0 .75rem; background: var(--sheet); }
 .seg button { min-height: 2.5rem; padding: 0 .9rem; border: 0; border-radius: 6px; background: transparent; color: var(--lead); font: 500 .875rem/1 var(--text); cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .cmd { background: var(--night); color: var(--bone); border-radius: 10px; display: flex; align-items: flex-start; gap: .75rem; padding: 1.1rem 1rem 1.1rem 1.25rem; }
-.cmd pre { flex: 1; min-width: 0; margin: 0; overflow-x: auto; font: 400 .875rem/1.75 var(--code); }
+.cmd pre { flex: 1; min-width: 0; margin: 0; overflow-x: auto; font-size: .875rem; line-height: 1.75; }
+@media (max-width: 40rem) { .cmd pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8125rem; } }
 .cmd .copy { color: var(--bone); border-color: var(--night-rule); }
 .then { color: var(--lead); font-size: .9375rem; margin: .9rem 0 0; }
-code.inline { font: 400 .875em/1 var(--code); background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: .12em .35em; color: var(--ink); }
+code.inline { font-size: .875em; background: var(--sheet); border: 1px solid var(--rule); border-radius: 4px; padding: .12em .35em; color: var(--ink); }
 
 footer { border-top: 1px solid var(--rule); padding-block: 2rem 3rem; font-size: .875rem; color: var(--lead); }
 footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem 2rem; }
@@ -322,7 +369,7 @@ footer nav { display: flex; gap: 1.5rem; }
       <a class="wide" href="#proof">Proof</a>
       <a class="wide" href="#models">Models</a>
       <a href="https://github.com/cpldxx/the-sovereign/blob/main/docs/how-it-works.md">Docs</a>
-      <a class="cta" href="#start">Get started</a>
+      <a class="cta" href="#start">Start your lab</a>
     </nav>
   </header>
 </div>
@@ -330,7 +377,7 @@ footer nav { display: flex; gap: 1.5rem; }
 <main id="main">
   <div class="wrap hero" id="top">
     <h1>A research lab that never stops</h1>
-    <p class="lede">Give it a topic. Every night it reads the web and the literature, keeps each fact with its source, and proves what it learned on an exam.</p>
+    <p class="lede">Open source and self-hosted. Give it a topic: every night it reads the web and the literature, keeps each fact with its source, and proves what it learned on an exam.</p>
     <div class="actions">
       <a class="btn primary" href="#start">Start your lab</a>
       <span class="chip"><span class="p">$</span><code id="hero-cmd">git clone https://github.com/cpldxx/the-sovereign &amp;&amp; cd the-sovereign &amp;&amp; ./sovereign up</code><button class="copy" type="button" data-copy="hero-cmd">Copy</button></span>
@@ -338,7 +385,8 @@ footer nav { display: flex; gap: 1.5rem; }
   </div>
 
   <!-- ── the live demo ───────────────────────────────────── -->
-  <section class="wrap demo" id="demo" aria-label="A learning cycle, playing out">
+  <section class="wrap demo" id="demo" aria-labelledby="demo-title">
+    <h2 class="sr-only" id="demo-title">An example learning cycle, playing out</h2>
     <div class="window" id="win">
       <div class="chrome">
         <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
@@ -347,12 +395,14 @@ footer nav { display: flex; gap: 1.5rem; }
         <span class="meters" aria-hidden="true"><span>Pages<b id="m-pages">0</b></span><span>Facts<b id="m-facts">0</b></span><span>Score<b id="m-score">–</b></span></span>
         <span class="ex">Example</span>
       </div>
-      <div class="tabs" role="tablist" aria-label="Steps of a learning cycle">
-        <button class="tab" role="tab" id="t0" aria-controls="pane" aria-selected="true"><span class="n">1</span>Topic<span class="fill"></span></button>
-        <button class="tab" role="tab" id="t1" aria-controls="pane" aria-selected="false" tabindex="-1"><span class="n">2</span>Research<span class="fill"></span></button>
-        <button class="tab" role="tab" id="t2" aria-controls="pane" aria-selected="false" tabindex="-1"><span class="n">3</span>Learn<span class="fill"></span></button>
-        <button class="tab" role="tab" id="t3" aria-controls="pane" aria-selected="false" tabindex="-1"><span class="n">4</span>Exam<span class="fill"></span></button>
-        <button class="tab" role="tab" id="t4" aria-controls="pane" aria-selected="false" tabindex="-1"><span class="n">5</span>Ask<span class="fill"></span></button>
+      <div class="tabbar">
+        <div class="tabs" role="tablist" aria-label="Steps of a learning cycle">
+          <button class="tab" role="tab" id="t0" aria-controls="pane" aria-selected="true"><span class="n">1</span>Topic<span class="fill"></span></button>
+          <button class="tab" role="tab" id="t1" aria-controls="pane" aria-selected="false" tabindex="-1"><span class="n">2</span>Research<span class="fill"></span></button>
+          <button class="tab" role="tab" id="t2" aria-controls="pane" aria-selected="false" tabindex="-1"><span class="n">3</span>Learn<span class="fill"></span></button>
+          <button class="tab" role="tab" id="t3" aria-controls="pane" aria-selected="false" tabindex="-1"><span class="n">4</span>Exam<span class="fill"></span></button>
+          <button class="tab" role="tab" id="t4" aria-controls="pane" aria-selected="false" tabindex="-1"><span class="n">5</span>Ask<span class="fill"></span></button>
+        </div>
         <button class="play" id="play" type="button" aria-label="Pause the demo">
           <svg class="i-pause" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><rect x="3.5" y="2.5" width="3" height="11" rx="1"/><rect x="9.5" y="2.5" width="3" height="11" rx="1"/></svg>
           <svg class="i-play" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" style="display:none"><path d="M4 2.6v10.8a.6.6 0 00.9.5l8.6-5.4a.6.6 0 000-1L4.9 2.1a.6.6 0 00-.9.5z"/></svg>
@@ -366,24 +416,23 @@ footer nav { display: flex; gap: 1.5rem; }
         </div>
       </div>
     </div>
-    <p class="under">An example topic, played out step by step. The figures below are from real runs.</p>
   </section>
 
-  <!-- ── what it does ────────────────────────────────────── -->
+  <!-- ── how it learns ───────────────────────────────────── -->
   <section class="band" id="how" aria-labelledby="how-title">
     <div class="wrap">
       <div class="sec-head">
-        <h2 id="how-title">What your lab does</h2>
-        <p>One learning cycle, every night at 03:00 by default. Or start one whenever you like.</p>
+        <h2 id="how-title">How your lab learns</h2>
+        <p>One learning cycle every night, at 03:00 by default, or whenever you start one.</p>
       </div>
       <div class="feats">
 
         <article class="feat">
           <div>
             <span class="k">1</span>
-            <h3>It asks what you actually want to know</h3>
-            <p class="say">The Head interviews you and writes a research charter: the goal, the core questions, what to leave out. Every run steers by it.</p>
-            <div class="stat"><b>1</b><span>charter per topic, yours to edit in Settings</span></div>
+            <h3>It asks what you want to know</h3>
+            <p class="say">The Head, the agent that runs your lab, interviews you and writes a research charter: the goal, the core questions, what to leave out. Every run steers by it.</p>
+            <div class="stat plain"><p><b>One charter per topic,</b> yours to edit in Settings.</p></div>
           </div>
           <div class="panel">
             <div class="ph"><b>Research charter</b><span>Example</span></div>
@@ -401,7 +450,7 @@ footer nav { display: flex; gap: 1.5rem; }
             <span class="k">2</span>
             <h3>It reads the web and the literature</h3>
             <p class="say">It searches, opens what it finds, and reads papers from OpenAlex, arXiv and PubMed. Pages behind robots.txt, a login or a paywall are left alone.</p>
-            <div class="stat"><b class="count" data-to="47">47</b><span>pages read in one night: four missions and a check on the week's news</span></div>
+            <div class="stat"><b>47</b><span>pages read in one night: four research missions and a check on the week's news</span></div>
             <span class="real">Real run, 11 Nov 2026</span>
           </div>
           <div class="panel">
@@ -422,7 +471,7 @@ footer nav { display: flex; gap: 1.5rem; }
             <span class="k">3</span>
             <h3>It keeps every fact with its source</h3>
             <p class="say">Pages become facts in a knowledge graph. More sources make a fact stronger, a newer report replaces an older one, and what never holds up is forgotten.</p>
-            <div class="stat"><b class="count" data-to="1010">1,010</b><span>facts stored that night, each with the page it came from</span></div>
+            <div class="stat"><b>1,010</b><span>facts stored that night, each with the page it came from</span></div>
             <span class="real">Real run, 11 Nov 2026</span>
           </div>
           <div class="panel">
@@ -435,13 +484,25 @@ footer nav { display: flex; gap: 1.5rem; }
             </ul>
           </div>
         </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── what it gives back ─────────────────────────────── -->
+  <section class="band" id="gets" aria-labelledby="gets-title">
+    <div class="wrap">
+      <div class="sec-head">
+        <h2 id="gets-title">What you get back</h2>
+        <p>A score you can watch, answers you can check, and a graph your other agents can query.</p>
+      </div>
+      <div class="feats">
 
         <article class="feat">
           <div>
             <span class="k">4</span>
             <h3>It proves what it knows</h3>
             <p class="say">An exam written from sources the research is never allowed to read, answered from the graph alone. What it can't answer becomes the next night's research.</p>
-            <div class="stat"><b class="count" data-to="35">35</b><span>of 100 on a 30-question exam, answered from its own graph</span></div>
+            <div class="stat"><b>35</b><span>of 100 on a 30-question exam, answered from its own graph</span></div>
             <span class="real">Real run, 11 Nov 2026</span>
           </div>
           <div class="panel">
@@ -456,7 +517,7 @@ footer nav { display: flex; gap: 1.5rem; }
             <span class="k">5</span>
             <h3>It answers with sources, and says how sure it is</h3>
             <p class="say">Ask the Head anything about the topic, by text or by voice. It searches the graph, reads the facts behind it, and tells a confirmed fact from a weak signal.</p>
-            <div class="stat"><b class="count" data-to="25">25</b><span>tools the Head can use: the graph, the web, papers, its team</span></div>
+            <div class="stat plain"><p><b>25 tools</b> the Head can use: the graph, the web, papers, its team.</p></div>
           </div>
           <div class="panel">
             <div class="ph"><b>Head</b><span>Example</span></div>
@@ -471,10 +532,9 @@ footer nav { display: flex; gap: 1.5rem; }
 
         <article class="feat">
           <div>
-            <span class="k">6</span>
             <h3>Your other agents can use what it knows</h3>
             <p class="say">The graph is an MCP server. Make an API token, connect Claude Code or any MCP client, and it can query what your lab has learned.</p>
-            <div class="stat"><b class="count" data-to="15">15</b><span>read-only tools over MCP, one token per person</span></div>
+            <div class="stat plain"><p><b>15 read-only tools</b> over MCP, one token per person.</p></div>
           </div>
           <div class="panel">
             <div class="ph"><b>.mcp.json</b><span>for Claude Code</span></div>
@@ -501,19 +561,19 @@ footer nav { display: flex; gap: 1.5rem; }
       </div>
       <div class="proof">
         <div class="tile">
-          <div class="big tnum"><span class="count" data-to="41">41</span><small>to</small><span class="count" data-to="55">55</span></div>
+          <div class="big tnum">41<small>to</small>55</div>
           <h3>Research aimed at its mistakes works</h3>
-          <p>After missions on the practice questions it got wrong, its score on a separate, held-out exam rose from 41 to 55.</p>
+          <p>After research missions on the practice questions it got wrong, its score on a separate, held-out exam rose from 41 to 55.</p>
           <span class="real">Experiment, test domain</span>
         </div>
         <div class="tile">
-          <div class="big tnum"><span class="count" data-to="22">22</span><small>to</small><span class="count" data-to="35">35</span></div>
+          <div class="big tnum">22<small>to</small>35</div>
           <h3>The same exam, sitting after sitting</h3>
           <p>On the current 30-question exam: 22 at its first sitting, 35 on 11 November. The questions never changed.</p>
           <span class="real">Real runs, Nov 2026</span>
         </div>
         <div class="tile">
-          <div class="big tnum"><span class="count" data-to="9">9</span><small>× faster</small></div>
+          <div class="big tnum">9<small>× faster</small></div>
           <h3>Tuned for a model you run yourself</h3>
           <p>With reasoning off, an extraction on a local 35B model takes about 19 seconds instead of 171, at the same quality.</p>
           <span class="real">Measured on qwen3.6:35b</span>
@@ -555,11 +615,11 @@ footer nav { display: flex; gap: 1.5rem; }
     </div>
   </section>
 
-  <!-- ── what it can do ──────────────────────────────────── -->
+  <!-- ── what else it can do ─────────────────────────────── -->
   <section class="band" aria-labelledby="reach-title">
     <div class="wrap">
       <div class="sec-head">
-        <h2 id="reach-title">What it can do</h2>
+        <h2 id="reach-title">What else it can do</h2>
         <p>Each of these runs in the lab today.</p>
       </div>
       <ul class="reach">
@@ -574,7 +634,12 @@ footer nav { display: flex; gap: 1.5rem; }
         <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg><div><b>A nightly security check.</b> <span>No answer without sign-in, no reach across topics, no page past robots.txt.</span></div></li>
         <li><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg><div><b>It recovers on its own.</b> <span>After a crash it picks up the pages it had read and waits while the machine is short of memory.</span></div></li>
       </ul>
-      <p class="limits">It doesn't act in the world: no messages, orders or bookings. It finds out what is true and explains it.</p>
+    </div>
+  </section>
+
+  <section class="said" aria-label="What it never does">
+    <div class="wrap">
+      <p>It doesn't act in the world: no messages, orders or bookings. <span>It finds out what is true and explains it.</span></p>
     </div>
   </section>
 
@@ -583,14 +648,9 @@ footer nav { display: flex; gap: 1.5rem; }
     <div class="wrap">
       <div class="sec-head">
         <h2 id="start-title">Start your lab tonight</h2>
-        <p>All it needs is <a href="https://docs.docker.com/get-docker/">Docker</a>.</p>
+        <p>All it needs is <a href="https://docs.docker.com/get-docker/">Docker</a>. With local models there is no API key to get.</p>
       </div>
-      <div class="trio">
-        <div><b>1</b><span>command to start everything</span></div>
-        <div><b>0</b><span>API keys with local models</span></div>
-        <div><b>03:00</b><span>every night, by default</span></div>
-      </div>
-      <div class="starter">
+      <div>
         <div class="seg" role="group" aria-label="Which models">
           <button type="button" aria-pressed="true" data-mode="local">Local models</button>
           <button type="button" aria-pressed="false" data-mode="claude">Claude API</button>
@@ -628,15 +688,27 @@ cd the-sovereign
 
   /* ════════════════════════════════════════════════════════════════════
      The live demo. A learning cycle on an example topic, played as a
-     script: each step is a list of timed events. An event's `g` part
-     changes the graph and the meters (replayed instantly when a later
-     step is opened); its `p` part writes the step's own panel.
+     script on its own clock: each step is a list of timed events. An
+     event's `g` part changes the graph and the meters (replayed at once
+     when a later step is opened); its `p` part writes the step's panel.
+     Everything that waits — streaming text, a ping fading, a node landing
+     after its line — waits on the demo clock, so a pause stops all of it.
      ════════════════════════════════════════════════════════════════════ */
   var NS = "http://www.w3.org/2000/svg";
   var svg = $("g"), E = $("g-edges"), N = $("g-nodes"), pane = $("pane"), win = $("win");
   var nodes = {}, edges = {}, meters = { pages: 0, facts: 0, score: null };
   var tabs = Array.prototype.slice.call(document.querySelectorAll(".tab"));
-  var cur = 0, t = 0, fired = 0, tweens = [], playing = false, inView = false;
+  var cur = 0, t = 0, fired = 0, tweens = [];
+  var playing = false, inView = false, held = false, picked = false;
+  var POS = {
+    T: [280, 220], E1: [170, 140], E2: [104, 232], E3: [392, 140], E4: [462, 228], E5: [205, 300], E6: [330, 336], E7: [404, 290],
+    P1: [86, 70], P2: [80, 372], O1: [476, 70], N1: [486, 372], X1: [280, 30], X2: [280, 412],
+    Q1: [494, 300], Q2: [92, 300], C1: [170, 140], C2: [392, 140], C3: [404, 290]
+  };
+
+  // ── the clock everything waits on ─────────────────────────
+  function tween(dur, update, done, delay) { tweens.push({ start: t + (delay || 0), dur: dur, update: update, done: done }); }
+  function later(ms, fn, instant) { if (instant) fn(); else tween(1, function () {}, fn, ms); }
 
   // ── the graph ─────────────────────────────────────────────
   function svgEl(tag, attrs, parent) {
@@ -647,9 +719,10 @@ cd the-sovereign
   }
   function reveal(e, instant) {
     if (instant) e.classList.add("in");
-    else setTimeout(function () { e.classList.add("in"); }, 30);
+    else setTimeout(function () { e.classList.add("in"); }, 30);   // one frame laid out at the start state, then the transition
   }
-  function node(id, x, y, label, kind, instant, below) {
+  function node(id, label, kind, instant, below) {
+    var x = POS[id][0], y = POS[id][1];
     var g = svgEl("g", { "class": "gn " + kind }, N);
     if (kind === "topic") {
       svgEl("circle", { cx: x, cy: y, r: 34 }, g);
@@ -665,18 +738,18 @@ cd the-sovereign
       svgEl("circle", { cx: x, cy: y, r: 8 }, g);
       svgEl("text", { x: x, y: below ? y + 24 : y - 16, "text-anchor": "middle" }, g).textContent = label;
     }
-    nodes[id] = { g: g, x: x, y: y };
+    nodes[id] = { g: g };
     reveal(g, instant);
   }
   var WIDTH = [1, 1.4, 2.6, 4];
   function edge(id, a, b, w, kind, instant) {
-    var A = nodes[a], B = nodes[b];
-    var p = svgEl("path", { d: "M" + A.x + " " + A.y + " L" + B.x + " " + B.y, "class": "ge " + kind }, E);
+    var A = POS[a], B = POS[b];
+    var p = svgEl("path", { d: "M" + A[0] + " " + A[1] + " L" + B[0] + " " + B[1], "class": "ge " + kind }, E);
     p.setAttribute("stroke-width", WIDTH[w]);
     edges[id] = p;
     if (instant || kind !== "solid") { reveal(p, instant); return; }
-    // a solid line draws itself from one end to the other
-    var len = Math.ceil(Math.hypot(B.x - A.x, B.y - A.y));
+    // a solid line draws itself from its first end toward the second
+    var len = Math.ceil(Math.hypot(B[0] - A[0], B[1] - A[1]));
     p.style.strokeDasharray = len; p.style.strokeDashoffset = len;
     p.classList.add("in");
     setTimeout(function () { p.style.strokeDashoffset = 0; }, 30);
@@ -688,14 +761,15 @@ cd the-sovereign
       if (!e) return;
       delete edges[id]; delete nodes[id];
       if (instant) { e.remove(); return; }
-      e.classList.remove("in"); setTimeout(function () { e.remove(); }, 500);
+      e.classList.remove("in");
+      later(250, function () { e.remove(); });
     });
   }
   function ping(id, instant) {
     var n = nodes[id];
     if (!n || instant) return;
     n.g.classList.add("ping");
-    setTimeout(function () { n.g.classList.remove("ping"); }, 650);
+    later(300, function () { n.g.classList.remove("ping"); });
   }
   function hot(ids) {
     svg.classList.add("focusing");
@@ -715,21 +789,38 @@ cd the-sovereign
     parent.appendChild(e);
     return e;
   }
-  function tween(dur, update, done, delay) {
-    tweens.push({ start: t + (delay || 0), dur: dur, update: update, done: done });
+  function words(html, from, to, list) {
+    var out = "";
+    for (var i = from; i < to; i++) {
+      var w = list[i];
+      if (typeof w === "number") out += '<span class="cite">' + w + "</span>";
+      else out += (i && w !== "," && w !== "." ? " " : "") + w;
+    }
+    return out;
   }
-  function type(el, text, dur, instant, delay) {
-    if (instant) { el.textContent = text; return; }
-    tween(dur, function (p) {
-      el.textContent = text.slice(0, Math.round(text.length * p));
-      el.classList.toggle("caret", p > 0 && p < 1);
-    }, function () { el.classList.remove("caret"); }, delay);
+  // Text the Head writes streams in by word (80 ms each). The whole text is laid out from the first frame, the unwritten
+  // part invisible, so the box never grows while it writes. `onWord(i)` hears each word as it lands (citations ping).
+  function stream(el, list, instant, delay, onWord) {
+    if (typeof list === "string") list = list.split(" ");
+    function paint(n) { el.innerHTML = '<span class="shown">' + words("", 0, n, list) + '</span><span class="rest">' + words("", n, list.length, list) + "</span>"; }
+    if (instant) { paint(list.length); return; }
+    var shown = -1;
+    paint(0);
+    tween(80 * list.length, function (p) {
+      var n = Math.round(list.length * p);
+      if (n === shown) return;
+      for (var i = Math.max(0, shown); i < n; i++) if (onWord) onWord(list[i]);
+      shown = n; paint(n);
+      el.classList.toggle("writing", n < list.length);
+    }, function () { el.classList.remove("writing"); }, delay);
   }
-  function say(who, text, instant, dur) {
+  function say(who, text, instant) {
     var chat = $("chat"), dots = chat.querySelector(".dots-msg");
     if (dots) dots.remove();
     var m = put(chat, '<div class="msg ' + who + '"><span class="who">' + (who === "you" ? "You" : "Head") + '</span><span class="tx"></span></div>', instant);
-    type(m.querySelector(".tx"), text, dur, instant);
+    var tx = m.querySelector(".tx");
+    if (who === "you") tx.textContent = text;     // you hit send: it arrives whole
+    else stream(tx, text, instant);
   }
   function call(fn, arg, result, instant, dur) {
     var c = put($("calls"), '<div class="call"><span class="spin"></span><span class="fn">' + fn + '</span><span class="arg">(' + arg + ')</span><span class="res"></span></div>', instant);
@@ -738,131 +829,123 @@ cd the-sovereign
       if (s) s.outerHTML = '<svg class="ok" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg>';
       c.querySelector(".res").textContent = result;
     }
-    if (instant) finish(); else tween(dur, function () {}, finish);
+    if (instant) finish(); else later(dur, finish);
   }
-  function done(text, instant) { put(pane.querySelector(".pbody"), '<p class="done-line">' + CHECK + text + '</p>', instant); }
-  function follow() {
-    var b = pane.querySelector(".pbody");
-    if (!b) return;
-    if (b.scrollHeight > b.clientHeight) b.scrollTop = b.scrollHeight;
+  function body() { return pane.querySelector(".pbody"); }
+  function done(text, instant) { put(body(), '<p class="done-line">' + CHECK + text + '</p>', instant); }
+  // the log glides after its newest line instead of jumping a row at a time
+  function follow(dt) {
+    var b = body();
+    if (!b || !playing) return;
+    var to = b.scrollHeight - b.clientHeight, d = to - b.scrollTop;
+    if (d > 0) b.scrollTop += dt ? Math.max(1, d * (1 - Math.exp(-dt / 90))) : d;
     b.classList.toggle("scrolled", b.scrollTop > 0);
   }
 
   // ── the five steps ───────────────────────────────────────
-  var SOURCES = [
-    { id: "P1", tier: "t1", tag: "Paper", title: "Sulfide electrolytes, a review (arXiv)", x: 86, y: 70 },
-    { id: "P2", tier: "t1", tag: "Paper", title: "Dry-room processing, open access (PubMed)", x: 80, y: 372 },
-    { id: "O1", tier: "t2", tag: "Official", title: "A cell maker's pilot-line notice", x: 476, y: 70 },
-    { id: "X1", skip: "robots.txt", tag: "Site", title: "A forum that keeps bots out", x: 280, y: 30 },
-    { id: "N1", tier: "t3", tag: "News", title: "Trade press on cell costs", x: 486, y: 372 },
-    { id: "X2", skip: "paywall", tag: "Journal", title: "A paywalled article", x: 280, y: 412 }
+  var SOURCES = [   // when each page is opened, and how long it takes to read
+    { id: "P1", tier: "t1", tag: "Paper", title: "Sulfide electrolytes, a review (arXiv)", at: 1900, took: 900 },
+    { id: "P2", tier: "t1", tag: "Paper", title: "Dry-room processing, open access (PubMed)", at: 2500, took: 1100 },
+    { id: "O1", tier: "t2", tag: "Official", title: "A cell maker's pilot-line notice", at: 3800, took: 700 },
+    { id: "X1", skip: "robots.txt", tag: "Site", title: "A forum that keeps bots out", at: 4400, took: 300 },
+    { id: "N1", tier: "t3", tag: "News", title: "Trade press on cell costs", at: 5200, took: 1000 },
+    { id: "X2", skip: "paywall", tag: "Journal", title: "A paywalled article", at: 6500, took: 400 }
   ];
   function fact(id, text, n, weak, instant) {
-    var li = put($("facts"), '<li id="' + id + '"' + (weak ? ' class="weak"' : '') + '><span>' + text + '</span><span class="ev"><span class="meter"><i></i><i></i><i></i></span><span class="lbl"></span></span></li>', instant);
+    put($("facts"), '<li id="' + id + '"' + (weak ? ' class="weak"' : '') + '><span>' + text + '</span><span class="ev"><span class="meter"><i></i><i></i><i></i></span><span class="lbl"></span></span></li>', instant);
     strengthen(id, n, weak ? "1 source: a weak signal" : null, true);
-    return li;
   }
   function strengthen(id, n, label, quiet) {
     var li = $(id);
     if (!li) return;
     Array.prototype.forEach.call(li.querySelectorAll(".meter i"), function (i, k) { i.classList.toggle("on", k < n); });
     li.querySelector(".lbl").textContent = label || (n + (n === 1 ? " source" : " sources") + (n === 3 ? ", strong" : ""));
-    if (!quiet) { li.classList.add("flash"); setTimeout(function () { li.classList.remove("flash"); }, 700); }
+    if (!quiet) { li.classList.add("flash"); later(400, function () { li.classList.remove("flash"); }); }
   }
-  // the exam: 9 answered, 5 in part, 16 open, in the order they are graded
-  var GRADES = "aoapoaoaapoaoopaoaoopoooopoooa".split("");
+  // a fact lands in order: its source pings, the near entity appears, the line draws, the far entity arrives at its end
+  function learn(src, near, far, line, w, kind, instant) {
+    ping(src, instant);
+    meters.facts++;
+    if (near) later(120, function () { node(near[0], near[1], "ent", instant, near[2]); edge("t" + near[0], "T", near[0], 0, "thin", instant); }, instant);
+    if (line) later(200, function () { edge(line[0], line[1], line[2], w, kind, instant); }, instant);
+    if (far) later(560, function () { node(far[0], far[1], "ent", instant, far[2]); if (far[3]) edge("t" + far[0], "T", far[0], 0, "thin", instant); }, instant);
+  }
+  // the example exam is graded in this order: 7 answered, 7 in part, 16 open, as in the real sitting
+  var GRADES = "aoapoaoappoaoopaopoopoooopoooa".split("");
   var SCORE = Math.round(GRADES.reduce(function (s, g) { return s + (g === "a" ? 2 : g === "p" ? 1 : 0); }, 0) / 60 * 100);
-  var ANSWER = [["Mostly", "manufacturing.", "Sulfide", "electrolytes", "need", "dry", "rooms"], [1, 2], [",", "and", "lithium-metal", "anodes", "still", "grow", "dendrites"], [3], ["."]];
-  var ANSWER2 = [["The", "cost", "claim", "rests", "on", "one", "report"], [4], [",", "so", "treat", "it", "as", "a", "weak", "signal."]];
-  function pieces(parts) {
-    var out = [];
-    parts.forEach(function (p) { p.forEach(function (w) { out.push(w); }); });
-    return out;
-  }
-  function render(list, n) {
-    var html = "";
-    for (var i = 0; i < n; i++) {
-      var w = list[i];
-      if (typeof w === "number") html += '<span class="cite">' + w + "</span>";
-      else html += (i && w !== "," && w !== "." ? " " : "") + w;
-    }
-    return html;
-  }
+  var CITE_SRC = { 1: "P1", 2: "P2", 3: "O1", 4: "N1" };
+  function answerWords(parts) { var out = []; parts.forEach(function (p) { out = out.concat(typeof p === "string" ? p.split(" ") : [p]); }); return out; }
+  var ANSWER1 = answerWords(["Mostly manufacturing. Sulfide electrolytes need dry rooms", 1, 2, ", and lithium-metal anodes still grow dendrites", 3, "."]);
+  var ANSWER2 = answerWords(["The cost claim rests on one report", 4, ", so treat it as a weak signal."]);
+  ANSWER1 = ANSWER1.filter(Boolean); ANSWER2 = ANSWER2.filter(Boolean);
 
   var STEPS = [
     { // 1 — you give a topic
-      dur: 8600, clock: [14 * 60 + 20, 14 * 60 + 22], when: "afternoon", cap: "The knowledge graph",
+      dur: 9000, clock: [14 * 60 + 20, 14 * 60 + 22], when: "afternoon", cap: "The knowledge graph",
       pane: '<h3>You give it a topic</h3><div class="pbody"><div class="chat" id="chat"></div><div id="charter-slot"></div></div>',
       events: [
-        { at: 200, g: function (i) { node("T", 280, 220, "Solid-state\nbatteries", "topic", i); },
-          p: function (i) { say("you", "Solid-state batteries.", i, 800); } },
-        { at: 1300, p: function (i) { if (!i) put($("chat"), '<div class="msg head dots-msg"><span class="who">Head</span><span class="dotdot"><i></i><i></i><i></i></span></div>', i); } },
-        { at: 2200, p: function (i) { say("head", "What matters most to you: which materials win, or what still blocks mass production?", i, 1600); } },
-        { at: 4200, p: function (i) { say("you", "What blocks mass production.", i, 900); } },
-        { at: 5400, p: function (i) {
+        { at: 200, g: function (i) { node("T", "Solid-state\nbatteries", "topic", i); },
+          p: function (i) { say("you", "Solid-state batteries.", i); } },
+        { at: 1000, p: function (i) { if (!i) put($("chat"), '<div class="msg head dots-msg"><span class="who">Head</span><span class="dotdot"><i></i><i></i><i></i></span></div>', i); } },
+        { at: 2200, p: function (i) { say("head", "What matters most to you: which materials win, or what still blocks mass production?", i); } },
+        { at: 4300, p: function (i) { say("you", "What blocks mass production.", i); } },
+        { at: 5400,
+          g: function (i) {   // the charter's core questions, as the open places the research will fill
+            ["C1", "C2", "C3"].forEach(function (c, k) { node(c, "", "gap", i); edge("c" + k, "T", c, 0, "dash", i); });
+          },
+          p: function (i) {
             var c = put($("charter-slot"), '<dl class="charter"><dt>Goal</dt><dd></dd><dt>Core questions</dt><dd></dd><dt>Leave out</dt><dd></dd></dl>', i);
             var dd = c.querySelectorAll("dd");
-            type(dd[0], "Know what stands between solid-state cells and mass production.", 600, i);
-            type(dd[1], "Which electrolytes lead? What limits yield? Who runs pilot lines?", 700, i, 650);
-            type(dd[2], "Consumer product rumours.", 350, i, 1400);
+            stream(dd[0], "Know what stands between solid-state cells and mass production.", i, 0);
+            stream(dd[1], "Which electrolytes lead? What limits yield? Who runs pilot lines?", i, 900);
+            stream(dd[2], "Consumer product rumours.", i, 1800);
           } },
-        { at: 7300, p: function (i) { done("Charter written. First research tonight at 03:00.", i); } }
+        { at: 7700, p: function (i) { done("Charter written. First research tonight at 03:00.", i); } }
       ]
     },
     { // 2 — it researches
-      dur: 10600, clock: [3 * 60, 3 * 60 + 41], when: "overnight", cap: "Sources it read, and two it left alone",
+      dur: 9200, clock: [3 * 60, 3 * 60 + 41], when: "overnight", cap: "Sources it read, and two it left alone",
       pane: '<h3>Every night, it researches</h3><div class="pbody"><div class="calls" id="calls"></div><ul class="rows" id="reads"></ul></div>',
       events: [
+        { at: 0, g: function (i) { drop(["c0", "c1", "c2", "C1", "C2", "C3"], i); } },
         { at: 200, p: function (i) { call("web_search", '"solid-state battery mass production"', "12 results", i, 800); } },
-        { at: 1000, p: function (i) { call("search_papers", '"sulfide electrolyte manufacturing"', "4 papers", i, 800); } }
-      ].concat(SOURCES.reduce(function (list, s, k) {
-        var at = 1900 + k * 1150;
+        { at: 1000, p: function (i) { call("search_papers", '"sulfide electrolyte manufacturing"', "4 papers", i, 800); } },
+        { at: 7700, p: function (i) { done("4 pages read, 2 left alone", i); } }
+      ].concat(SOURCES.reduce(function (list, s) {
         // the row appears while the page is fetched; the graph and the count change once it is read
-        list.push({ at: at, p: function (i) {
+        list.push({ at: s.at, p: function (i) {
           put($("reads"), '<li id="row-' + s.id + '"' + (s.skip ? ' class="off"' : '') + '><span class="tier ' + (s.tier || "t4") + '">' + s.tag + '</span><span class="t">' + s.title + '</span><span class="st"><span class="spin"></span>' + (s.skip ? "checking" : "reading") + '</span></li>', i);
         } });
-        list.push({ at: at + 700,
+        list.push({ at: s.at + s.took,
           g: function (i) {
-            if (s.skip) { node(s.id, s.x, s.y, s.skip, "src x", i); return; }
-            node(s.id, s.x, s.y, s.tag, "src", i);
+            if (s.skip) { node(s.id, s.skip, "src x", i); return; }
+            node(s.id, s.tag, "src", i);
             edge("r" + s.id, "T", s.id, 0, "read", i);
             meters.pages++;
           },
           p: function () { $("row-" + s.id).querySelector(".st").textContent = s.skip ? "skipped: " + s.skip : "read"; }
         });
         return list;
-      }, [])).concat([
-        { at: 9100, p: function (i) { done("4 pages read, 2 left alone", i); } }
-      ])
+      }, []))
     },
     { // 3 — it learns facts
       dur: 11400, clock: [3 * 60 + 41, 4 * 60 + 30], when: "overnight", cap: "Thicker line: more sources. Dashed: one source",
       pane: '<h3>It turns pages into facts</h3><div class="pbody"><ul class="rows facts" id="facts"></ul></div>',
       events: [
         { at: 0, g: function (i) { drop(["rP1", "rP2", "rO1", "rN1", "X1", "X2"], i); } },
-        { at: 300, g: function (i) {
-            node("E1", 170, 140, "Sulfide electrolyte", "ent", i); node("E2", 104, 232, "Conductivity", "ent", i, true);
-            edge("tE1", "T", "E1", 0, "thin", i); edge("eA", "E1", "E2", 1, "solid", i); ping("P1", i); meters.facts++;
-          }, p: function (i) { fact("fA", "Sulfide electrolytes reach high conductivity", 1, false, i); } },
-        { at: 1500, g: function (i) {
-            node("E3", 392, 140, "Lithium-metal anode", "ent", i); node("E4", 462, 228, "Dendrites", "ent", i, true);
-            edge("tE3", "T", "E3", 0, "thin", i); edge("eB", "E3", "E4", 1, "solid", i); ping("O1", i); meters.facts++;
-          }, p: function (i) { fact("fB", "Lithium-metal anodes grow dendrites", 1, false, i); } },
+        { at: 300, g: function (i) { learn("P1", ["E1", "Sulfide electrolyte"], ["E2", "Conductivity", true], ["eA", "E1", "E2"], 1, "solid", i); },
+          p: function (i) { fact("fA", "Sulfide electrolytes reach high conductivity", 1, false, i); } },
+        { at: 1500, g: function (i) { learn("O1", ["E3", "Lithium-metal anode"], ["E4", "Dendrites", true], ["eB", "E3", "E4"], 1, "solid", i); },
+          p: function (i) { fact("fB", "Lithium-metal anodes grow dendrites", 1, false, i); } },
         { at: 2700, g: function (i) { weight("eA", 2); ping("P2", i); }, p: function (i) { strengthen("fA", 2, null, i); } },
-        { at: 3800, g: function (i) {
-            node("E5", 205, 300, "Dry rooms", "ent", i, true);
-            edge("tE5", "T", "E5", 0, "thin", i); edge("eC", "E1", "E5", 1, "solid", i); ping("P2", i); meters.facts++;
-          }, p: function (i) { fact("fC", "Sulfide electrolytes need dry rooms", 1, false, i); } },
+        { at: 3800, g: function (i) { learn("P2", null, ["E5", "Dry rooms", true, true], ["eC", "E1", "E5"], 1, "solid", i); },
+          p: function (i) { fact("fC", "Sulfide electrolytes need dry rooms", 1, false, i); } },
         { at: 4900, g: function (i) { weight("eA", 3); ping("N1", i); }, p: function (i) { strengthen("fA", 3, null, i); } },
-        { at: 6000, g: function (i) {
-            node("E6", 330, 336, "Cell cost", "ent", i, true);
-            edge("eD", "E5", "E6", 1, "dash", i); ping("N1", i); meters.facts++;
-          }, p: function (i) { fact("fD", "Dry rooms raise cell cost", 1, true, i); } },
+        { at: 6000, g: function (i) { learn("N1", null, ["E6", "Cell cost", true], ["eD", "E5", "E6"], 1, "dash", i); },
+          p: function (i) { fact("fD", "Dry rooms raise cell cost", 1, true, i); } },
         { at: 7100, g: function (i) { weight("eB", 2); ping("P1", i); }, p: function (i) { strengthen("fB", 2, null, i); } },
-        { at: 8100, g: function (i) {
-            node("E7", 404, 290, "Pilot lines", "ent", i, true);
-            edge("tE7", "T", "E7", 0, "thin", i); ping("O1", i); meters.facts++;
-          }, p: function (i) { fact("fE", "A pilot line targets 2026", 1, false, i); } },
+        { at: 8100, g: function (i) { learn("O1", ["E7", "Pilot lines", true], null, null, 0, "", i); },
+          p: function (i) { fact("fE", "A pilot line targets 2026", 1, false, i); } },
         { at: 9200, g: function (i) { ping("E7", i); meters.facts++; },
           p: function (i) {
             var old = $("fE"); old.classList.add("gone"); old.querySelector(".meter").remove();
@@ -880,6 +963,7 @@ cd the-sovereign
         { at: 400, p: function (i) {
             var cells = $("qg").children, pts = 0, shown = 0;
             function upto(n) {
+              if (n === shown) return;
               for (; shown < n; shown++) {
                 var g = GRADES[shown]; cells[shown].className = g;
                 pts += g === "a" ? 2 : g === "p" ? 1 : 0;
@@ -892,39 +976,38 @@ cd the-sovereign
           } },
         { at: 6100, g: function (i) {
             meters.score = SCORE;
-            node("Q1", 494, 300, "", "gap", i); node("Q2", 92, 300, "", "gap", i);
+            node("Q1", "", "gap", i); node("Q2", "", "gap", i);
             hot(["T", "E1", "E2", "E3", "E4", "E5", "E7", "tE1", "tE3", "tE5", "tE7", "eA", "eB", "eC", "Q1", "Q2"]);
           }, p: function (i) {
             var n = put($("next"), '<div><p>Open questions become tonight\'s research:</p><ul><li class="a1"></li><li class="a2"></li></ul></div>', i);
-            type(n.querySelector(".a1"), "Which separator coatings survive 1,000 cycles?", 700, i);
-            type(n.querySelector(".a2"), "Who supplies sulfide powder at scale?", 600, i, 750);
+            stream(n.querySelector(".a1"), "Which separator coatings survive 1,000 cycles?", i);
+            stream(n.querySelector(".a2"), "Who supplies sulfide powder at scale?", i, 600);
           } }
       ]
     },
     { // 5 — you ask
-      dur: 12000, clock: [8 * 60 + 15, 8 * 60 + 16], when: "next morning", cap: "The facts behind the answer",
+      dur: 10500, clock: [8 * 60 + 15, 8 * 60 + 16], when: "next morning", cap: "The facts behind the answer",
       pane: '<h3>You ask, it answers</h3><div class="pbody"><div class="chat" id="chat"></div><div class="calls" id="calls"></div><div id="ans"></div></div>',
       events: [
         { at: 0, g: function () { svg.classList.remove("focusing"); Array.prototype.forEach.call(svg.querySelectorAll(".hot"), function (e) { e.classList.remove("hot"); }); drop(["Q1", "Q2"], true); } },
-        { at: 300, p: function (i) { say("you", "What still blocks mass production?", i, 900); } },
-        { at: 1500, g: function (i) { hot(["T"]); },
+        { at: 300, p: function (i) { say("you", "What still blocks mass production?", i); } },
+        { at: 1500, g: function () { hot(["T"]); },
           p: function (i) { call("query_knowledge_graph", '"mass production blockers"', "6 facts, 4 sources", i, 1300); } },
-        { at: 1900, g: function () { hot(["E1", "E5", "eC", "tE5", "tE1"]); } },
-        { at: 2300, g: function () { hot(["E3", "E4", "eB", "tE3"]); } },
-        { at: 2700, g: function () { hot(["E6", "eD"]); } },
-        { at: 3100, g: function () { hot(["P1", "P2", "O1", "N1"]); } },
-        { at: 3200, p: function (i) {
+        { at: 1800, g: function () { hot(["E1", "E5", "eC", "tE5", "tE1"]); } },
+        { at: 2050, g: function () { hot(["E3", "E4", "eB", "tE3"]); } },
+        { at: 2250, g: function () { hot(["E6", "eD"]); } },
+        { at: 2400, g: function () { hot(["P1", "P2", "O1", "N1"]); } },
+        { at: 3000, p: function (i) {
             var box = put($("ans"), '<div class="answer"><p class="a1"></p><p class="a2 sure"></p></div>', i);
-            var one = pieces(ANSWER), two = pieces(ANSWER2);
-            var a1 = box.querySelector(".a1"), a2 = box.querySelector(".a2");
-            if (i) { a1.innerHTML = render(one, one.length); a2.innerHTML = render(two, two.length); return; }
-            tween(2600, function (p) { a1.innerHTML = render(one, Math.round(one.length * p)); });
-            tween(1500, function (p) { a2.innerHTML = render(two, Math.round(two.length * p)); }, null, 2800);
+            function onWord(w) { if (typeof w === "number") ping(CITE_SRC[w]); }
+            stream(box.querySelector(".a1"), ANSWER1, i, 0, onWord);
+            stream(box.querySelector(".a2"), ANSWER2, i, 80 * ANSWER1.length + 300, onWord);
           } },
-        { at: 8000, p: function (i) { put($("ans").firstChild, '<div class="srcs"><span><b>1</b>Paper</span><span><b>2</b>Paper</span><span><b>3</b>Official</span><span><b>4</b>News</span></div>', i); } }
+        { at: 7400, p: function (i) { put($("ans").firstChild, '<div class="srcs"><span><b>1</b>Paper</span><span><b>2</b>Paper</span><span><b>3</b>Official</span><span><b>4</b>News</span></div>', i); } }
       ]
     }
   ];
+  STEPS.forEach(function (S) { S.events.sort(function (a, b) { return a.at - b.at; }); });
 
   // ── playing it ───────────────────────────────────────────
   function hhmm(m) { m = Math.round(m) % 1440; var h = Math.floor(m / 60), mm = m % 60; return (h < 10 ? "0" : "") + h + ":" + (mm < 10 ? "0" : "") + mm; }
@@ -936,11 +1019,12 @@ cd the-sovereign
   function load(k, instant) {
     cur = k; t = 0; fired = 0; tweens = [];
     E.innerHTML = ""; N.innerHTML = ""; nodes = {}; edges = {};
-    svg.classList.remove("focusing");
+    svg.classList.remove("focusing", "leaving"); pane.classList.remove("leaving");
     meters = { pages: 0, facts: 0, score: null };
     for (var j = 0; j < k; j++) STEPS[j].events.forEach(function (ev) { if (ev.g) ev.g(true); });
     var S = STEPS[k];
     pane.innerHTML = S.pane;
+    if (!instant) pane.querySelector("h3").classList.add("enter");
     pane.setAttribute("aria-labelledby", "t" + k);
     $("gcap").textContent = S.cap; $("when").textContent = S.when;
     tabs.forEach(function (b, n) {
@@ -950,12 +1034,12 @@ cd the-sovereign
     });
     // a phone shows two or three tabs at a time: bring this one into view
     var strip = tabs[k].parentNode, sr = strip.getBoundingClientRect(), tr = tabs[k].getBoundingClientRect();
-    if (tr.left < sr.left || tr.right > sr.right) strip.scrollLeft += tr.left - sr.left - 12;
+    if (tr.left < sr.left || tr.right > sr.right) strip.scrollTo({ left: strip.scrollLeft + tr.left - sr.left - 12, behavior: still ? "auto" : "smooth" });
     if (instant) {
       S.events.forEach(function (ev) { if (ev.g) ev.g(true); if (ev.p) ev.p(true); });
       fired = S.events.length; t = S.dur;
     }
-    showMeters(); progress(); follow();
+    showMeters(); progress();
   }
   function tick(dt) {
     var S = STEPS[cur];
@@ -966,34 +1050,53 @@ cd the-sovereign
       if (ev.p) ev.p(false);
       showMeters();
     }
-    tweens = tweens.filter(function (tw) {
+    // a tween's update may start new tweens (a citation pings, its ping later fades): those join the next round
+    var list = tweens; tweens = [];
+    var kept = list.filter(function (tw) {
       if (t < tw.start) return true;
       var p = Math.min(1, (t - tw.start) / tw.dur);
       tw.update(p);
       if (p >= 1) { if (tw.done) tw.done(); return false; }
       return true;
     });
-    progress(); follow();
-    if (t >= S.dur) load((cur + 1) % STEPS.length, false);
+    tweens = kept.concat(tweens);
+    progress(); follow(dt);
+    var next = (cur + 1) % STEPS.length;
+    if (!picked) {   // the handover: the panel fades out, and on the loop the graph clears gently
+      if (t >= S.dur - 200) pane.classList.add("leaving");
+      if (next === 0 && t >= S.dur - 400) svg.classList.add("leaving");
+    }
+    if (t >= S.dur) {
+      if (picked) setPlaying(false);   // a step the visitor chose stays on screen
+      else load(next, false);
+    }
   }
-  var last = null;
+  // frames run only while the demo plays, on screen, in a visible tab
+  var last = null, looping = false;
+  function running() { return playing && inView && !document.hidden; }
   function frame(now) {
+    if (!running()) { looping = false; return; }
     if (last === null) last = now;
     var dt = Math.min(100, now - last); last = now;
-    if (playing && inView && !document.hidden) tick(dt);
+    tick(dt);
     requestAnimationFrame(frame);
   }
+  function kick() { if (!looping && running()) { looping = true; last = null; requestAnimationFrame(frame); } }
   var playBtn = $("play");
   function setPlaying(p) {
     playing = p;
+    win.classList.toggle("paused", !p);
     playBtn.setAttribute("aria-label", p ? "Pause the demo" : "Play the demo");
     playBtn.querySelector(".i-pause").style.display = p ? "" : "none";
     playBtn.querySelector(".i-play").style.display = p ? "none" : "";
+    kick();
   }
   function open(k, focus) {
-    // under reduced motion a step opens finished; otherwise it plays from its start
-    load(k, still);
-    setPlaying(!still);
+    // a chosen step plays once and stays; paused, or under reduced motion, it opens finished
+    picked = true;
+    var quiet = still || held;
+    load(k, quiet);
+    setPlaying(!quiet);
     if (focus) tabs[k].focus();
   }
   tabs.forEach(function (b, n) {
@@ -1004,15 +1107,18 @@ cd the-sovereign
     });
   });
   playBtn.addEventListener("click", function () {
-    if (!playing && t >= STEPS[cur].dur) load((cur + 1) % STEPS.length, false);
-    setPlaying(!playing);
+    if (playing) { held = true; setPlaying(false); return; }
+    held = false; picked = false;
+    if (t >= STEPS[cur].dur) load((cur + 1) % STEPS.length, false);
+    setPlaying(true);
   });
+  document.addEventListener("visibilitychange", kick);
   if ("IntersectionObserver" in window) {
-    new IntersectionObserver(function (es) { inView = es[0].isIntersecting; }, { threshold: 0.3 }).observe(win);
+    new IntersectionObserver(function (es) { inView = es[0].isIntersecting; kick(); }, { threshold: 0.3 }).observe(win);
   } else { inView = true; }
-  load(0, still);
-  setPlaying(!still);
-  requestAnimationFrame(frame);
+  // under reduced motion the demo opens on its fullest frame: the answer, with the whole graph behind it
+  if (still) { load(4, true); setPlaying(false); }
+  else { load(0, false); setPlaying(true); }
 
   // ── the real exam, and its last six sittings ──────────────
   grid($("exam-grid"), 7, 7);
@@ -1020,26 +1126,6 @@ cd the-sovereign
   $("bars").innerHTML = runs.map(function (r) {
     return '<div><b>' + r[1] + '</b><i style="height:' + (r[1] / 40 * 100).toFixed(1) + '%"></i><span>' + r[0] + '</span></div>';
   }).join("");
-
-  // ── figures count up once, when they come into view ───────
-  var counts = Array.prototype.slice.call(document.querySelectorAll(".count"));
-  function countUp(el) {
-    var to = +el.getAttribute("data-to"), t0 = null;
-    function step(now) {
-      if (t0 === null) t0 = now;
-      var k = Math.min(1, (now - t0) / 1100), e = 1 - Math.pow(1 - k, 3);
-      el.textContent = Math.round(to * e).toLocaleString("en-US");
-      if (k < 1) requestAnimationFrame(step);
-    }
-    requestAnimationFrame(step);
-  }
-  if (!still && "IntersectionObserver" in window) {
-    counts.forEach(function (el) { el.textContent = "0"; });
-    var seen = new IntersectionObserver(function (es) {
-      es.forEach(function (e) { if (e.isIntersecting) { seen.unobserve(e.target); countUp(e.target); } });
-    }, { threshold: 0.6 });
-    counts.forEach(function (el) { seen.observe(el); });
-  }
 
   // ── get started: local or Claude ──────────────────────────
   var MODES = {
