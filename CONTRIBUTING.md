@@ -5,7 +5,7 @@ extraction, a cleaner UI.
 
 ## Set up
 
-Follow *For development* in the [README](README.md#for-development-processes-on-this-machine): Docker for the
+Follow *For development* in the [setup guide](docs/setup.md#for-development-processes-on-this-machine): Docker for the
 databases and search, the three Python services with [uv](https://docs.astral.sh/uv/), the UI with Node.js. Then:
 
 ```bash

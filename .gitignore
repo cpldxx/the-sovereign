@@ -33,3 +33,6 @@ data/
 # A checkout's own domains are data, not code (the template is)
 kg/domains/*/
 !kg/domains/_template/
+
+# Cloudflare deploy cache
+.wrangler/
