@@ -11,7 +11,8 @@
 <meta property="og:url" content="https://the-sovereign.pages.dev/">
 <meta name="theme-color" content="#E6E9EA" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#1C2024" media="(prefers-color-scheme: dark)">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23262B30'/%3E%3Ccircle cx='11' cy='12' r='3' fill='%23EDE7DA'/%3E%3Ccircle cx='22' cy='10' r='2' fill='%23EDE7DA' opacity='.6'/%3E%3Ccircle cx='19' cy='22' r='3.4' fill='%23EDE7DA'/%3E%3Cpath d='M11 12L19 22M22 10L19 22M11 12L22 10' stroke='%23EDE7DA' stroke-width='1.2' opacity='.55'/%3E%3C/svg%3E">
+<link rel="icon" href="/mark.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
@@ -80,6 +81,8 @@ html { scroll-padding-top: 4.5rem; }   /* anchors and keyboard focus land below 
 .top { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--paper) 88%, transparent); backdrop-filter: blur(8px); }
 .bar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-block: .85rem; }
 .mark { font: 600 1.25rem/1 var(--display); letter-spacing: -.01em; text-decoration: none; }
+.mark { display: inline-flex; align-items: center; gap: .6rem; }
+.mark svg { width: 1.625rem; height: 1.625rem; flex: none; }
 .bar nav { display: flex; align-items: center; gap: .15rem; font-size: .9375rem; }
 .bar nav a { text-decoration: none; color: var(--lead); padding: .65rem .7rem; border-radius: 6px; }
 .bar nav a.cta { background: var(--ink); color: var(--paper); margin-left: .5rem; padding-inline: 1rem; }
@@ -92,6 +95,15 @@ html { scroll-padding-top: 4.5rem; }   /* anchors and keyboard focus land below 
   footer nav a:hover, .then a:hover, .sec-head a:hover { color: var(--ink); text-decoration-thickness: 2px; }
 }
 @media (max-width: 52rem) { .bar nav .wide { display: none; } }
+.mark, .bar nav a { white-space: nowrap; }
+@media (max-width: 26rem) {
+  .bar { gap: .5rem; }
+  .mark { gap: .45rem; font-size: 1.125rem; }
+  .mark svg { width: 1.375rem; height: 1.375rem; }
+  .bar nav a { padding-inline: .55rem; }
+  .bar nav a.cta { margin-left: .25rem; padding-inline: .8rem; }
+}
+@media (max-width: 21.5rem) { .bar nav a:not(.cta) { display: none; } }  /* Docs is in the footer too */
 
 /* hero */
 .hero { padding-block: 2.25rem; text-align: center; }
@@ -372,7 +384,7 @@ footer nav a { display: inline-block; padding-block: .7rem; }
 <a class="skip" href="#main">Skip to content</a>
 <div class="top">
   <header class="wrap bar">
-    <a class="mark" href="#top">The Sovereign</a>
+    <a class="mark" href="#top"><svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#24292E"/><g transform="translate(-.5 -.7)" fill="#EDE7DA"><path d="M10.5 12.5 19.5 22.5M22.5 9.5 19.5 22.5M10.5 12.5 22.5 9.5" stroke="#EDE7DA" stroke-width="2" stroke-linecap="round" fill="none"/><circle cx="10.5" cy="12.5" r="3.6"/><circle cx="22.5" cy="9.5" r="2.7"/><circle cx="19.5" cy="22.5" r="4.4"/></g></svg>The Sovereign</a>
     <nav aria-label="Main">
       <a class="wide" href="#how">How it works</a>
       <a class="wide" href="#proof">Proof</a>
