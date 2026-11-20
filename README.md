@@ -11,8 +11,7 @@
   <a href="#quick-start">Quick start</a> &nbsp;|&nbsp;
   <a href="#how-a-night-works">How a night works</a> &nbsp;|&nbsp;
   <a href="#measured">Measured</a> &nbsp;|&nbsp;
-  <a href="#docs">Docs</a> &nbsp;|&nbsp;
-  <a href="README.ko.md">한국어</a>
+  <a href="#docs">Docs</a>
 </p>
 
 ![The Head answering "What still blocks mass production?" with four cited sources, and the facts behind the answer lit in the graph](docs/assets/demo.png)
