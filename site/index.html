@@ -334,15 +334,21 @@ h2 { font: 600 clamp(2rem, 4vw, 3rem)/1.1 var(--display); letter-spacing: -.025e
 
 /* models */
 .models { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; }
-@media (max-width: 52rem) { .models { grid-template-columns: 1fr; } }
+@media (max-width: 52rem) { .models { grid-template-columns: minmax(0, 1fr); } }
 .model { background: var(--sheet); border: 1px solid var(--rule); border-radius: 12px; padding: 1.6rem; }
 .model h3 { font: 600 1.5rem/1.2 var(--display); margin: 0 0 .3rem; }
 .model .fit { color: var(--lead); margin: 0 0 1.25rem; }
 .model ul { list-style: none; margin: 0 0 1.25rem; padding: 0; display: grid; gap: .55rem; }
 .model li { display: grid; grid-template-columns: 6.5rem 1fr; gap: 1rem; font-size: .9375rem; border-top: 1px solid var(--rule); padding-top: .55rem; }
-.model li span:first-child { color: var(--lead); }
+.model li > span:first-child { color: var(--lead); }
+.model .id { white-space: nowrap; }
+@media (max-width: 26rem) {
+  .model { padding: 1.2rem; }
+  .model li { grid-template-columns: 4.75rem 1fr; gap: .75rem; }
+}
 .cmdline { display: flex; align-items: center; gap: .6rem; background: var(--night); color: var(--bone); border-radius: 8px; padding: .55rem .55rem .55rem 1rem; font-size: .8125rem; line-height: 1.4; }
 .cmdline code { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; }
+@media (max-width: 26rem) { .cmdline code { white-space: normal; } }   /* "./sovereign up --claude" breaks at its space, never mid-word */
 .cmdline .copy { color: var(--bone); border-color: var(--night-rule); }
 
 /* what else it can do */
@@ -616,7 +622,7 @@ footer nav a { display: inline-block; padding-block: .7rem; }
           <h3>Local models</h3>
           <p class="fit">Free and private: nothing leaves the machine but its searches and page visits.</p>
           <ul>
-            <li><span>Model</span><span>qwen3.6:35b on Ollama</span></li>
+            <li><span>Model</span><span><span class="id">qwen3.6:35b</span> on Ollama</span></li>
             <li><span>Memory</span><span>about 24 GB free (a 64 GB Mac is comfortable)</span></li>
             <li><span>Cost</span><span>none, no API key</span></li>
           </ul>
@@ -626,11 +632,11 @@ footer nav a { display: inline-block; padding-block: .7rem; }
           <h3>Claude</h3>
           <p class="fit">Any machine, no GPU. The agents think on Claude; only a small embedding model runs locally.</p>
           <ul>
-            <li><span>Model</span><span>claude-opus-5-5, or any Claude model</span></li>
+            <li><span>Model</span><span><span class="id">claude-opus-5-5</span>, or any Claude model</span></li>
             <li><span>Memory</span><span>no GPU needed</span></li>
             <li><span>Cost</span><span>per token, with your Anthropic API key</span></li>
           </ul>
-          <div class="cmdline"><code id="cmd-claude">./sovereign up --claude</code><button class="copy" type="button" data-copy="cmd-claude">Copy</button></div>
+          <div class="cmdline"><code id="cmd-claude">./sovereign up <span class="id">--claude</span></code><button class="copy" type="button" data-copy="cmd-claude">Copy</button></div>
         </div>
       </div>
     </div>
