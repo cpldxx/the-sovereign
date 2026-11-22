@@ -118,6 +118,8 @@ for name in ("research/.env", "hermes/.env", "kg/.env"):          # kg last: it 
                 k, v = line.split("=", 1)
                 if v.strip():
                     existing[k.strip()] = v.strip()
+if "RESEARCH_MODEL" not in existing and existing.get("RESEARCH_OLLAMA_MODEL"):     # its older spelling
+    existing["RESEARCH_MODEL"] = "ollama:" + existing["RESEARCH_OLLAMA_MODEL"]
 generate = {"SOVEREIGN_TOKEN": 32, "ARCADEDB_PASS": 18, "CRAWL4AI_API_TOKEN": 24, "SEARXNG_SECRET": 24}
 legacy = {"ARCADEDB_PASS": "sovereign_pass", "CRAWL4AI_API_TOKEN": "sovereign-local-crawl4ai",
           "SEARXNG_SECRET": "sovereign-local-searxng"}
@@ -137,12 +139,18 @@ for line in (root / ".env.example").read_text().splitlines():
 (root / ".env").chmod(0o600)
 print("wrote .env (secrets generated" + (", values reused from the service .env files)" if existing else ")"))
 PY
+  # A checkout that ran before already chose its models (kg/.env, hermes/.env, research/.env): they stay.
+  if [[ -z "$choice" ]] && grep -qs -e '^LLM_MODEL=.' -e '^HEAD_MODEL=.' -e '^RESEARCH_MODEL=.' -e '^RESEARCH_OLLAMA_MODEL=.' \
+       "$ROOT/kg/.env" "$ROOT/hermes/.env" "$ROOT/research/.env"; then
+    echo "models: kept from the service .env files ($(env_get LLM_MODEL)); ./sovereign init --claude|--local changes them"
+    return
+  fi
   if [[ -z "$choice" && -t 0 ]]; then
     echo
     echo "Which models should the lab think with?"
     echo "  1) On this machine, with Ollama — free and private; wants ~24 GB of free memory (a 64 GB Mac is comfortable)"
     echo "  2) Claude, through Anthropic's API — any machine; you pay per token (an API key from console.anthropic.com)"
-    local answer; read -rp "1 or 2 [1]: " answer
+    local answer=""; read -rp "1 or 2 [1]: " answer || true   # Ctrl-D: the default
     [[ "$answer" == 2 ]] && choice=--claude
   fi
   if [[ "$choice" == --claude ]]; then use_claude; else use_local; fi
@@ -159,7 +167,7 @@ use_claude() {
   echo "models: $CLAUDE_MODEL on Claude; embeddings on Ollama (LLM_MODEL, HEAD_MODEL, RESEARCH_MODEL in .env)"
   if [[ -z "$(env_get ANTHROPIC_API_KEY)" ]]; then
     if [[ -t 0 ]]; then
-      local key; read -rsp "ANTHROPIC_API_KEY (input hidden; Enter to add it to .env later): " key; echo
+      local key=""; read -rsp "ANTHROPIC_API_KEY (input hidden; Enter to add it to .env later): " key || true; echo
       [[ -n "$key" ]] && env_set ANTHROPIC_API_KEY "$key"
     fi
     [[ -n "$(env_get ANTHROPIC_API_KEY)" ]] || echo "put your key in .env: ANTHROPIC_API_KEY=…"
@@ -216,7 +224,8 @@ up() {
   docker info >/dev/null 2>&1 || { echo "Docker isn't running — start Docker Desktop (or the docker service) first"; exit 1; }
   skip_stuck_helper
   init_env "$choice"
-  if uses_claude | grep -q '^anthropic:' && [[ -z "$(env_get ANTHROPIC_API_KEY)" ]]; then
+  # grep reads to the end (no -q): with pipefail, a producer cut off by an early exit fails the whole test
+  if uses_claude | grep '^anthropic:' >/dev/null && [[ -z "$(env_get ANTHROPIC_API_KEY)" ]]; then
     echo "The models are on Claude but .env has no ANTHROPIC_API_KEY — add it (console.anthropic.com), then run up again"
     exit 1
   fi
