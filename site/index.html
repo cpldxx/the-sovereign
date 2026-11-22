@@ -669,7 +669,7 @@ footer nav a { display: inline-block; padding-block: .7rem; }
     <div class="wrap">
       <div class="sec-head">
         <h2 id="start-title">Start your lab tonight</h2>
-        <p>All it needs is <a href="https://docs.docker.com/get-docker/">Docker</a>. With local models there is no API key to get.</p>
+        <p>It needs <a href="https://docs.docker.com/get-docker/">Docker</a> and <a href="https://ollama.com">Ollama</a>, which runs the small embedding model whichever models think. With local models there is no API key to get.</p>
       </div>
       <div>
         <div class="seg" role="group" aria-label="Which models">
@@ -1136,8 +1136,9 @@ cd the-sovereign
   });
   document.addEventListener("visibilitychange", kick);
   // a keyboard user arriving on the tabs gets the step they are on, not a moving target
+  function byKeyboard(el) { try { return el.matches(":focus-visible"); } catch (err) { return false; } }   // older browsers lack it
   win.addEventListener("focusin", function (e) {
-    if (playing && !picked && e.target.classList.contains("tab") && e.target.matches(":focus-visible")) { held = true; setPlaying(false); }
+    if (playing && !picked && e.target.classList.contains("tab") && byKeyboard(e.target)) { held = true; setPlaying(false); }
   });
   // the top fade follows the log however it moved, including by hand while paused
   pane.addEventListener("scroll", function (e) { if (e.target.classList && e.target.classList.contains("pbody")) e.target.classList.toggle("scrolled", e.target.scrollTop > 0); }, true);
@@ -1163,10 +1164,18 @@ cd the-sovereign
 
   // ── copy buttons ──────────────────────────────────────────
   Array.prototype.forEach.call(document.querySelectorAll(".copy"), function (b) {
+    var reset = null;
     b.addEventListener("click", function () {
       var src = $(b.getAttribute("data-copy"));
       if (!src) return;
-      function say(word) { b.textContent = word; $("announce").textContent = word; setTimeout(function () { b.textContent = "Copy"; }, 1800); }
+      function say(word) {
+        // one timer per button: a second click gets its full 1.8 s; the live region is emptied first so the same
+        // word is announced again
+        clearTimeout(reset); b.textContent = word;
+        var live = $("announce"); live.textContent = "";
+        setTimeout(function () { live.textContent = word; }, 50);
+        reset = setTimeout(function () { b.textContent = "Copy"; }, 1800);
+      }
       function select() {   // no clipboard: select the command so it can be copied by hand
         var r = document.createRange(); r.selectNodeContents(src);
         getSelection().removeAllRanges(); getSelection().addRange(r); say("Selected");

@@ -32,8 +32,10 @@ read. The questions it can't answer become the next night's research, so the gra
 
 ## Quick start
 
-Needs [Docker](https://docs.docker.com/get-docker/), and either [Ollama](https://ollama.com) for local models or an
-[Anthropic API key](https://console.anthropic.com) for Claude.
+Needs [Docker](https://docs.docker.com/get-docker/) and [Ollama](https://ollama.com): Ollama runs the small embedding
+model (about 1 GB) whichever models think, and the local model too if you choose it. For Claude, also an
+[Anthropic API key](https://console.anthropic.com). No Ollama on this machine? `./sovereign up --ollama` runs it in a
+container.
 
 ```bash
 git clone https://github.com/cpldxx/the-sovereign.git && cd the-sovereign
