@@ -85,7 +85,7 @@ def _agent(domain: str, description: str) -> Agent:
         name="extractor",
         # Low temperature: the model's default (1.0) made two runs over the same pages agree on under a third of
         # their facts (2026-10-12) — extraction copies what a text says, it doesn't write.
-        model_settings=model_settings(decisive=True),
+        model_settings=model_settings("extractor", decisive=True),
         system_prompt=SYSTEM.format(domain=domain, description=description, state=STATE),
         output_type=Extraction,
         retries=3,
@@ -141,7 +141,7 @@ RELATION TYPES (when only the reverse relation is listed, swap source and target
 - source and target are names from that statement's ENTITIES list, spelled as listed, and different.
 - No relation type fits → nothing for that statement. Most statements give zero, one or two relations."""
 
-_relate = Agent(MODEL, name="relate", model_settings=model_settings(decisive=True), system_prompt=RELATE,
+_relate = Agent(MODEL, name="relate", model_settings=model_settings("extractor", decisive=True), system_prompt=RELATE,
                 output_type=Relations, retries=2)
 
 

@@ -46,7 +46,7 @@ as one of its CANDIDATES (existing entities).
 - If you are not sure, give your best answer and set confident = false.
 Return one resolution per new entity, with its index."""
 
-_agent = Agent(MODEL, name="resolver", model_settings=model_settings(decisive=True),
+_agent = Agent(MODEL, name="resolver", model_settings=model_settings("resolver", decisive=True),
                system_prompt=SYSTEM, output_type=Resolutions, retries=3)
 
 

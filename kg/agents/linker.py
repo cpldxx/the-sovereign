@@ -59,7 +59,7 @@ SYSTEM = """You are the Sovereign's Linker. For each NEW fact, compare it with i
 - If you are not sure about a same_as or supersedes decision, still give it and set confident = false.
 Return one link per new fact, with its index."""
 
-_agent = Agent(MODEL, name="linker", model_settings=model_settings(decisive=True),
+_agent = Agent(MODEL, name="linker", model_settings=model_settings("linker", decisive=True),
                system_prompt=SYSTEM, output_type=Links, retries=3)
 
 

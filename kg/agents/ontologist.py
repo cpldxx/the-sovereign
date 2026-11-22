@@ -39,7 +39,7 @@ MAX_EXCERPTS = 10
 async def generate_ontology(domain_name: str, description: str, corpus: list[str] | None = None) -> Ontology:
     """`corpus`: texts from real sources (research) to ground the grammar in; without it the
     ontology comes from the description alone."""
-    agent = Agent(MODEL, name="ontologist", model_settings=model_settings(), system_prompt=SYSTEM_PROMPT,
+    agent = Agent(MODEL, name="ontologist", model_settings=model_settings("ontologist"), system_prompt=SYSTEM_PROMPT,
                   output_type=Ontology, retries=3)
     prompt = f"Domain: {domain_name}\nDescription: {description}\n"
     if corpus:

@@ -166,7 +166,7 @@ async def draft(db: ArcadeDB, domain: str, notes: str = "") -> dict:
     description = registry.load_domain(domain)["config"].get("description") or domain
     current = (f"\n\nThe current charter, to revise with the notes (keep what they don't change):\n{text(state['charter'])}"
                if state["charter"] else "")
-    agent = Agent(MODEL, name="charter", model_settings=model_settings(), output_type=Charter, retries=2,
+    agent = Agent(MODEL, name="charter", model_settings=model_settings("strategist"), output_type=Charter, retries=2,
                   system_prompt=PROMPT.format(domain=domain, description=description, today=date.today().isoformat(),
                                               current=current))
 

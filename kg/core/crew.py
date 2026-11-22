@@ -596,7 +596,7 @@ _waiters: dict[str, asyncio.Future] = {}
 _background: set[asyncio.Task] = set()
 _wakes: dict[str, deque] = defaultdict(deque)     # domain → wake times (monotonic)
 _waking: set[str] = set()
-_consult = Agent(model_for("crew"), name="crew_consult", model_settings=model_settings(), output_type=str, retries=2)
+_consult = Agent(model_for("crew"), name="crew_consult", model_settings=model_settings("crew"), output_type=str, retries=2)
 
 
 async def _queue_length(db: ArcadeDB) -> int:

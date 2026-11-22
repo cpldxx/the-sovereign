@@ -40,9 +40,14 @@ OTHER_MODELS_GB = float(os.getenv("RESEARCH_OTHER_MODELS_GB", "8"))
 
 
 def _local_models() -> set[str]:
-    """The lab's language models served by Ollama (none when they all run on Claude)."""
-    names = {v.split(":", 1)[1] for k in ("LLM_MODEL", "HEAD_MODEL") if (v := os.getenv(k, "")).startswith("ollama:")}
-    provider, model = runner.research_model()
+    """The lab's language models served by Ollama (none when they all run on Claude): the KG's (LLM_MODEL and any
+    agent's own LLM_MODEL_<AGENT>), the Head's and the research agent's."""
+    names = {v.split(":", 1)[1] for k, v in os.environ.items()
+             if (k in ("LLM_MODEL", "HEAD_MODEL") or k.startswith("LLM_MODEL_")) and v.startswith("ollama:")}
+    try:
+        provider, model = runner.research_model()
+    except ValueError:   # a bad RESEARCH_MODEL: the run itself fails and says why
+        return names
     if provider == "ollama":
         names.add(model)
     return names

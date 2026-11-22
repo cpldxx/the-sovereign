@@ -40,7 +40,7 @@ and what is currently known about it, from its CURRENT FACTS only.
 - Use no outside knowledge and do not speculate. No lists, no markdown.
 Return one summary per entity, with its index."""
 
-_agent = Agent(MODEL, name="summarizer", model_settings=model_settings(), system_prompt=SYSTEM,
+_agent = Agent(MODEL, name="summarizer", model_settings=model_settings("summarizer"), system_prompt=SYSTEM,
                output_type=Summaries, retries=3)
 
 

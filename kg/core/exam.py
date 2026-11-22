@@ -213,7 +213,7 @@ async def _ask(output_type, system_prompt: str, prompt: str, context: str = "", 
     answer and grade (at 0.1 one graph scored 41, 23 and 36: answers took either side of a debate, one answer was graded
     1, 0 and 1 — 2026-10-28)."""
     def agent(validated: bool) -> Agent:
-        settings = {**model_settings(decisive=decisive), **({"temperature": 0.0} if exact else {})}
+        settings = {**model_settings("examiner", decisive=decisive), **({"temperature": 0.0} if exact else {})}
         a = Agent(MODEL, name="examiner", model_settings=settings, output_type=output_type,
                   retries=2 if validated else 4, system_prompt=system_prompt)
         if validated:

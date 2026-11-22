@@ -885,7 +885,7 @@ async def _search_texts(db: ArcadeDB, domain: str, question: str) -> list[str]:
             texts = kept[0]["texts"]
         else:
             agent = Agent(model_for("searcher"), name="search_texts", system_prompt=SEARCH,
-                          model_settings={**model_settings(), "temperature": 0.0})   # one question, one search
+                          model_settings={**model_settings("searcher"), "temperature": 0.0})   # one question, one search
             try:
                 out = str((await agent.run(question)).output).strip()
             except Exception as e:   # a search must not fail over its preparation

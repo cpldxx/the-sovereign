@@ -140,7 +140,11 @@ def run(prompt: str, on_step: Callable[[str], None], thread_id: str | None = Non
 
 
 def model_name() -> str:
-    return ":".join(research_model())
+    """For /health: a RESEARCH_MODEL that can't be read is shown as it is (config_ok() reports it), not a 500."""
+    try:
+        return ":".join(research_model())
+    except ValueError:
+        return f"{os.getenv('RESEARCH_MODEL', '')} (not ollama:<model> or anthropic:<model>)"
 
 
 def tracing() -> bool:

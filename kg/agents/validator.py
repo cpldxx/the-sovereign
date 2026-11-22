@@ -47,7 +47,7 @@ For each fact:
 - Do NOT judge facts against your own knowledge: the source may report events newer than your training data.
 Return one verdict per fact, with its index; give a reason (a few words) only for a fact that is not supported."""
 
-_agent = Agent(MODEL, name="validator", model_settings=model_settings(decisive=True),
+_agent = Agent(MODEL, name="validator", model_settings=model_settings("validator", decisive=True),
                system_prompt=SYSTEM, output_type=Verdicts, retries=3)
 
 

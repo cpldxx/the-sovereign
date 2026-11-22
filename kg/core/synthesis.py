@@ -174,7 +174,7 @@ async def _write(domain: str, core: str, c: dict, ev: dict) -> Review:
     request = f"FACTS:\n{_numbered(ev)}" + ("\n\nWrite the review in Korean (한국어로)." if korean else "")
 
     async def run(validated: bool) -> Review:
-        agent = Agent(MODEL, name="synthesis", model_settings=model_settings(), output_type=Review,
+        agent = Agent(MODEL, name="synthesis", model_settings=model_settings("summarizer"), output_type=Review,
                       retries=2 if validated else 4, system_prompt=prompt)
         if validated:
             agent.output_validator(checked)

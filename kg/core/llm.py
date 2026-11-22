@@ -47,23 +47,29 @@ def _model(name: str) -> Model:
     return infer_model(name)
 
 
+def model_name(agent: str = "") -> str:
+    """The "<provider>:<model>" an agent uses: its own override (LLM_MODEL_<AGENT>), else LLM_MODEL."""
+    return (agent and os.getenv(f"LLM_MODEL_{agent.upper()}")) or os.getenv("LLM_MODEL") or DEFAULT_MODEL
+
+
 def model_for(agent: str) -> Model:
     """The model an agent should use (its own override, else LLM_MODEL), asked again on a server error."""
-    model = _model(os.getenv(f"LLM_MODEL_{agent.upper()}") or os.getenv("LLM_MODEL") or DEFAULT_MODEL)
+    model = _model(model_name(agent))
     return FallbackModel(model, *[model] * MODEL_RETRIES) if MODEL_RETRIES > 0 else model
 
 
-def model_settings(decisive: bool = False) -> ModelSettings:
+def model_settings(agent: str = "", decisive: bool = False) -> ModelSettings:
     """Reasoning off by default: the KG agents extract and validate, they don't need to think.
 
     On qwen3.6:35b (M1 Max) an entity+relation extraction takes ~19 s without thinking and
     ~171 s with it, at no quality gain. pydantic-ai's unified `thinking=False` alone still
     leaves Qwen3 reasoning through Ollama (577 → 281 output tokens); the OpenAI-compatible
     `reasoning_effort="none"` turns it fully off (→ 137). Providers that don't use it ignore it.
+    `agent`: whose model the settings are for (as in model_for) — one agent may run on Claude, another locally.
     `decisive`: a low temperature for agents that judge rather than write.
     On Claude only the effort is set (EFFORT); pydantic-ai drops a temperature a caller adds for such a model.
     """
-    if (os.getenv("LLM_MODEL") or DEFAULT_MODEL).startswith("anthropic:"):
+    if model_name(agent).startswith("anthropic:"):
         return {"anthropic_effort": EFFORT}
     settings: ModelSettings = {} if THINKING else {"thinking": False, "openai_reasoning_effort": "none"}
     # qwen3.6's Ollama defaults carry presence_penalty 1.5: it pushes the model off words it already wrote — and an

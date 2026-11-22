@@ -38,7 +38,7 @@ matters."""
 
 
 async def research_questions(domain: str, description: str, gaps: str, n: int) -> ResearchQuestions:
-    agent = Agent(MODEL, name="strategist", model_settings=model_settings(), output_type=ResearchQuestions, retries=2,
+    agent = Agent(MODEL, name="strategist", model_settings=model_settings("strategist"), output_type=ResearchQuestions, retries=2,
                   system_prompt=CURIOUS.format(domain=domain, description=description, n=n,
                                                today=date.today().isoformat()))
     out = (await agent.run(gaps)).output

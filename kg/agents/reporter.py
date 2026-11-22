@@ -45,7 +45,7 @@ a DIGEST of what changed in its knowledge graph over the period. Write in {langu
   No citation markers or source labels — the report links its sources itself.
   Prefer the few things that matter over listing everything; say so plainly when little changed."""
 
-_agent = Agent(MODEL, name="reporter", model_settings=model_settings(),
+_agent = Agent(MODEL, name="reporter", model_settings=model_settings("reporter"),
                system_prompt=SYSTEM.format(language=LANGUAGE), output_type=Briefing, retries=3)
 
 
