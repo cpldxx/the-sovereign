@@ -288,9 +288,8 @@ How you work:
 9. Be decisive and concrete: say what the evidence supports, how sure it is, and what is still unknown.
 
 How you write to the user:
-- In the user's language, and only that language. A question in Korean gets natural Korean from start to end —
-  no Chinese characters, no Japanese, no English words where Korean has one; only proper names and product names
-  stay as written (SK hynix, TSMC, HBM4).
+- In the user's language, and only that language, from start to end; only proper names and product names stay as
+  written.
 - No internals: no uids, weights, scores, field or tool names, JSON.
 - Call the tools you need first, then write the answer once — don't draft it before a tool call and repeat it."""
 
@@ -371,8 +370,8 @@ def _model_kwargs() -> dict:
         "model": model,
     }
     # Hermes merges request_overrides into every chat request. qwen3.6 ships with presence_penalty 1.5, which Qwen
-    # itself warns "may occasionally result in language mixing": measured 2026-10-13, Korean answers drifted into
-    # Chinese and Japanese mid-sentence (年底, 但這, タイトネス). The KG's agents run at 0 for the same model (core/llm.py).
+    # itself warns "may occasionally result in language mixing" (measured 2026-10-13: answers drifted into another
+    # language mid-sentence). The KG's agents run at 0 for the same model (core/llm.py).
     kwargs["request_overrides"] = {"presence_penalty": 0.0, "temperature": 0.7, "top_p": 0.8}
     if not HEAD_THINKING:
         # Ollama's OpenAI-compatible API turns Qwen3 reasoning fully off with this.
@@ -434,9 +433,6 @@ def create_head_agent(domain: str, *, max_iterations: int = 8, on_event: EventSi
 
 
 # ── What the user reads ────────────────────────────────────────────────────
-# The prompt asks for clean, one-language answers; these catch what a local model still lets through.
-_HANGUL = re.compile(r"[\uac00-\ud7a3]")
-_FOREIGN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")          # kana and Chinese characters
 # Uids and weights a model copied from its tools into what a person reads. Until 2026-10-14 only uids starting f_ / e_ / ep_ / thre_ / prop_ / chat_ were caught (r_, rep_,
 # play_, sens_ … leaked) and any parenthetical naming a weight went, prose too. Uids have the KG's shape (new_uid:
 # 1-4 letters, 12 hex); a parenthetical goes only when it holds nothing but such internals.
@@ -456,32 +452,9 @@ def scrub(text: str) -> str:
     return re.sub(r"\s*" + _UID, "", text)
 
 
-def _korean_only(answer: str) -> str:
-    """One rewrite when a Korean answer drifted into Chinese or Japanese (the content stays; on failure, as is)."""
-    try:
-        r = httpx.post(f"{OLLAMA_BASE_URL.rstrip('/')}/chat/completions", timeout=180, json={
-            "model": HEAD_MODEL.partition(":")[2], "stream": False, "temperature": 0.2, "presence_penalty": 0.0,
-            "reasoning_effort": "none",
-            "messages": [
-                {"role": "system", "content": "Rewrite the text in natural Korean only. Replace every Chinese "
-                 "character, Japanese word and needless English word with Korean; keep proper names and product "
-                 "names (SK hynix, TSMC, HBM4), numbers, markdown and meaning exactly. Output only the rewritten text."},
-                {"role": "user", "content": answer}]})
-        r.raise_for_status()
-        fixed = r.json()["choices"][0]["message"]["content"].strip()
-        return fixed if fixed and len(_FOREIGN.findall(fixed)) < len(_FOREIGN.findall(answer)) else answer
-    except (httpx.HTTPError, KeyError, IndexError, ValueError) as e:
-        print(f"[Hermes] Korean rewrite failed: {type(e).__name__}", flush=True)
-        return answer
-
-
 def tidy(message: str, answer: str) -> str:
-    answer = scrub(answer or "")
-    # The rewrite asks Ollama for HEAD_MODEL by name: only when the Head runs there (an anthropic: Head has no
-    # such model on Ollama — the call only failed after a wait).
-    if HEAD_MODEL.startswith("ollama:") and _HANGUL.search(message) and _FOREIGN.search(answer):
-        answer = scrub(_korean_only(answer))
-    return answer
+    """The answer as the user reads it: without the uids and weights a model copied from its tools."""
+    return scrub(answer or "")
 
 
 # What of a conversation goes to the Head: the page sends all of it (up to 400 turns), and every turn the Head read

@@ -6,12 +6,10 @@ import { Markdown } from '../components/Markdown';
 import { canSpeak, speak, stopSpeaking } from '../lib/voice';
 import { VoiceSession, type VoiceState } from '../lib/voiceSession';
 
-/** "Sovereign, …" / "자비스, …" — in wake-word mode only addressed utterances (or follow-ups) are answered. */
-const WAKE = /^\s*(?:hey\s+|헤이\s*)?(?:sovereign|sovren|jarvis|소[버벌브뻐]린|서버린|쏘버린|자비스)[\s,.!?:~]*/i;
+/** "Sovereign, …" / "Jarvis, …" — in wake-word mode only addressed utterances (or follow-ups) are answered. */
+const WAKE = /^\s*(?:hey\s+)?(?:sovereign|sovren|jarvis)[\s,.!?:~]*/i;
 const FOLLOW_UP_MS = 30_000;
 const SPOKEN_SENTENCES = 3;  // read aloud; the whole answer stays on screen
-
-const HANGUL = /[\uac00-\ud7a3]/;
 
 /** The first sentences of an answer, for speaking it. */
 function firstSentences(text: string, n: number): string {
@@ -157,7 +155,6 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
   const audio = useRef<{ el: HTMLAudioElement; url: string } | null>(null);   // a typed answer read aloud
   const audioSeq = useRef(0);   // bumped by every stop: a read-aloud still waiting for its audio sees it
   const lastAnswerAt = useRef(0);
-  const heardRef = useRef('');
   const wakeRef = useRef(wakeWord);
   const messagesRef = useRef(messages);
   const scroller = useRef<HTMLDivElement>(null);
@@ -353,16 +350,14 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
     if (!s) return;
     let { text } = await hermes.transcribe(wav).catch(e => { setVoiceError((e as Error).message); return { text: '' }; });
     setHeard(text);
-    heardRef.current = text;
     if (!text) return;
     if (wakeRef.current && Date.now() - lastAnswerAt.current > FOLLOW_UP_MS) {
       if (!WAKE.test(text)) return;  // not addressed to Sovereign
     }
     text = text.replace(WAKE, '').trim();
-    if (!text) { await say(HANGUL.test(heardRef.current) ? '네?' : 'Yes?'); return; }
+    if (!text) { await say('Yes?'); return; }
     // The Head's tool work takes a while: acknowledge out loud as soon as it starts.
-    const korean = HANGUL.test(text);
-    const ack = hermes.speak(korean ? '확인해 볼게요.' : 'Let me check.').catch(() => null);
+    const ack = hermes.speak('Let me check.').catch(() => null);
     const answer = await send(text, true, () => { void ack.then(blob => blob && s.cue(blob)); });
     if (answer && !answer.error) await say(firstSentences(answer.content, SPOKEN_SENTENCES));
   }
@@ -553,7 +548,7 @@ export function AskPanel({ domain, canIngest, onKnowledgeChanged, onHighlight, o
               </span>
               {heard && <span className="min-w-0 flex-1 truncate text-faint" title={heard}>“{heard}”</span>}
               <button onClick={toggleWakeWord} className={`ml-auto shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${wakeWord ? 'border-accent/60 text-accent' : 'border-line-2 text-faint hover:text-ink'}`}
-                title="Only answer when addressed: “Sovereign, …” / “자비스, …” (follow-ups within 30 s need no wake word)">
+                title="Only answer when addressed: “Sovereign, …” / “Jarvis, …” (follow-ups within 30 s need no wake word)">
                 wake word
               </button>
             </>

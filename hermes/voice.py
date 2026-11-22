@@ -1,12 +1,12 @@
 """Voice — local speech in and out for talking to the Head Agent.
 
 Speech to text   mlx-whisper (Apple-silicon GPU) with VOICE_STT_MODEL, default whisper-large-v3-turbo: ~1.1 s per
-                 utterance on an M1 Max, English and Korean. Elsewhere (or if mlx is missing) Hermes' own
-                 faster-whisper on the CPU (VOICE_STT_FALLBACK, default "small": ~2-3 s, weaker Korean; large-v3-turbo
-                 takes ~7.5 s on CPU). Audio is decoded with PyAV, so no ffmpeg is needed.
-Text to speech   VOICE_TTS=say (default on macOS): the system voices, picked per language — VOICE_SAY_EN (Daniel),
-                 VOICE_SAY_KO (Yuna); ~0.7 s. VOICE_TTS=hermes: Hermes' configured TTS provider (Edge, ElevenLabs,
-                 OpenAI, Piper, … — tts: in .hermes-home/config.yaml).
+                 utterance on an M1 Max. Elsewhere (or if mlx is missing) Hermes' own faster-whisper on the CPU
+                 (VOICE_STT_FALLBACK, default "small": ~2-3 s; large-v3-turbo takes ~7.5 s on CPU). Audio is decoded
+                 with PyAV, so no ffmpeg is needed.
+Text to speech   VOICE_TTS=say (default on macOS): the system voice VOICE_SAY (Daniel); ~0.7 s. VOICE_TTS=hermes:
+                 Hermes' configured TTS provider (Edge, ElevenLabs, OpenAI, Piper, … — tts: in
+                 .hermes-home/config.yaml).
 Nothing leaves this machine with the defaults.
 """
 
@@ -24,10 +24,10 @@ from pathlib import Path
 STT_MODEL = os.getenv("VOICE_STT_MODEL", "mlx-community/whisper-large-v3-turbo")
 STT_FALLBACK = os.getenv("VOICE_STT_FALLBACK", "small")
 TTS = os.getenv("VOICE_TTS", "say" if platform.system() == "Darwin" else "hermes")
-SAY_VOICES = {"en": os.getenv("VOICE_SAY_EN", "Daniel"), "ko": os.getenv("VOICE_SAY_KO", "Yuna")}
+SAY_VOICE = os.getenv("VOICE_SAY") or os.getenv("VOICE_SAY_EN") or "Daniel"   # VOICE_SAY_EN: its old name
 MAX_SPOKEN = 1500  # characters read aloud
-# Biases recognition toward the wake words (without it, "소버린" came out as "소벌린").
-STT_PROMPT = os.getenv("VOICE_STT_PROMPT", "Sovereign, 소버린, 자비스.")
+# Biases recognition toward the wake words, which a plain transcription misspells.
+STT_PROMPT = os.getenv("VOICE_STT_PROMPT", "Sovereign, Jarvis.")
 
 _lock = threading.Lock()  # one transcription at a time (the GPU is shared with the local LLM)
 _fallback_model = None
@@ -80,14 +80,6 @@ def warm_up() -> None:
 
 # ── Speech out ─────────────────────────────────────────────────────────────
 
-_HANGUL = re.compile(r"[가-힣]")
-
-
-def language_of(text: str) -> str:
-    letters = re.findall(r"[A-Za-z가-힣]", text)
-    return "ko" if letters and len(_HANGUL.findall(text)) / len(letters) > 0.3 else "en"
-
-
 def speakable(text: str) -> str:
     """What to read aloud from an answer: no markdown, code, tables, URLs or uids."""
     text = re.sub(r"```.*?```", " ", text, flags=re.S)
@@ -102,7 +94,7 @@ def speakable(text: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) > MAX_SPOKEN:
         cut = text[:MAX_SPOKEN]
-        text = cut[: max(cut.rfind(". "), cut.rfind("다. "), 200) + 1]
+        text = cut[: max(cut.rfind(". "), 200) + 1]
     return text
 
 
@@ -116,7 +108,7 @@ def speak(text: str) -> tuple[bytes, str]:
             out = Path(tmp) / "speech.wav"
             source = Path(tmp) / "text.txt"
             source.write_text(text)
-            subprocess.run(["say", "-v", SAY_VOICES[language_of(text)], "-f", str(source), "-o", str(out),
+            subprocess.run(["say", "-v", SAY_VOICE, "-f", str(source), "-o", str(out),
                             "--file-format=WAVE", "--data-format=LEI16@22050"], check=True, timeout=60)
             return out.read_bytes(), "audio/wav"
     from tools.tts_tool import text_to_speech_tool  # noqa: PLC0415 — Hermes' provider registry
@@ -131,4 +123,4 @@ def speak(text: str) -> tuple[bytes, str]:
 
 
 def tts_engine() -> str:
-    return f"say ({SAY_VOICES['en']} / {SAY_VOICES['ko']})" if TTS == "say" else "hermes"
+    return f"say ({SAY_VOICE})" if TTS == "say" else "hermes"

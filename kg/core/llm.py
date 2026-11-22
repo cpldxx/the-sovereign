@@ -16,7 +16,6 @@ Model strings are pydantic-ai's "<provider>:<model>" (ollama:, anthropic:, opena
 """
 
 import os
-import re
 
 from dotenv import load_dotenv
 from pydantic_ai.models import Model, infer_model
@@ -80,15 +79,3 @@ def model_settings(agent: str = "", decisive: bool = False) -> ModelSettings:
     return settings
 
 
-
-HANGUL = re.compile(r"[\uac00-\ud7a3]")
-_FOREIGN = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")   # kana and Chinese characters
-
-
-def foreign_script(context: str, written: str) -> str:
-    """The Chinese characters and kana in `written` when the text is Korean ('' when none). A local model lets them
-    into Korean (measured 2026-10-28: 各社, 半导体) and a schema can't say "one language" — an output validator can,
-    and with ModelRetry the model writes it again."""
-    if not HANGUL.search(context + written):
-        return ""
-    return "".join(sorted(set(_FOREIGN.findall(written))))[:12]

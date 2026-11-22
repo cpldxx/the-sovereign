@@ -27,7 +27,7 @@ def test_the_exam_is_set_again_only_when_the_charters_questions_or_depth_change(
 def test_questions_asking_the_same_thing_in_other_words_are_alike():
     assert exam._alike("Which antibody was approved first?", "which antibody was approved first of all")
     assert not exam._alike("Which antibody was approved first?", "Which blood marker predicts amyloid?")
-    assert exam._alike("HBM4 수율이 떨어지는 원인은?", "HBM4 수율이 떨어지는 원인은 무엇인가?")
+    assert exam._alike("Γιατί πέφτει η απόδοση του HBM4;", "Γιατί πέφτει η απόδοση του HBM4 τελικά;")   # any script
 
 
 async def test_nothing_found_scores_nothing_without_asking_the_model():
@@ -48,8 +48,8 @@ class _Agent:
         deep=Written(question="Why was Leqembi's approval disputed?", answer="Brain swelling risks",
                      statement="Leqembi's approval was disputed over brain swelling."))   # the page doesn't say it
 
-    def __init__(self, *a, output_type, system_prompt, **kw):
-        self.output_type, self.system = output_type, system_prompt
+    def __init__(self, *a, output_type, system_prompt, retries=1, **kw):
+        self.output_type, self.system, self.retries = output_type, system_prompt, retries
         self.checks = []
 
     def output_validator(self, fn):
@@ -59,7 +59,7 @@ class _Agent:
     async def run(self, prompt):
         _Agent.prompts.append((self.system, prompt))
         if self.output_type is Plan:
-            out = Plan(cores=[{"core": 1, "queries": ["alzheimer drugs review", "알츠하이머 치료제"]},
+            out = Plan(cores=[{"core": 1, "queries": ["alzheimer drugs review", "Alzheimer Medikamente"]},
                               {"core": 2, "queries": ["alzheimer blood test"]}])
         elif self.output_type is Pick:
             out = Pick(picks=[1, 2, 1])   # the FDA's page: listed first, as the forum (already read) went last
@@ -83,34 +83,19 @@ async def test_an_answer_resting_on_no_fact_earns_nothing(monkeypatch):
     assert len(_Agent.prompts) == 1                      # never graded: nothing to compare
 
 
-async def test_a_korean_question_gets_a_korean_answer(monkeypatch):
-    answers = iter(["Leqembi, an antibody [1].", "레켐비, 항체 치료제 [1]."])
-    retries = []
+async def test_an_answer_the_model_fails_to_shape_is_asked_once_more(monkeypatch):
+    """One answer the model can't shape must not stop the exam: it is asked again, with more retries."""
+    tries = []
 
     class Agent(_Agent):
         async def run(self, prompt):
-            for v in answers:
-                try:
-                    return type("Run", (), {"output": self.checks[0](v)})
-                except exam.ModelRetry as e:
-                    retries.append(str(e))
-    monkeypatch.setattr(exam, "Agent", Agent)
-    v = await exam._grade("d", {"question": "레켐비는 어떤 약인가?"},   # no reference: answered, not graded
-                          [{"fact": "Leqembi is an antibody."}])
-    assert (v.answer, v.facts) == ("레켐비, 항체 치료제.", [1])
-    assert retries == ["The question is in Korean: write the answer in Korean."]
-
-
-async def test_a_model_that_keeps_failing_the_language_check_is_taken_as_it_is(monkeypatch):
-    """Three English answers to a Korean question ended a whole sitting (2026-10-28): now the answer is taken."""
-    class Agent(_Agent):
-        async def run(self, prompt):
-            if self.checks:
+            tries.append(self.retries)
+            if len(tries) == 1:
                 raise exam.UnexpectedModelBehavior("Exceeded maximum output retries (2)")
             return type("Run", (), {"output": "Leqembi is an antibody [1]."})
     monkeypatch.setattr(exam, "Agent", Agent)
-    v = await exam._grade("d", {"question": "레켐비는 어떤 약인가?"}, [{"fact": "Leqembi is an antibody."}])
-    assert v.answer == "Leqembi is an antibody." and v.facts == [1]
+    v = await exam._grade("d", {"question": "What is Leqembi?"}, [{"fact": "Leqembi is an antibody."}])
+    assert v.answer == "Leqembi is an antibody." and v.facts == [1] and tries == [2, 4]
 
 
 async def test_the_graph_is_answered_and_graded_at_temperature_zero(monkeypatch):
@@ -134,8 +119,9 @@ async def test_the_graph_is_answered_and_graded_at_temperature_zero(monkeypatch)
 
 def test_the_graphs_answer_is_read_with_the_facts_it_cites():
     """The model answers in a sentence citing [n] — or with a "facts: [1, 8]" line (measured 2026-10-28)."""
-    text = "HBM4는 스택당 2TB/s 이상이며, 인터페이스 폭은 2,048개로 두 배가 됩니다 [1][8].\n\nfacts: [1, 8]"
-    assert exam._cited(text, 15) == ("HBM4는 스택당 2TB/s 이상이며, 인터페이스 폭은 2,048개로 두 배가 됩니다.", [1, 8])
+    text = "HBM4 moves over 2 TB/s per stack through an interface twice as wide, 2,048 bits [1][8].\n\nfacts: [1, 8]"
+    assert exam._cited(text, 15) == ("HBM4 moves over 2 TB/s per stack through an interface twice as wide, 2,048 bits.",
+                                     [1, 8])
     assert exam._cited("Approved in 2023 [2][99].", 5) == ("Approved in 2023.", [2])   # no fact 99
     assert exam._cited("The facts don't say.", 5) == ("The facts don't say.", [])
 

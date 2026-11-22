@@ -137,8 +137,9 @@ def _conform(relation: str, allowed: set[str]) -> tuple[str, bool] | None:
 @lru_cache(maxsize=4096)
 def _mention(name: str) -> re.Pattern:
     """A name as a word: an end in Latin letters or digits must not run on into another word — "AI" was found in
-    "said", "Arm" in "pharmaceutical" (2026-10-14). Scripts written without spaces (삼성전자는) match as they stand.
-    A plural or possessive ending still counts (GPU → GPUs, Nvidia's)."""
+    "said", "Arm" in "pharmaceutical" (2026-10-14). A name ending in another script matches as it stands: endings
+    written onto it (Αθήνα in Αθήνας) and scripts without spaces between words. A plural or possessive ending
+    still counts (GPU → GPUs, Nvidia's)."""
     edge = re.compile(r"[a-z0-9]")
     head = r"(?<![a-z0-9])" if edge.match(name[0]) else ""
     tail = r"(?:'?s|es)?(?![a-z0-9])" if edge.match(name[-1]) else ""
@@ -156,9 +157,10 @@ def _latin_share(text: str) -> float:
 
 
 def _translated(names: list[str], text: str) -> bool:
-    """An English name for a thing a non-Latin text names in its own script (삼성전자 → Samsung Electronics) can't
-    be found in it by spelling. Measured 2026-10-13: a Korean news page lost all 10 entities and 8 facts to the
-    mention gate. Such entities pass it; their facts are still checked against the text by the Validator."""
+    """An English name for a thing a non-Latin text names in its own script (Πανεπιστήμιο Αθηνών → University of
+    Athens) can't be found in it by spelling. Measured 2026-10-13: a non-English news page lost all 10 entities and
+    8 facts to the mention gate. Such entities pass it; their facts are still checked against the text by the
+    Validator."""
     return _latin_share(text) < 0.5 and all(_latin_share(n) > 0.9 for n in names if n.strip())
 
 
@@ -870,8 +872,8 @@ _searches: dict[tuple[str, str], list[str]] = {}   # (domain, key) → what else
 async def _search_texts(db: ArcadeDB, domain: str, question: str) -> list[str]:
     """What a question is searched by besides itself. Its English, when most of it isn't in Latin script — the graph
     is kept in English (agents/extractor.py), and the multilingual embedding matches poorly across languages: measured
-    2026-10-28, a Korean exam question's nearest facts were about HBM4 in general (similarity 0.52) while its English
-    twin found the answer (0.77). And a passage that would answer it (HyDE, Gao et al. 2022): facts read like answers,
+    2026-10-28, a non-English exam question's nearest facts were about HBM4 in general (similarity 0.52) while its
+    English twin found the answer (0.77). And a passage that would answer it (HyDE, Gao et al. 2022): facts read like answers,
     not like questions. Nothing when the model can't be reached (the question alone is used). With the facts around
     ranked by closeness (_query), tried on the practice set (core/exam.py) on 2026-10-29: 24 → 37, four questions up
     — answered from facts the graph held but never showed — one down.

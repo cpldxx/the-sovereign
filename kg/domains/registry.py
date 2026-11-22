@@ -27,7 +27,7 @@ SYSTEM_DB = "sovereign_system"
 
 
 def domain_id(name: str) -> str:
-    """Display name -> domain id ('Quant Trading' -> 'quant_trading'). A name with no Latin letter first ('반도체',
+    """Display name -> domain id ('Quant Trading' -> 'quant_trading'). A name with no Latin letter first ('Ημιαγωγοί',
     '2026 plan') gets the id 'domain' (create_domain adds a suffix when it is taken); its title stays as typed."""
     if not name.strip():
         raise ValueError("A domain needs a name")
@@ -67,7 +67,7 @@ def create_domain(name: str, description: str, data_sources: list[str] = None, k
                   mine: set[str] | frozenset[str] = frozenset(), avoid: set[str] | frozenset[str] = frozenset()) -> str:
     """Create a new domain workspace from the template. Returns the domain id: the name's slug — or, when the id is
     taken, the slug with a short random suffix (ids are global, names are per user). `mine`: the domains the caller
-    owns, where the same title is an error instead. `avoid`: ids taken elsewhere (a database without a folder). Titles are compared, not slugs: "AI 반도체" and "AI 로봇" are both
+    owns, where the same title is an error instead. `avoid`: ids taken elsewhere (a database without a folder). Titles are compared, not slugs: "AI Ημιαγωγοί" and "AI Ρομπότ" are both
     "ai" (2026-10-14)."""
     domain = domain_id(name)
     if any(_title(d) == _title_key(name) for d in mine):

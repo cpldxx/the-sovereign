@@ -163,18 +163,18 @@ def test_every_schema_type_is_reserved_for_relations():
 
 def test_a_domain_may_be_named_in_any_script(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "DOMAINS_DIR", tmp_path)
-    assert registry.domain_id("반도체") == "domain" and registry.domain_id("2026 plan") == "domain"
+    assert registry.domain_id("Ημιαγωγοί") == "domain" and registry.domain_id("2026 plan") == "domain"
     assert registry.domain_id("Quant Trading") == "quant_trading"
-    first = registry.create_domain("반도체", "chips")
-    second = registry.create_domain("배터리", "batteries")
+    first = registry.create_domain("Ημιαγωγοί", "chips")
+    second = registry.create_domain("Μπαταρίες", "batteries")
     assert first == "domain" and second.startswith("domain_") and second != first
-    assert registry.load_domain(second)["config"]["title"] == "배터리"
-    # Titles are compared, not slugs: "AI 반도체" and "AI 로봇" are both "ai"
-    ai = registry.create_domain("AI 반도체", "chips", mine={first, second})
-    assert registry.create_domain("AI 로봇", "robots", mine={first, second, ai}) != ai
+    assert registry.load_domain(second)["config"]["title"] == "Μπαταρίες"
+    # Titles are compared, not slugs: "AI Ημιαγωγοί" and "AI Ρομπότ" are both "ai"
+    ai = registry.create_domain("AI Ημιαγωγοί", "chips", mine={first, second})
+    assert registry.create_domain("AI Ρομπότ", "robots", mine={first, second, ai}) != ai
     with pytest.raises(ValueError):
-        registry.create_domain("  ai   반도체 ", "again", mine={ai})
-    assert registry.create_domain("AI 반도체", "someone else's has it", mine=set()) != ai   # not mine: allowed
+        registry.create_domain("  ai   Ημιαγωγοί ", "again", mine={ai})
+    assert registry.create_domain("AI Ημιαγωγοί", "someone else's has it", mine=set()) != ai   # not mine: allowed
 
 
 def test_an_ontology_is_swapped_in_whole(tmp_path, monkeypatch):

@@ -99,14 +99,10 @@ async def test_a_draft_comes_from_the_interview_and_a_revision_stays_active(doma
         def __init__(self, *a, system_prompt, **kw):
             self.prompt = system_prompt
 
-        def output_validator(self, fn):
-            self.check = fn
-            return fn
-
         async def run(self, notes):
             seen.append((self.prompt, notes))
-            return Written(self.check(charter.Charter(goal="Know which treatments slow decline",
-                                                      questions=["Which antibodies cleared phase 3?", ""], depth="expert")))
+            return Written(charter.Charter(goal="Know which treatments slow decline",
+                                           questions=["Which antibodies cleared phase 3?", ""], depth="expert"))
     monkeypatch.setattr(charter, "Agent", Agent)
     state = await charter.draft(db, d, "I care for my father; I want to know what slows decline")
     assert state["status"] == "draft" and state["charter"]["questions"] == ["Which antibodies cleared phase 3?"]
@@ -115,33 +111,6 @@ async def test_a_draft_comes_from_the_interview_and_a_revision_stays_active(doma
     state = await charter.draft(db, d, "also blood tests")
     assert state["status"] == "active"                                     # a revision steers at once
     assert "The current charter" in seen[1][0] and "Which antibodies" in seen[1][0]
-
-
-@pytest.mark.db
-async def test_a_korean_charter_with_chinese_characters_is_written_again(domain, monkeypatch):
-    db, d = domain
-    drafts = [charter.Charter(goal="각社의 기술을 알고 싶다", questions=["일반적인半导体 역사는?"]),
-              charter.Charter(goal="각 회사의 기술을 알고 싶다", questions=["반도체 역사는?"])]
-    retries = []
-
-    class Agent:
-        def __init__(self, *a, **kw):
-            pass
-
-        def output_validator(self, fn):
-            self.check = fn
-            return fn
-
-        async def run(self, notes):
-            for c in drafts:                       # pydantic-ai asks again when the validator says ModelRetry
-                try:
-                    return type("Run", (), {"output": self.check(c)})
-                except charter.ModelRetry as e:
-                    retries.append(str(e))
-    monkeypatch.setattr(charter, "Agent", Agent)
-    state = await charter.draft(db, d, "회사별 기술 차이가 궁금해")
-    assert state["charter"]["goal"] == "각 회사의 기술을 알고 싶다"
-    assert len(retries) == 1 and "社" in retries[0] and "半" in retries[0]
 
 
 @pytest.mark.db

@@ -28,7 +28,7 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior
 from core import activity, charter, kg, learning, sources
 from core import database as kgdb
 from core.database import ArcadeDB, now
-from core.llm import HANGUL, foreign_script, model_for, model_settings
+from core.llm import model_for, model_settings
 
 MODEL = model_for("summarizer")
 FACTS = 30            # valid facts a review is written from
@@ -157,21 +157,14 @@ def _key_sources(cited: set[str], ev: dict) -> list[dict]:
 
 
 async def _write(domain: str, core: str, c: dict, ev: dict) -> Review:
-    korean = bool(HANGUL.search(core))
-
     def checked(r: Review) -> Review:
-        written = " ".join([r.summary, *r.consensus, *r.debates, *r.open])
-        if korean and not HANGUL.search(r.summary):
-            raise ModelRetry("The core question is in Korean: write the review in Korean.")
-        if foreign := foreign_script(core, written):
-            raise ModelRetry(f"Write it in Korean only — no Chinese characters or Japanese ({foreign}).")
         if not _CITE.search(r.summary):
             raise ModelRetry("End every summary sentence with the numbers of the facts it rests on, like [2][5].")
         return r
 
     prompt = PROMPT.format(domain=domain, core=core, goal=c["goal"], depth=c.get("depth") or "working",
-                           language="Korean" if korean else "the core question's language")
-    request = f"FACTS:\n{_numbered(ev)}" + ("\n\nWrite the review in Korean (한국어로)." if korean else "")
+                           language="the core question's language")
+    request = f"FACTS:\n{_numbered(ev)}"
 
     async def run(validated: bool) -> Review:
         agent = Agent(MODEL, name="synthesis", model_settings=model_settings("summarizer"), output_type=Review,
@@ -183,17 +176,7 @@ async def _write(domain: str, core: str, c: dict, ev: dict) -> Review:
         return await run(True)
     except UnexpectedModelBehavior as e:   # one review's wording must not stop the others
         print(f"[Synthesis] {domain}: taken unchecked ({e})", flush=True)
-        return _scrubbed(core, await run(False))
-
-
-def _scrubbed(core: str, r: Review) -> Review:
-    """A review taken unchecked, without the sentences and points still in a foreign script (a local model's 让 in
-    Korean, 2026-10-28) — left out as uncited ones are."""
-    def ok(text: str) -> bool:
-        return not foreign_script(core, text)
-    sentences = re.split(r"(?<=[.!?])\s+", r.summary.strip())
-    return Review(summary=" ".join(s for s in sentences if ok(s)), consensus=[p for p in r.consensus if ok(p)],
-                  debates=[p for p in r.debates if ok(p)], open=[q for q in r.open if ok(q)])
+        return await run(False)
 
 
 async def _page(domain: str, n: int, core: str, c: dict, ev: dict) -> dict:

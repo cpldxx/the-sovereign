@@ -65,9 +65,9 @@ def test_a_short_latin_name_is_found_only_as_a_word():
     assert kg._in_text(["Nvidia"], "Nvidia's revenue doubled.")                  # possessive
     assert kg._in_text(["CoWoS-L"], "Capacity for CoWoS-L rose.")
     assert not kg._in_text(["CoWoS"], "Capacity for CoWoSx rose.")
-    assert kg._in_text(["삼성전자"], "삼성전자는 3분기 실적을 발표했다.")              # no spaces between words
-    assert kg._in_text(["SK하이닉스"], "SK하이닉스는 부진했다.")
-    assert not kg._in_text(["SK"], "ASK하이닉스는 부진했다.")
+    assert kg._in_text(["Αθήνα"], "Το εργαστήριο της Αθήνας άνοιξε.")          # an ending written onto the name
+    assert kg._in_text(["CERNλαβ"], "Το CERNλαβ άνοιξε.")                       # a Latin start, another script after
+    assert not kg._in_text(["CERN"], "Το XCERNλαβ άνοιξε.")
 
 
 def test_which_existing_episodes_are_read_again(monkeypatch):
@@ -113,9 +113,10 @@ async def test_a_querys_sources_follow_its_facts(monkeypatch):
 
 
 async def test_a_question_is_also_searched_in_english_and_by_a_passage_that_would_answer_it(monkeypatch):
-    """The graph is kept in English: a Korean question found facts about HBM4 in general, its English twin the answer.
+    """The graph is kept in English: a question in another language found facts about HBM4 in general, its English twin
+    the answer.
     And facts read like answers: a would-be answer finds the one on the bonding that replaces bumps."""
-    by_vector = {"ko": [{"uid": "f_general", "similarity": 0.52, "source_uid": "e", "target_uid": "e"},
+    by_vector = {"other": [{"uid": "f_general", "similarity": 0.52, "source_uid": "e", "target_uid": "e"},
                         {"uid": "f_answer", "similarity": 0.40, "source_uid": "e", "target_uid": "e"}],
                  "en": [{"uid": "f_answer", "similarity": 0.77, "source_uid": "e", "target_uid": "e"}],
                  "passage": [{"uid": "f_bonding", "similarity": 0.81, "source_uid": "e", "target_uid": "e"}]}
@@ -131,7 +132,7 @@ async def test_a_question_is_also_searched_in_english_and_by_a_passage_that_woul
                                               "PASSAGE: HBM4 stacks are joined by hybrid bonding instead of\nmicrobumps."})
 
     async def embed(texts):
-        return [["passage"] if t.startswith("HBM4 stacks") else ["en"] if t.isascii() else ["ko"] for t in texts]
+        return [["passage"] if t.startswith("HBM4 stacks") else ["en"] if t.isascii() else ["other"] for t in texts]
 
     async def search_facts(db, domain, vector, k):
         return by_vector[vector[0]]
@@ -153,15 +154,16 @@ async def test_a_question_is_also_searched_in_english_and_by_a_passage_that_woul
                          ("search_facts", search_facts), ("get_episodes", none), ("find_docs", find_docs),
                          ("insert_doc", insert_doc)):
         monkeypatch.setattr(kgdb, fn, stand_in)
+    question = "Ποια μέθοδος σύνδεσης αντικαθιστά τα bumps στο HBM4;"   # mostly another script
     empty = {"entities": [], "facts": [], "episodes": []}
-    out = await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
+    out = await kg._query(None, "d", question, 5, empty)
     assert [(f["uid"], f["similarity"]) for f in out["facts"]] == [("f_bonding", 0.81), ("f_answer", 0.77),
                                                                      ("f_general", 0.52)]
     assert kept[0]["texts"][1] == "HBM4 stacks are joined by hybrid bonding instead of microbumps."
-    await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
+    await kg._query(None, "d", question, 5, empty)
     assert len(asked) == 1                                        # asked again: remembered
     kg._searches.clear()                                          # a restart: kept in the domain's database
-    again = await kg._query(None, "d", "HBM4에서 범프를 대체하는 결합 방식은?", 5, empty)
+    again = await kg._query(None, "d", question, 5, empty)
     assert len(asked) == 1 and again["facts"] == out["facts"]
 
 

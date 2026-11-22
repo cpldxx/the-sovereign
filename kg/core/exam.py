@@ -41,14 +41,14 @@ from urllib.parse import urlsplit
 
 import httpx
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelRetry
+from pydantic_ai import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from agents.validator import validate
 from core import activity, auth, charter, kg, sources
 from core import database as kgdb
 from core.database import ArcadeDB, now
-from core.llm import HANGUL, foreign_script, model_for, model_settings
+from core.llm import model_for, model_settings
 
 RESEARCH_URL = os.getenv("SOVEREIGN_RESEARCH_URL", "http://localhost:8070").rstrip("/")
 MAX_QUESTIONS = 36    # three per core question and page (basic, working, deep), twelve core questions at most
@@ -196,34 +196,20 @@ def _alike(a: str, b: str) -> bool:
     return bool(wa and wb) and len(wa & wb) / len(wa | wb) >= 0.6
 
 
-def _one_language(context: str):
-    """An output validator: Korean stays Korean — no Chinese characters or Japanese (core/llm.foreign_script)."""
-    def check(out):
-        if foreign := foreign_script(context, out if isinstance(out, str) else out.model_dump_json()):
-            raise ModelRetry(f"Write it in Korean only — no Chinese characters or Japanese ({foreign}).")
-        return out
-    return check
-
-
-async def _ask(output_type, system_prompt: str, prompt: str, context: str = "", decisive: bool = False, check=None,
-               exact: bool = False):
-    """One structured answer, its language checked (`check`: the validator, by default one language). A model that
-    fails the check every time is taken as it is: one question's wording must not stop the exam (2026-10-28: answers
-    written in English three times over ended a whole sitting). `exact`: temperature 0 — the same graph gets the same
-    answer and grade (at 0.1 one graph scored 41, 23 and 36: answers took either side of a debate, one answer was graded
-    1, 0 and 1 — 2026-10-28)."""
-    def agent(validated: bool) -> Agent:
+async def _ask(output_type, system_prompt: str, prompt: str, decisive: bool = False, exact: bool = False):
+    """One structured answer, asked once more with more retries when the model's output doesn't fit: one answer the
+    model can't shape must not stop the exam. `exact`: temperature 0 — the same graph gets the same answer and grade
+    (at 0.1 one graph scored 41, 23 and 36: answers took either side of a debate, one answer was graded 1, 0 and 1 —
+    2026-10-28)."""
+    def agent(retries: int) -> Agent:
         settings = {**model_settings("examiner", decisive=decisive), **({"temperature": 0.0} if exact else {})}
-        a = Agent(MODEL, name="examiner", model_settings=settings, output_type=output_type,
-                  retries=2 if validated else 4, system_prompt=system_prompt)
-        if validated:
-            a.output_validator(check or _one_language(context or prompt))
-        return a
+        return Agent(MODEL, name="examiner", model_settings=settings, output_type=output_type, retries=retries,
+                     system_prompt=system_prompt)
     try:
-        return (await agent(True).run(prompt)).output
+        return (await agent(2).run(prompt)).output
     except UnexpectedModelBehavior as e:
-        print(f"[Exam] {getattr(output_type, '__name__', output_type)}: taken unchecked ({e})", flush=True)
-        return (await agent(False).run(prompt)).output
+        print(f"[Exam] {getattr(output_type, '__name__', output_type)}: asked again ({e})", flush=True)
+        return (await agent(4).run(prompt)).output
 
 
 # ── The research service: search and read (paced, robots.txt respected) ────
@@ -302,11 +288,11 @@ async def _candidates(db: ArcadeDB, domain: str, queries: list[str], taken: set[
 
 async def _from_page(domain: str, core: str, goal: str, page: dict) -> list[dict]:
     """A basic, a working and a deep question written from one page — those the page states (round trip)."""
-    language = "Korean" if HANGUL.search(core) else "the core question's language"
+    language = "the core question's language"
     text = page["markdown"][:SOURCE_CHARS]
     with activity.working(domain, "learning", f"exam: writing from {urlsplit(page['url']).netloc}"):
         written = await _ask(CoreExam, WRITE.format(core=core, domain=domain, goal=goal, language=language),
-                             f"SOURCE ({page.get('title') or page['url']}):\n{text}", context=core)
+                             f"SOURCE ({page.get('title') or page['url']}):\n{text}")
     tiers = [(t, getattr(written, t)) for t in TIERS]
     tiers = [(t, w) for t, w in tiers if w.question.strip() and w.statement.strip()]
     with activity.working(domain, "validator", "exam: checking questions against their source"):
@@ -323,8 +309,7 @@ async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None,
     taken = {q["source"]["url"] for q in (other or {}).get("questions", []) if q.get("source")}
     n = len(c["questions"])
     with activity.working(domain, "learning", "exam: planning the searches"):
-        plan = await _ask(Plan, PLAN.format(domain=domain, n=n, charter=charter.text(c)), "Plan the searches.",
-                          context=charter.text(c))
+        plan = await _ask(Plan, PLAN.format(domain=domain, n=n, charter=charter.text(c)), "Plan the searches.")
     queries = {x.core: [q for q in x.queries if q.strip()] for x in plan.cores if 1 <= x.core <= n}
     questions: list[dict] = []
     unsourced: list[int] = []
@@ -436,23 +421,10 @@ async def _grades(db: ArcadeDB, domain: str, kind: str, runs: int = 20) -> dict[
 async def _grade(domain: str, q: dict, facts: list[dict], memo: dict | None = None) -> Verdict:
     """The graph's answer from its facts alone, then its grade against the reference — the one it had before (`memo`)
     if the answer is the same."""
-    korean = HANGUL.search(q["question"])
     if not facts:
-        return Verdict(answer="그래프에 아직 이 내용이 없어요." if korean else "The graph holds nothing on this yet.")
+        return Verdict(answer="The graph holds nothing on this yet.")
     shown = "\n".join(f"[{i + 1}] {f['fact']}" for i, f in enumerate(facts))
-
-    def checked(a: str) -> str:
-        # Asked "in the question's language", it answered Korean questions in English (measured 2026-10-28).
-        if korean and not HANGUL.search(a):
-            raise ModelRetry("The question is in Korean: write the answer in Korean.")
-        if foreign := foreign_script(q["question"], a):
-            raise ModelRetry(f"Write the answer in Korean only — no Chinese characters or Japanese ({foreign}).")
-        return a
-
-    # The facts are often English: said last, the answer's language holds (said once in the system prompt, it didn't).
-    language = "\n\nWrite the answer in Korean (한국어로)." if korean else ""
-    text = await _ask(str, ANSWER, f"QUESTION: {q['question']}\n\nFACTS:\n{shown}{language}", exact=True,
-                      check=checked)
+    text = await _ask(str, ANSWER, f"QUESTION: {q['question']}\n\nFACTS:\n{shown}", exact=True)
     answer, cited = _cited(str(text), len(facts))
     v = Verdict(answer=answer, facts=cited)
     if not cited or not q.get("answer"):
@@ -511,8 +483,7 @@ async def take(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "exam
             except Exception as e:   # one question that can't be graded scores nothing; the sitting goes on
                 print(f"[Exam] {domain}: {q['id']} not graded: {type(e).__name__}: {e}"[:300], flush=True)
                 evidence = ""        # graded again next time
-                v = Verdict(answer=("채점하지 못했어요" if HANGUL.search(q["question"]) else "Not graded")
-                                   + f" ({type(e).__name__})")
+                v = Verdict(answer=f"Not graded ({type(e).__name__})")
             cited = [found[n - 1] for n in v.facts]
             if not evidence and i + 1 >= 3 and all(not x["evidence"] for x in items):
                 # Nothing graded so far: the model (or the graph) is out of reach, and a sitting of zeros would stand

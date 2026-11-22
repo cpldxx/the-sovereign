@@ -20,12 +20,12 @@ from typing import Literal
 
 import httpx
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent, ModelRetry
+from pydantic_ai import Agent
 
 from core import auth
 from core import database as kgdb
 from core.database import ArcadeDB, new_uid, now
-from core.llm import foreign_script, model_for, model_settings
+from core.llm import model_for, model_settings
 from domains import registry
 
 DRAFT, ACTIVE = "draft", "active"
@@ -73,7 +73,7 @@ From the notes below write:
 - depth: overview (the big picture), working (enough to discuss and act on it) or expert (specialist depth: primary
   literature, methods, open debates)
 Keep the user's own framing: don't add technical specifics, standards or acronyms they didn't bring up — a core
-question built on a wrong detail sends research the wrong way. Write in the language of the notes, and only in it: Korean notes get Korean with no Chinese characters or Japanese
+question built on a wrong detail sends research the wrong way. Write in the language of the notes, and only in it
 (proper and product names stay as written). Use only what the notes and the description support: leave scope or
 exclude short rather than invent preferences the user never stated.{current}"""
 
@@ -169,13 +169,6 @@ async def draft(db: ArcadeDB, domain: str, notes: str = "") -> dict:
     agent = Agent(MODEL, name="charter", model_settings=model_settings("strategist"), output_type=Charter, retries=2,
                   system_prompt=PROMPT.format(domain=domain, description=description, today=date.today().isoformat(),
                                               current=current))
-
-    @agent.output_validator
-    def one_language(c: Charter) -> Charter:
-        if foreign := foreign_script(notes, " ".join([c.goal, *c.questions, *c.scope, *c.exclude])):
-            raise ModelRetry(f"Write it in Korean only — no Chinese characters or Japanese ({foreign}); use the "
-                             "Korean word instead.")
-        return c
     written = (await agent.run(notes.strip() or "(No interview notes: draft it from the description alone, "
                                                 "conservatively.)")).output
     charter = _fit(written.model_dump())

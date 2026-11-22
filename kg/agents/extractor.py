@@ -64,8 +64,8 @@ ENTITY RULES
    different things — keep the exact variant the text names (CoWoS vs CoWoS-L, HBM3 vs HBM3E).
 6. The graph is kept in English. For a text in another language, write name, description and fact in English —
    name is the thing's usual English name — and put the name EXACTLY as the text writes it in aliases
-   (삼성전자 → name "Samsung Electronics", aliases ["삼성전자"]; 공정거래위원회 → "Fair Trade Commission",
-   ["공정거래위원회"]). That alias is how the entity is found in the source.
+   (Πανεπιστήμιο Αθηνών → name "University of Athens", aliases ["Πανεπιστήμιο Αθηνών"]; Υπουργείο Υγείας →
+   "Ministry of Health", ["Υπουργείο Υγείας"]). That alias is how the entity is found in the source.
 
 FACT RULES
 1. source and target must be names from your entities list.

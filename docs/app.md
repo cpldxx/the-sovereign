@@ -24,7 +24,7 @@ Right — three tabs:
   person (Hermes saves each question when it arrives and each answer when it is done — a reload mid-answer loses
   nothing; the answer appears when it lands; `GET /domains/{d}/chat`). 📎 adds a source: paste an article or notes with its source, the pipeline learns
   it (new / known entities, created / strengthened / superseded / rejected facts with reasons) and the chat notes it.
-- **Voice** (in the Head tab) — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and local voices (macOS, English and Korean) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing. Optional wake word ("Sovereign, …" / "자비스, …").
+- **Voice** (in the Head tab) — press the mic and just talk: local speech recognition (Whisper on the Apple GPU, ~1 s) and a local voice (macOS) — nothing leaves this machine. Pauses end your turn; the Head answers in a few spoken sentences (the full answer stays on screen), says "let me check" while it works, and stops when you talk over it. Once a day it opens with the daily briefing. Optional wake word ("Sovereign, …" / "Jarvis, …").
 - **Briefing** — the briefing each learning cycle writes: what the graph learned, what changed (superseded and
   confirmed facts), what needs attention; read it aloud, highlight its entities in the graph, or write one now.
 - **Settings** — *Learning*: when the graph learns by itself, how many questions it pursues, how long an unconfirmed

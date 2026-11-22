@@ -5,7 +5,7 @@ import { Loader2 } from 'lucide-react';
 export function previewId(name: string): string {
   if (!name.trim()) return '';
   const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-  // No Latin letter first ("반도체", "2026 plan"): the server names it "domain"; the title stays as typed.
+  // No Latin letter first ("Ημιαγωγοί", "2026 plan"): the server names it "domain"; the title stays as typed.
   return /^[a-z]/.test(slug) ? slug : 'domain';
 }
 

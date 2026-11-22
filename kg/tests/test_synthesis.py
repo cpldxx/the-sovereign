@@ -101,25 +101,24 @@ async def test_a_page_per_core_question_rewritten_only_when_its_facts_change(dom
 
 
 @pytest.mark.db
-async def test_a_korean_review_is_written_again_until_it_is_korean_and_cites(domain, monkeypatch):
+async def test_a_review_is_written_again_until_its_summary_cites(domain, monkeypatch):
     (db, d), _ = domain
-    await charter.save(db, d, {**CHARTER, "questions": ["알츠하이머 진행을 늦추는 약은?"]})
+    await charter.save(db, d, {**CHARTER, "questions": ["Which drugs slow Alzheimer's decline?"]})
 
     async def query(db_, d_, question, k):
         return {"facts": FACTS}
     monkeypatch.setattr(synthesis.kg, "query", query)
-    _Agent.reviews = [Review(summary="Lecanemab slows decline [1]."),                   # English
-                      Review(summary="레켐비가 진행을 늦춘다."),                             # cites nothing
-                      Review(summary="레켐비는 진행을 27% 늦춘다 [1].")]
+    _Agent.reviews = [Review(summary="Lecanemab slows decline."),                         # cites nothing
+                      Review(summary="Lecanemab slows decline by 27% [1].")]
     await synthesis.refresh(db, d)
     [page] = await synthesis.pages(db, d)
-    assert page["summary"] == "레켐비는 진행을 27% 늦춘다." and page["summary_facts"] == ["f1"]
-    _Agent.reviews = [Review(summary="레켐비는 진행을 늦춘다 [1]. 半导体처럼 승인됐다 [2].",          # never passes:
-                             consensus=["진행을 27% 늦춘다 [1].", "효과가 증가让된다 [1]."])]       # taken unchecked
+    assert page["summary"] == "Lecanemab slows decline by 27%." and page["summary_facts"] == ["f1"]
+    _Agent.reviews = [Review(summary="Lecanemab slows decline.",                          # never passes:
+                             consensus=["It slows decline [1].", "It works for everyone."])]   # taken unchecked
     await synthesis.refresh(db, d, force=True)
     [page] = await synthesis.pages(db, d)
-    assert page["summary"] == "레켐비는 진행을 늦춘다." and page["summary_facts"] == ["f1"]
-    assert [p["text"] for p in page["consensus"]] == ["진행을 27% 늦춘다."]               # the foreign-script ones went
+    assert page["summary_facts"] == []
+    assert [p["text"] for p in page["consensus"]] == ["It slows decline."]              # only what cites stays
 
 
 @pytest.mark.db
