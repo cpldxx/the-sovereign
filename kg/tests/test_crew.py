@@ -426,6 +426,23 @@ async def test_the_activity_feed_does_not_repeat_the_task_name(monkeypatch):
     assert seen == ["check: two claims", "check: two claims"]
 
 
+async def test_a_job_is_not_given_up_for_one_look_that_timed_out(monkeypatch):
+    import httpx
+    monkeypatch.setattr(crew, "JOB_POLL", 0)
+    looks = iter([httpx.ReadTimeout("busy"), {"status": "running"}, httpx.ConnectError("down"), {"status": "done"}])
+
+    async def check():
+        if isinstance(look := next(looks), Exception):
+            raise look
+        return look
+    assert await crew._poll(check, lambda s: s["status"] == "done") == {"status": "done"}
+
+    async def unreachable():
+        raise httpx.ConnectError("down")
+    with pytest.raises(httpx.ConnectError):   # the service is gone: the task fails with the reason, as before
+        await crew._poll(unreachable, lambda s: True)
+
+
 def test_a_review_queue_the_head_cannot_decide_waits_until_it_changes(monkeypatch):
     clock = [1000.0]
     monkeypatch.setattr(crew.time, "monotonic", lambda: clock[0])

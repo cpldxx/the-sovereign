@@ -59,6 +59,7 @@ REVIEW_TURN = float(os.getenv("HEAD_REVIEW_MINUTES", "10"))          # time box 
 WAKE_SECONDS = 1200        # a woken Head may ingest (minutes of pipeline)
 JOB_POLL = 10              # seconds between looks at a background job
 JOB_LIMIT = 3600           # a background job is given up after this long
+JOB_MISSES = 6             # looks at a job that may fail in a row (the service busy, a dropped connection)
 DESK_CHARS = 6000
 HISTORY = 8                # earlier messages of a thread a consulted agent sees
 
@@ -187,10 +188,20 @@ def _clip(text: str, n: int = DESK_CHARS) -> str:
 
 
 async def _poll(check: Callable[[], Awaitable[dict | None]], finished: Callable[[dict], bool]) -> dict:
-    """Wait for a background job; its last state (also after JOB_LIMIT, or when it disappeared)."""
-    deadline, last = time.monotonic() + JOB_LIMIT, {}
+    """Wait for a background job; its last state (also after JOB_LIMIT, or when it disappeared). A look that can't
+    reach the service is tried again: one timed-out look reported a research run as failed while it went on reading
+    — only JOB_MISSES in a row raise."""
+    deadline, last, misses = time.monotonic() + JOB_LIMIT, {}, 0
     while time.monotonic() < deadline:
-        state = await check()
+        try:
+            state = await check()
+        except httpx.TransportError:
+            misses += 1
+            if misses >= JOB_MISSES:
+                raise
+            await asyncio.sleep(JOB_POLL)
+            continue
+        misses = 0
         if state is None:
             return {**last, "status": "lost", "error": "the job is gone (the service restarted)"}
         last = state
