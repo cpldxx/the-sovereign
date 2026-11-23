@@ -107,9 +107,11 @@ def _chunks(text: str) -> list[str]:
 
 
 # Amounts, percentages, dates and reporting periods belong inside fact text, never as entities.
+# A half-year needs its year ("H1 2026", "H2'25"): H1 and H2 alone start the names of things — hydrogen is H2, and
+# "H2 receptor" or "H1 antihistamine" are no dates. Such a name was dropped, and every relation to it became a state.
 _MONTHS = "january|february|march|april|may|june|july|august|september|october|november|december"
 _VALUE = re.compile(
-    rf"^\s*(?:[$€£¥₩]|[\d.,\s]+$|.*\d\s*%|(?:Q[1-4]|H[12]|FY\s?\d{{2,4}})\b"
+    rf"^\s*(?:[$€£¥₩]|[\d.,\s]+$|.*\d\s*%|(?:Q[1-4]|H[12](?:\s+(?:FY\s?)?|\s*['’])\d{{2,4}}|FY\s?\d{{2,4}})\b"
     rf"|(?:{_MONTHS})(?:\s+\d{{1,2}})?(?:,?\s+\d{{4}})?\s*$)",
     re.I,
 )

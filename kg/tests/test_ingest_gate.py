@@ -179,6 +179,15 @@ async def test_chunks_read_side_by_side_still_write_one_entity(domain, monkeypat
     assert count[0]["n"] == 1
 
 
+@pytest.mark.parametrize("name,value", [
+    ("$5.8 billion", True), ("12.5%", True), ("March 2025", True), ("Q3 2025", True), ("FY2025", True),
+    ("H1 2026", True), ("H2'25", True), ("H2 FY25", True),
+    ("H2", False), ("H2 receptor", False), ("H1 antihistamine", False), ("H2O", False), ("Acme Labs", False),
+])
+def test_a_value_is_no_entity_but_a_name_that_starts_like_a_half_year_is(name, value):
+    assert bool(kg._VALUE.match(name)) is value
+
+
 def test_the_model_reads_text_not_markup():
     """Links become their text, images and menus go, share buttons go — a linked headline stays (it is content)."""
     page = ("Intro [NVIDIA](https://nvidia.com/x) ships ![logo](a.png) Rubin.\n* [Home](/)\n* [About us](/about)\n"
