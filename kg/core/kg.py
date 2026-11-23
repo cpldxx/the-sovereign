@@ -228,8 +228,9 @@ async def ingest(
     digest = hashlib.sha256(" ".join(text.split()).encode()).hexdigest()
     existing = await kgdb.find_episode(db, domain, digest)
     if existing and not _retry(existing):
-        return {**Report(existing["uid"]).as_dict(), "duplicate": True,
-                **({"pending": True} if existing.get("status") == "pending" else {})}
+        # Being read: pending — or failed and taken up again a moment ago (in _active before its status is written).
+        reading = existing.get("status") == "pending" or existing["uid"] in _active
+        return {**Report(existing["uid"]).as_dict(), "duplicate": True, **({"pending": True} if reading else {})}
     episode_uid = existing["uid"] if existing else new_uid("ep")
     tier = sources.tier_of(source, tier)
     _active.add(episode_uid)   # before any await: a second call with the same text sees it taken

@@ -88,6 +88,21 @@ def test_which_existing_episodes_are_read_again(monkeypatch):
         kg._active.discard("ep_1")
 
 
+async def test_a_failed_text_being_read_again_is_pending_not_learned(monkeypatch):
+    async def nothing(*a, **k):
+        return None
+
+    async def failed(db, domain, digest):
+        return {"uid": "ep_again", "status": "failed", "created_at": "2026-01-01T00:00:00+00:00"}
+    monkeypatch.setattr(kg, "load_domain", lambda d: {"ontology": {"entity_types": ["entity"],
+                                                                  "relation_types": ["related_to"]}, "config": {}})
+    monkeypatch.setattr(kgdb, "ensure_domain_db", nothing)
+    monkeypatch.setattr(kgdb, "find_episode", failed)
+    monkeypatch.setattr(kg, "_active", {"ep_again"})   # its retry started: the status is not written yet
+    r = await kg.ingest(None, "d", "The same text, sent a second time while the first is read again.")
+    assert r["duplicate"] and r.get("pending")
+
+
 async def test_a_querys_sources_follow_its_facts(monkeypatch):
     facts = [{"uid": f"f_{i}", "source_uid": "e_a", "target_uid": "e_b", "sources": [f"ep_{9 - i}", "ep_shared"],
               "similarity": 0.9 - i / 10} for i in range(5)]
