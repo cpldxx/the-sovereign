@@ -187,7 +187,12 @@ class ArcadeDB:
 
     async def _post(self, path: str, payload: dict) -> dict:
         r = await self._http.post(path, json=payload)
-        body = r.json() if r.content else {}
+        try:
+            body = r.json() if r.content else {}
+        except ValueError:   # a body that isn't JSON (a server starting up, overloaded) is the database's error too
+            body = None
+        if not isinstance(body, dict):
+            raise ArcadeDBError(f"{r.status_code} {r.text[:200]}")
         if r.is_error:
             raise ArcadeDBError(f"{r.status_code} {body.get('error', '')}: {body.get('detail', '')}")
         return body

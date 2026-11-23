@@ -161,6 +161,19 @@ def test_every_schema_type_is_reserved_for_relations():
     assert kgdb.edge_type("supplies") == "supplies"
 
 
+async def test_an_answer_that_is_not_json_is_the_databases_error():
+    import httpx
+    client = kgdb.ArcadeDB()
+    await client._http.aclose()
+    client._http = httpx.AsyncClient(base_url="http://db.invalid/api/v1", transport=httpx.MockTransport(
+        lambda request: httpx.Response(503, text="<html>Service Unavailable</html>")))
+    try:
+        with pytest.raises(ArcadeDBError, match="503"):   # it was a JSONDecodeError no caller expects
+            await client.sql("d", "SELECT 1")
+    finally:
+        await client.close()
+
+
 def test_a_domain_may_be_named_in_any_script(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "DOMAINS_DIR", tmp_path)
     assert registry.domain_id("Ημιαγωγοί") == "domain" and registry.domain_id("2026 plan") == "domain"
