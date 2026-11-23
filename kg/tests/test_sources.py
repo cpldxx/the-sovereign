@@ -14,6 +14,9 @@ from core.sources import tier_of
     ("https://pubmed.ncbi.nlm.nih.gov/36449413/", "paper"),
     ("https://www.ncbi.nlm.nih.gov/pmc/articles/PMC123/", "paper"),
     ("https://link.springer.com/article/10.1007/s13391-025-00557-9", "paper"),
+    ("https://www.ncbi.nlm.nih.gov/books/NBK1/", "official"),
+    ("https://someone.wordpress.com/ncbi.nlm.nih.gov/pmc/", "blog"),      # a paper's address inside another site's
+    ("https://example.com/read?u=https://www.ncbi.nlm.nih.gov/pmc/articles/PMC123/", "web"),
     ("https://www.fda.gov/news-events/leqembi", "official"),
     ("https://www.mss.go.kr/policy", "official"),
     ("https://www.ox.ac.uk/research", "official"),

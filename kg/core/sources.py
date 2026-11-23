@@ -65,6 +65,13 @@ def _host(url: str) -> str:
         return ""
 
 
+def _path(url: str) -> str:
+    try:
+        return urlsplit(url).path.lower()
+    except ValueError:
+        return ""
+
+
 def _in(host: str, names: set[str]) -> bool:
     """The host is one of these sites or a subdomain of one."""
     return any(host == n or host.endswith("." + n) for n in names)
@@ -77,10 +84,11 @@ def tier_of(source: str, hint: str | None = None) -> str:
     if not source.startswith(("http://", "https://")):
         return "user"
     host = _host(source)
-    path = source.lower()
     if not host:
         return "web"
-    if _in(host, _PAPER) or "ncbi.nlm.nih.gov/pmc" in path:
+    # PubMed Central's older addresses sit on the NIH's own host. Its host and its path, never the whole address: a
+    # page elsewhere carrying "ncbi.nlm.nih.gov/pmc" in its path or query was read as a paper.
+    if _in(host, _PAPER) or (host == "ncbi.nlm.nih.gov" and _path(source).startswith("/pmc")):
         return "paper"
     if _in(host, _BLOG):
         return "blog"
