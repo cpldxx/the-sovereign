@@ -12,6 +12,7 @@ open-access full text, fetched under the usual rules) and trusts it as a paper (
 import asyncio
 import os
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -31,7 +32,10 @@ FULL_TEXT_CHARS = 60_000
 _ATOM = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 _pace: dict[str, float] = {}           # API → earliest next call (monotonic)
 _PACE = {"arxiv": 3.0, "pubmed": 0.34, "openalex": 0.1}
-_lock = asyncio.Lock()
+# DeerFlow runs parallel tool calls on separate event loops (and /papers runs on the server's): an asyncio.Lock shared
+# across them binds to one loop and then raises "bound to a different event loop" (fetch.py, search.py). Each call
+# reserves its time slot under a thread lock instead.
+_lock = threading.Lock()
 
 
 @dataclass
@@ -57,11 +61,12 @@ _found: dict[str, Paper] = {}   # what paper_search returned, for read_paper (th
 
 
 async def _wait(api: str) -> None:
-    async with _lock:
-        delay = _pace.get(api, 0) - time.monotonic()
-        _pace[api] = max(time.monotonic(), _pace.get(api, 0)) + _PACE[api]
-    if delay > 0:
-        await asyncio.sleep(delay)
+    with _lock:
+        now = time.monotonic()
+        slot = max(now, _pace.get(api, 0.0))
+        _pace[api] = slot + _PACE[api]
+    if slot > now:
+        await asyncio.sleep(slot - now)
 
 
 def _clean(text: str) -> str:
