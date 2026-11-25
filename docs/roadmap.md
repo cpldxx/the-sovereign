@@ -1,6 +1,6 @@
 # Roadmap
 
-What has been built, phase by phase.
+What has been built, phase by phase, and what comes next.
 
 ## ✅ Phase 1 — Foundation
 Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands integration.
@@ -50,3 +50,74 @@ Core schema, ingest pipeline with batch LLM calls, domain templates, OpenHands i
 - ✅ Source tiers: papers (OpenAlex, arXiv, PubMed) > official sources > news > blogs, weighed in every fact
 - ✅ A second layer: synthesis pages per core question — the consensus, the debates, the open questions, the key
   sources — rewritten as the graph changes
+
+## ⏳ Phase I — Proof
+Before more features: find out whether the graph earns its keep, and make the exam a real measurement. The work
+goes top to bottom, one small step at a time. `[x]` is done (with the date); a step marked *(owner)* needs a person:
+running the lab, labeling, or a decision.
+
+### I1 · An exam hold-out that holds
+- [ ] Exam sources leave out pages the graph has read, and near-duplicates of them, not only the same URL
+- [ ] Research's "already read" check fails closed when the KG can't be reached
+
+### I2 · Baselines on the same exam
+- [ ] Exam answerers are pluggable; the graph is one of them
+- [ ] Closed book: the model alone
+- [ ] Plain RAG over the stored pages, with the same token budget as the graph's context
+- [ ] Live search at question time, without the graph
+- [ ] One-shot deep research reports on the same topic
+- [ ] One command runs every answerer on a sitting and writes the comparison
+- [ ] *(owner)* Run it on a real domain; the results go under Measured
+
+### I3 · A progress check
+- [ ] Warn when a domain has had no new page or exam for a set time, not only when a service is down
+- [ ] Shown in the app and the briefing
+
+### I4 · A fact audit
+- [ ] A stratified sample of stored facts (relation type, weight band, superseded, forgotten), exported
+- [ ] A labeling view in the app: correct / wrong / unsure, with the source page beside the fact
+- [ ] Precision per band from the labels
+- [ ] *(owner)* Label about 200 facts
+
+### I5 · The exam as a measurement
+- [ ] A frozen, dated test pool that never steers research, kept apart from the questions that do
+- [ ] The grader can be another model family (env), recorded with each sitting
+- [ ] More questions, repeated sittings, scores with confidence intervals
+- [ ] Questions carry dates; false-premise and unanswerable questions
+- [ ] Past graph snapshots re-sit the same pool: a learning curve
+- [ ] *(owner)* Grade a sample of answers by hand
+
+### I6 · The Head as people meet it
+- [ ] Record per answer whether the Head read the graph before answering
+- [ ] Check a sample of answers: does each cited fact support its claim
+
+### I7 · Confidence that knows copies
+- [ ] Group near-duplicate pages; count each group, and each site, once
+- [ ] Damp the evidence of many weak sources
+- [ ] Calibrate weights on the I4 labels (Platt or isotonic) and publish the reliability diagram
+
+### I8 · When facts were true
+- [ ] `valid_from` / `valid_to` on facts, read from the text where it says
+- [ ] "As of date X" questions in queries and in the exam
+- [ ] Supersession precision and recall on labeled pairs
+
+### I9 · Safer forgetting
+- [ ] Re-check a fact's source before forgetting it
+- [ ] Archive entities instead of deleting them
+- [ ] *(owner)* Measure how often forgetting removed a true fact (I4 labels)
+
+### I10 · Steadier extraction on the local model
+- [ ] Extraction recall on a fixed set, and run-to-run agreement, against cost
+- [ ] Try atomic facts and a two-pass ensemble; keep only what measurably helps
+
+### I11 · Housekeeping
+- [ ] Pin the `:latest` Docker images
+- [ ] Remove what is left of the removed acting layer
+- [ ] Record the token cost of one night in Claude mode
+- [ ] *(owner)* A read-only public demo lab with its exam curve
+
+### I12 · A comparison in the open
+- [ ] HippoRAG 2 and Graphiti on the same pages and exam, with their own settings; the configs published
+
+### I13 · One user, one promise
+- [ ] *(owner)* Choose the first user and the one-line promise; the README and the site follow
