@@ -28,7 +28,7 @@ from agents.extractor import STATE, extract, relate
 from agents.linker import link, link_or_none
 from agents.resolver import resolve
 from agents.validator import judge
-from core import activity, sources
+from core import activity, near, sources
 from core import database as kgdb
 from core.database import ArcadeDB, ArcadeDBError, new_uid, now
 from core.embeddings import embed
@@ -244,6 +244,7 @@ async def ingest(
                 await kgdb.create_episode(db, domain, {
                     "uid": episode_uid, "source": source, "title": title or "", "content": text, "tier": tier,
                     "content_status": content_status, "content_hash": digest, "created_at": now(),
+                    **await asyncio.to_thread(_sketch, text),
                 }, status="pending")
             except ArcadeDBError:
                 # The same text arriving twice at once: the content_hash index lets one in.
@@ -664,6 +665,28 @@ async def known_sources(db: ArcadeDB, domain: str, urls: list[str]) -> list[str]
                                    "ep.status AS status", u=wanted)
     done = {r["source"] for r in rows if r.get("status") in (None, "done")}
     return [u for u in dict.fromkeys(urls) if u in done]
+
+
+def _sketch(text: str) -> dict:
+    """The near-duplicate sketch of a page as the model reads it (menus and link targets out)."""
+    return near.sketch(readable(text))
+
+
+async def read_pages(db: ArcadeDB, domain: str) -> dict[str, dict]:
+    """The sketch of every page the graph has read ({episode uid: sketch}): what a page must not be a copy of to be
+    new to the graph. A failed or unfinished read doesn't count (as in known_sources). Pages read before sketches
+    (2026-11-25) get theirs the first time they are asked for, off the event loop."""
+    if not await db.exists(domain):
+        return {}
+    rows = [r for r in await kgdb.episode_sketches(db, domain) if r.get("status") in (None, "done")]
+    pages = {r["uid"]: {"sketch": r["sketch"], "shingles": r.get("shingles") or 0}
+             for r in rows if r.get("sketch") is not None}   # an empty page's sketch is [], stored like any other
+    missing = [r["uid"] for r in rows if r.get("sketch") is None]
+    for i in range(0, len(missing), 20):
+        for r in await kgdb.episode_texts(db, domain, missing[i:i + 20]):
+            pages[r["uid"]] = await asyncio.to_thread(_sketch, r.get("content") or "")
+            await kgdb.set_episode_sketch(db, domain, r["uid"], pages[r["uid"]])
+    return pages
 
 
 async def _counted(db, domain, fact: dict, source: str, episode_uid: str) -> bool:

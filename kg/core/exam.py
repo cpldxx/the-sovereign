@@ -9,7 +9,8 @@
            retrieved evidence, EMNLP 2025). Kept until the charter's questions or depth change, new ones are asked
            for, or the user removes one — a new exam (its version) starts a new series
     hold   the exam's sources are held out: research skips them (they count as read), so the graph has to learn the
-           answers elsewhere — a test set never trained on
+           answers elsewhere — a test set never trained on. And they are new to the graph when set: no page it has
+           read, nor a copy of one under another address (core/near.py)
     two    sets, set the same way from different sources: the PRACTICE questions say where research goes (their open
            ones are the learning cycle's first gaps) and are what a change to the system is tried on; the EXAM only
            measures. A score that steers what is learned, or what is changed, stops measuring (2026-10-29: four
@@ -45,7 +46,7 @@ from pydantic_ai import Agent
 from pydantic_ai.exceptions import UnexpectedModelBehavior
 
 from agents.validator import validate
-from core import activity, auth, charter, kg, sources
+from core import activity, auth, charter, kg, near, sources
 from core import database as kgdb
 from core.database import ArcadeDB, now
 from core.llm import model_for, model_settings
@@ -263,9 +264,10 @@ async def held_out(db: ArcadeDB, domain: str) -> set[str]:
 async def _candidates(db: ArcadeDB, domain: str, queries: list[str], taken: set[str] = frozenset()) -> list[dict]:
     """Papers for the core question (the first search: the English one), then web results — by tier (official before
     press before other sites, the engines' order within one), blogs and forums left out: a reference must have authority
-    (2026-10-28: a company blog's "HBM4 moves to hybrid bonding" stood against papers saying it keeps microbumps). The
-    pages the graph already read go last (a held-out source should be new to it); those the other set is drawn from
-    (`taken`) not at all — practice must not rehearse the exam's pages."""
+    (2026-10-28: a company blog's "HBM4 moves to hybrid bonding" stood against papers saying it keeps microbumps). Left
+    out too: the pages the graph has read — a question from one tests what the graph copied, not what it learned
+    (until 2026-11-25 they only went last) — and those the other set is drawn from (`taken`): practice must not
+    rehearse the exam's pages. Copies of read pages under other addresses are left out once read (_core_questions)."""
     found: dict[str, dict] = {}
     try:
         for p in await _papers(queries[0]):
@@ -283,7 +285,7 @@ async def _candidates(db: ArcadeDB, domain: str, queries: list[str], taken: set[
     ranked = sorted((r for r in found.values() if r["tier"] != "blog" and r["url"] not in taken),
                     key=lambda r: sources.TIERS.index(r["tier"]))
     read = set(await kg.known_sources(db, domain, [r["url"] for r in ranked]))
-    return [r for r in ranked if r["url"] not in read] + [r for r in ranked if r["url"] in read]
+    return [r for r in ranked if r["url"] not in read]
 
 
 async def _from_page(domain: str, core: str, goal: str, page: dict) -> list[dict]:
@@ -307,6 +309,7 @@ async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None,
     """(questions, the core questions no source was found for) — none from the sources of the `other` set, or like
     its questions."""
     taken = {q["source"]["url"] for q in (other or {}).get("questions", []) if q.get("source")}
+    read = await kg.read_pages(db, domain)
     n = len(c["questions"])
     with activity.working(domain, "learning", "exam: planning the searches"):
         plan = await _ask(Plan, PLAN.format(domain=domain, n=n, charter=charter.text(c)), "Plan the searches.")
@@ -319,7 +322,7 @@ async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None,
         mine: list[dict] = []
         try:
             mine = await _core_questions(domain, core, c["goal"], results, questions + (other or {}).get("questions", []),
-                                         pages)
+                                         pages, read)
         except Exception as e:   # one core question's trouble leaves it unsourced, not the exam unset
             print(f"[Exam] {domain}: core question {i} failed: {type(e).__name__}: {e}"[:300], flush=True)
         if not mine:
@@ -329,9 +332,10 @@ async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None,
 
 
 async def _core_questions(domain: str, core: str, goal: str, results: list[dict], questions: list[dict],
-                          pages: int = 1) -> list[dict]:
+                          pages: int = 1, read: dict[str, dict] | None = None) -> list[dict]:
     """From the most authoritative of the results: the questions `pages` pages state (none if no page could be read).
-    A 4-question practice set came of one page per core question (2026-10-29): the exam had taken the best ones."""
+    A 4-question practice set came of one page per core question (2026-10-29): the exam had taken the best ones.
+    A page that is a copy of one the graph has read (`read`: kg.read_pages) is left out and doesn't use up a try."""
     mine: list[dict] = []
     if results:
         listing = "\n".join(f"[{k + 1}] {r['title']}{'' if r['tier'] == 'paper' else ' [' + r['tier'] + ']'} — {r['url']}"
@@ -339,9 +343,11 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
         pick = await _ask(Pick, PICK, f"QUESTION: {core}\n\nRESULTS:\n{listing}", decisive=True)
         order = [results[k - 1] for k in dict.fromkeys(pick.picks) if 1 <= k <= min(len(results), 12)]
         tried = kept = 0
-        for r in order[:pages + PAGES_TRIED]:
-            if tried >= PAGES_TRIED + pages - 1 or kept >= pages:
+        left = pages + PAGES_TRIED   # pages looked at, besides copies of pages the graph has read
+        for r in order:
+            if left <= 0 or tried >= PAGES_TRIED + pages - 1 or kept >= pages:
                 break
+            left -= 1
             if r.get("markdown"):    # a paper: its abstract is the source, nothing to fetch
                 page = {"url": r["url"], "title": r["title"], "status": "full", "markdown": r["markdown"]}
             else:
@@ -351,6 +357,12 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
                 except httpx.HTTPError:
                     continue
             if page.get("status") == "failed" or len(page.get("markdown") or "") < MIN_PAGE:
+                continue
+            seen = near.copy_in(near.sketch(kg.readable(page["markdown"][:SOURCE_CHARS])), read or {})
+            if seen:
+                left += 1
+                print(f"[Exam] {domain}: {page['url']} left out — a copy of a page the graph has read ({seen})",
+                      flush=True)
                 continue
             tried += 1
             new = [q for q in await _from_page(domain, core, goal, page)

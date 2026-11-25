@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from core import charter, exam, learning
+from core import database as kgdb
 from core.exam import CoreExam, Grade, Pick, Plan, Verdict, Written
 
 CHARTER = {"goal": "Know which treatments slow decline", "depth": "expert",
@@ -62,7 +63,7 @@ class _Agent:
             out = Plan(cores=[{"core": 1, "queries": ["alzheimer drugs review", "Alzheimer Medikamente"]},
                               {"core": 2, "queries": ["alzheimer blood test"]}])
         elif self.output_type is Pick:
-            out = Pick(picks=[1, 2, 1])   # the FDA's page: listed first, as the forum (already read) went last
+            out = Pick(picks=[1, 2, 1])   # the first listed: the FDA's page (the forum, already read, is left out)
         elif self.output_type is CoreExam:
             out = _Agent.written
         else:   # the graph's answer, then its grade — each from the question's verdict
@@ -148,7 +149,7 @@ def domain(scratch, monkeypatch):
         return [type("V", (), {"supported": "disputed" not in s, "reliability": 0.9})() for s in statements]
 
     async def known_sources(db, d, urls):
-        return [FORUM]                                   # already read: tried last
+        return [FORUM]                                   # already read: never an exam source
 
     graph = {"What kind of drug is Leqembi?": [{"uid": "f1", "fact": "Leqembi is an anti-amyloid antibody.",
                                                  "sources": ["ep1", "ep2"], "evidence": 2}],
@@ -179,11 +180,38 @@ async def test_questions_are_written_from_a_source_and_kept_only_where_it_states
         (1, "basic", "What kind of drug is Leqembi?"), (1, "working", "How much did Leqembi slow decline in Clarity AD?")]
     assert e["questions"][1]["answer"] == "27% over 18 months" and e["questions"][0]["source"]["url"] == FDA
     assert e["unsourced"] == [2]                          # no source found for the blood tests
-    # Pages the graph already read are listed last; the examiner wrote from the page picked — not from memory.
-    assert any("[1] FDA approves Leqembi" in p and "[2] Forum" in p for _, p in _Agent.prompts)
+    # Pages the graph already read are not offered; the examiner wrote from the page picked — not from memory.
+    listing = next(p for system, p in _Agent.prompts if system == exam.PICK)
+    assert "[1] FDA approves Leqembi" in listing and "Forum" not in listing
     assert any("SOURCE (FDA approves Leqembi)" in prompt and "Clarity AD" in prompt for _, prompt in _Agent.prompts)
     # Its sources are held out: research skips them.
     assert await exam.held_out(db, d) == {FDA}
+
+
+@pytest.mark.db
+async def test_a_copy_of_a_page_the_graph_has_read_is_never_an_exam_source(domain, monkeypatch):
+    """Exam sources must be new to the graph: a reprint of a page it read, under another address, is skipped like
+    the page itself, and the next pick is read instead (until 2026-11-25 only the same URL counted, and went last)."""
+    db, d = domain
+    monkeypatch.setattr(exam, "PAGES", {"exam": 1, "practice": 2})
+    article = " ".join(f"In cohort {i} lecanemab slowed decline by {i % 30} percent over 18 months." for i in range(80))
+    await kgdb.create_episode(db, d, {"uid": "ep1", "source": "https://news.example/leqembi", "content": article,
+                                      "content_hash": "ep1"}, status="done")
+
+    async def search(query):
+        return [] if "blood" in query else [{"title": "FDA approves Leqembi", "url": FDA, "snippet": "FDA"},
+                                            {"title": "NIH: the Leqembi trial", "url": NIH, "snippet": "NIH"}]
+    fetched = []
+
+    async def fetch(url):
+        fetched.append(url)
+        text = f"FDA News Release\n{article}" if url == FDA else PAGE   # the FDA's page reprints the article read
+        return {"url": url, "title": "x", "status": "ok", "markdown": text}
+    monkeypatch.setattr(exam, "_search", search)
+    monkeypatch.setattr(exam, "_fetch", fetch)
+    await charter.save(db, d, CHARTER)
+    e = await exam.ensure(db, d)
+    assert fetched == [FDA, NIH] and {q["source"]["url"] for q in e["questions"]} == {NIH}
 
 
 @pytest.mark.db

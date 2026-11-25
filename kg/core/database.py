@@ -6,7 +6,8 @@ One ArcadeDB database per domain:
     -[:<rel>]->  synapse  one edge type per ontology relation, all EXTENDS Fact:
                           uid, fact, sources, evidence, disbelief, embedding, created_at, updated_at,
                           invalid_at, invalid_reason
-    (:Episode)   memory   uid, source, title, content, content_status, content_hash, status, error, created_at
+    (:Episode)   memory   uid, source, title, content, content_status, content_hash, status, error, created_at,
+                          sketch, shingles (near-duplicate sketch, core/near.py)
     (:Episode)-[:MENTIONS]->(:Entity)
     ReviewItem (document) uid, kind, status, summary, payload (JSON), created_at, resolved_at, resolution
     Report     (document) uid, kind, period_start, period_end, created_at, headline, briefing, spoken,
@@ -284,6 +285,25 @@ async def create_episode(db: ArcadeDB, domain: str, episode: dict, status: str =
     """A new source. `status` says how far its ingest got (pending → done | failed), so a text whose ingest died
     half-way is read again instead of being skipped as a duplicate."""
     await db.cypher(domain, "CREATE (e:Episode) SET e += $props", props={**episode, "status": status})
+
+
+async def episode_sketches(db: ArcadeDB, domain: str) -> list[dict]:
+    """Every episode's uid, status, sketch and shingle count (core/near.py; no sketch: stored before 2026-11-25)."""
+    return await db.cypher(domain, "MATCH (ep:Episode) RETURN ep.uid AS uid, ep.status AS status, "
+                                   "ep.sketch AS sketch, ep.shingles AS shingles")
+
+
+async def episode_texts(db: ArcadeDB, domain: str, uids: list[str]) -> list[dict]:
+    """The stored text of these episodes: [{uid, content}]."""
+    if not uids:
+        return []
+    return await db.cypher(domain, "MATCH (ep:Episode) WHERE ep.uid IN $uids RETURN ep.uid AS uid, "
+                                   "ep.content AS content", uids=uids)
+
+
+async def set_episode_sketch(db: ArcadeDB, domain: str, uid: str, sketch: dict) -> None:
+    await db.cypher(domain, "MATCH (ep:Episode {uid: $uid}) SET ep.sketch = $s, ep.shingles = $n",
+                    uid=uid, s=sketch["sketch"], n=sketch["shingles"])
 
 
 async def set_episode_status(db: ArcadeDB, domain: str, uid: str, status: str, error: str | None = None) -> None:
