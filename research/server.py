@@ -131,6 +131,9 @@ async def scheduler() -> None:
             for d, (slot, _since) in list(_waiting.items()):
                 del _waiting[d]
                 _ran(d, slot)
+                if d in _cycling:   # started by hand while this one waited: one cycle per domain at a time
+                    print(f"[Research] {d}: learning cycle {slot} skipped — a cycle is already running", flush=True)
+                    continue
                 start_cycle(d, slot)
         except httpx.HTTPError as e:
             print(f"[Research] schedule: KG unreachable ({type(e).__name__})", flush=True)
