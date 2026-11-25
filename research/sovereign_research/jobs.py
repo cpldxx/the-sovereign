@@ -153,9 +153,11 @@ class Jobs:
         return any(j["domain"] == domain and j["mode"] == "bootstrap" and j["status"] == "done"
                    and (j.get("summary") or {}).get("pages_read") for j in self.jobs.values())
 
-    def active(self, domain: str) -> dict | None:
-        return next((j for j in self.jobs.values()
-                     if j["domain"] == domain and j["status"] not in ("done", "failed")), None)
+    def active(self, domain: str, mode: str | None = None) -> dict | None:
+        """The domain's first unfinished job (of `mode`, when given). Asking for a bootstrap by mode: the first
+        unfinished job may be a mission queued ahead of one."""
+        return next((j for j in self.jobs.values() if j["domain"] == domain and mode in (None, j["mode"])
+                     and j["status"] not in ("done", "failed")), None)
 
     # ── submit + worker ────────────────────────────────────────────────────
     def submit(self, domain: str, mode: str, question: str = "") -> dict:

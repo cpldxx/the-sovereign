@@ -282,7 +282,7 @@ async def kickoff(domain: str, request: Kickoff):
         if (await kg.get(f"/domains/{domain}")).status_code == 404:
             raise HTTPException(status_code=404, detail=f"Domain '{domain}' does not exist")
     queued = []
-    if not jobs.bootstrapped(domain) and not ((active := jobs.active(domain)) and active["mode"] == "bootstrap"):
+    if not jobs.bootstrapped(domain) and not jobs.active(domain, "bootstrap"):
         queued.append(jobs.submit(domain, "bootstrap"))
     for q in dict.fromkeys(q.strip() for q in request.questions if q.strip()):
         queued.append(jobs.submit(domain, "mission", q))
@@ -302,7 +302,7 @@ async def research(domain: str, request: ResearchRequest):
             raise HTTPException(status_code=503, detail=f"KG API unreachable at {KG_URL}")
     if r.status_code == 404:
         raise HTTPException(status_code=404, detail=f"Domain '{domain}' does not exist")
-    if request.mode == "bootstrap" and (active := jobs.active(domain)) and active["mode"] == "bootstrap":
+    if request.mode == "bootstrap" and (active := jobs.active(domain, "bootstrap")):
         return active
     return jobs.submit(domain, request.mode, request.question.strip())
 
