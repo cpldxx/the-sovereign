@@ -10,7 +10,8 @@
            for, or the user removes one — a new exam (its version) starts a new series
     hold   the exam's sources are held out: research skips them (they count as read), so the graph has to learn the
            answers elsewhere — a test set never trained on. And they are new to the graph when set: no page it has
-           read, nor a copy of one under another address (core/near.py)
+           read, nor a copy of one under another address (core/near.py). Nor does research read a copy of one later:
+           each source's sketch is kept, and the KG refuses research a page that is a near-duplicate of one
     two    sets, set the same way from different sources: the PRACTICE questions say where research goes (their open
            ones are the learning cycle's first gaps) and are what a change to the system is tried on; the EXAM only
            measures. A score that steers what is learned, or what is changed, stops measuring (2026-10-29: four
@@ -27,8 +28,8 @@
            practice is weakest — and the exam's next sitting shows whether the graph learned the subject
 
 Taken after each learning cycle (the research service), once when a charter is confirmed (the baseline), and on demand.
-The exam is the Setting document "exam", the practice set "exam_practice"; each sitting an ExamRun document (its
-`kind`: "practice", or none for the exam).
+The exam is the Setting document "exam", the practice set "exam_practice", their sources' sketches "exam_sketches";
+each sitting an ExamRun document (its `kind`: "practice", or none for the exam).
 """
 
 import asyncio
@@ -65,6 +66,7 @@ ANSWERED, PARTIAL = 75, 25
 GROUNDED = 2          # the exam format: 2 = written from sources with reference answers (older exams are set again)
 TIERS = ("basic", "working", "deep")
 KINDS = {"exam": "exam", "practice": "exam_practice"}   # set → its Setting key
+SKETCHES = "exam_sketches"   # Setting key: {source url: its near-duplicate sketch} for both sets (held_sketches)
 RUN_JSON = ("items", "cores", "graph")
 MODEL = model_for("examiner")
 
@@ -239,9 +241,13 @@ async def _fetch(url: str) -> dict:
 
 # ── Setting the exam ───────────────────────────────────────────────────────
 
-async def _doc(db: ArcadeDB, domain: str, kind: str = "exam") -> dict | None:
-    rows = await kgdb.find_docs(db, domain, "Setting", ("value",), "key = :key", limit=1, key=KINDS[kind])
+async def _setting(db: ArcadeDB, domain: str, key: str) -> dict | None:
+    rows = await kgdb.find_docs(db, domain, "Setting", ("value",), "key = :key", limit=1, key=key)
     return rows[0] if rows else None
+
+
+async def _doc(db: ArcadeDB, domain: str, kind: str = "exam") -> dict | None:
+    return await _setting(db, domain, KINDS[kind])
 
 
 async def current(db: ArcadeDB, domain: str, kind: str = "exam") -> dict | None:
@@ -259,6 +265,39 @@ async def held_out(db: ArcadeDB, domain: str) -> set[str]:
     """The source pages of the exam and of the practice set: research doesn't learn from them."""
     return {q["source"]["url"] for kind in KINDS for q in ((await current(db, domain, kind)) or {}).get("questions", [])
             if q.get("source")}
+
+
+async def held_sketches(db: ArcadeDB, domain: str) -> dict[str, dict]:
+    """The near-duplicate sketches of the held-out sources ({url: sketch}): research must not read a copy of one under
+    another address either — a reprint found after the exam was set would teach the graph its answers."""
+    held = await held_out(db, domain)
+    doc = await _setting(db, domain, SKETCHES) if held else None
+    return {u: s for u, s in ((doc or {}).get("value") or {}).items() if u in held and s}
+
+
+def _sketch(page: dict) -> dict:
+    """A page's sketch as the examiner reads it (core/near.py): what a copy of it is found by."""
+    return near.sketch(kg.readable(page["markdown"][:SOURCE_CHARS]))
+
+
+async def _sketch_sources(db: ArcadeDB, domain: str, new: dict[str, dict] | None = None) -> None:
+    """Keep a sketch of every held-out source: `new` from the pages a set was just written from; a set from before
+    sketches (2026-11-26) has its sources read again — as they are now, close enough to know a copy by. A page that
+    can't be read now is tried at the next sitting; pages no longer held out are dropped."""
+    held = await held_out(db, domain)
+    doc = await _setting(db, domain, SKETCHES)
+    old = (doc or {}).get("value") or {}
+    have = {u: s for u, s in {**old, **(new or {})}.items() if u in held}
+    for url in sorted(held - set(have)):
+        try:
+            page = await _fetch(url)
+        except (httpx.HTTPError, ValueError) as e:
+            print(f"[Exam] {domain}: {url} could not be read to sketch it ({type(e).__name__})", flush=True)
+            continue
+        if page.get("status") != "failed" and page.get("markdown"):
+            have[url] = _sketch(page)
+    if have != old:
+        await _store(db, domain, SKETCHES, have, doc)
 
 
 async def _candidates(db: ArcadeDB, domain: str, queries: list[str], taken: set[str] = frozenset()) -> list[dict]:
@@ -305,11 +344,12 @@ async def _from_page(domain: str, core: str, goal: str, page: dict) -> list[dict
 
 
 async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None,
-               pages: int = 1) -> tuple[list[dict], list[int]]:
-    """(questions, the core questions no source was found for) — none from the sources of the `other` set, or like
-    its questions."""
+               pages: int = 1) -> tuple[list[dict], list[int], dict[str, dict]]:
+    """(questions, the core questions no source was found for, the sketches of the pages they were written from) —
+    none from the sources of the `other` set, or like its questions."""
     taken = {q["source"]["url"] for q in (other or {}).get("questions", []) if q.get("source")}
     read = await kg.read_pages(db, domain)
+    sketches: dict[str, dict] = {}
     n = len(c["questions"])
     with activity.working(domain, "learning", "exam: planning the searches"):
         plan = await _ask(Plan, PLAN.format(domain=domain, n=n, charter=charter.text(c)), "Plan the searches.")
@@ -322,20 +362,22 @@ async def _set(db: ArcadeDB, domain: str, c: dict, other: dict | None = None,
         mine: list[dict] = []
         try:
             mine = await _core_questions(domain, core, c["goal"], results, questions + (other or {}).get("questions", []),
-                                         pages, read)
+                                         pages, read, sketches)
         except Exception as e:   # one core question's trouble leaves it unsourced, not the exam unset
             print(f"[Exam] {domain}: core question {i} failed: {type(e).__name__}: {e}"[:300], flush=True)
         if not mine:
             unsourced.append(i)
         questions += [{"core": i, **q} for q in mine]
-    return [{"id": f"q{k + 1}", **q} for k, q in enumerate(questions[:MAX_QUESTIONS * pages])], unsourced
+    return [{"id": f"q{k + 1}", **q} for k, q in enumerate(questions[:MAX_QUESTIONS * pages])], unsourced, sketches
 
 
 async def _core_questions(domain: str, core: str, goal: str, results: list[dict], questions: list[dict],
-                          pages: int = 1, read: dict[str, dict] | None = None) -> list[dict]:
+                          pages: int = 1, read: dict[str, dict] | None = None,
+                          sketches: dict[str, dict] | None = None) -> list[dict]:
     """From the most authoritative of the results: the questions `pages` pages state (none if no page could be read).
     A 4-question practice set came of one page per core question (2026-10-29): the exam had taken the best ones.
-    A page that is a copy of one the graph has read (`read`: kg.read_pages) is left out and doesn't use up a try."""
+    A page that is a copy of one the graph has read (`read`: kg.read_pages) is left out and doesn't use up a try.
+    The sketch of each page questions came from goes into `sketches` ({url: sketch})."""
     mine: list[dict] = []
     if results:
         listing = "\n".join(f"[{k + 1}] {r['title']}{'' if r['tier'] == 'paper' else ' [' + r['tier'] + ']'} — {r['url']}"
@@ -358,7 +400,8 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
                     continue
             if page.get("status") == "failed" or len(page.get("markdown") or "") < MIN_PAGE:
                 continue
-            seen = near.copy_in(near.sketch(kg.readable(page["markdown"][:SOURCE_CHARS])), read or {})
+            sk = _sketch(page)
+            seen = near.copy_in(sk, read or {})
             if seen:
                 left += 1
                 print(f"[Exam] {domain}: {page['url']} left out — a copy of a page the graph has read ({seen})",
@@ -369,16 +412,23 @@ async def _core_questions(domain: str, core: str, goal: str, results: list[dict]
                    if not any(_alike(q["question"], x["question"]) for x in questions + mine)]
             kept += bool(new)
             mine += new
+            if new and sketches is not None:
+                sketches[page["url"]] = sk
     return mine
 
 
-async def _save(db: ArcadeDB, domain: str, value: dict, kind: str = "exam") -> dict:
-    doc = await _doc(db, domain, kind)
+async def _store(db: ArcadeDB, domain: str, key: str, value: dict, doc: dict | None = None) -> dict:
+    """Write a Setting document's value (`doc`: the document as just read, if it exists)."""
+    doc = doc or await _setting(db, domain, key)
     if doc:
         await kgdb.update_doc(db, domain, "Setting", doc["uid"], {"value": value}, ("value",))
     else:
-        await kgdb.insert_doc(db, domain, "Setting", {"key": KINDS[kind], "value": value}, ("value",))
+        await kgdb.insert_doc(db, domain, "Setting", {"key": key, "value": value}, ("value",))
     return value
+
+
+async def _save(db: ArcadeDB, domain: str, value: dict, kind: str = "exam") -> dict:
+    return await _store(db, domain, KINDS[kind], value)
 
 
 async def ensure(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "exam") -> dict:
@@ -391,13 +441,16 @@ async def ensure(db: ArcadeDB, domain: str, fresh: bool = False, kind: str = "ex
         raise ExamError("The exam is drawn from the research charter — there is none yet")
     exam = await current(db, domain, kind)
     if exam and exam.get("basis") == _basis(c) and exam.get("grounded") == GROUNDED and not fresh:
+        await _sketch_sources(db, domain)
         return exam
-    questions, unsourced = await _set(db, domain, c, await current(db, domain, _other(kind)), PAGES[kind])
+    questions, unsourced, sketches = await _set(db, domain, c, await current(db, domain, _other(kind)), PAGES[kind])
     if not questions:
         raise ExamError("No authoritative source could be read for any core question — is the research service up?")
-    return await _save(db, domain, {"version": (exam or {}).get("version", 0) + 1, "basis": _basis(c),
+    exam = await _save(db, domain, {"version": (exam or {}).get("version", 0) + 1, "basis": _basis(c),
                                     "grounded": GROUNDED, "created_at": now(), "cores": list(c["questions"]),
                                     "unsourced": unsourced, "questions": questions}, kind)
+    await _sketch_sources(db, domain, sketches)
+    return exam
 
 
 async def remove(db: ArcadeDB, domain: str, qid: str, kind: str = "exam") -> dict:

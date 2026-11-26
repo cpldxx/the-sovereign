@@ -58,7 +58,7 @@ running the lab, labeling, or a decision.
 
 ### I1 · An exam hold-out that holds
 - [x] Exam sources leave out pages the graph has read, and near-duplicates of them, not only the same URL (2026-11-25)
-- [ ] Research doesn't read near-duplicates of exam sources either (a reprint found after the exam was set)
+- [x] Research doesn't read near-duplicates of exam sources either (a reprint found after the exam was set) (2026-11-26)
 - [ ] Research's "already read" check fails closed when the KG can't be reached
 
 ### I2 · Baselines on the same exam

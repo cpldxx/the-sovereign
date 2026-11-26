@@ -5,7 +5,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core import kg
+from core import exam, kg
 from domains.registry import load_domain
 
 router = APIRouter(prefix="/domains", tags=["pipeline"])
@@ -18,6 +18,8 @@ class IngestRequest(BaseModel):
     content_status: Literal["full", "partial"] = "full"
     # What kind of source (core/sources.py) — read from `source` when not given; it caps the facts' reliability.
     tier: Literal["paper", "official", "reference", "press", "user", "web", "blog"] | None = None
+    # Research: refuse a copy of an exam or practice source under another address (core/exam.py: held out).
+    hold_out: bool = False
 
 
 @router.post("/{domain_name}/ingest")
@@ -27,14 +29,16 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
     extract → ontology/text gates → validate → resolve entities → link facts → commit / Head review.
     Usually 2 LLM calls (+1 per ambiguity kind) and 1 embedding call per ~8k-char chunk.
     duplicate: the text was read already (pending: being read). failed + reason: a model call or a write failed —
-    the episode is kept as failed and the same text is read again on the next ingest.
+    the episode is kept as failed and the same text is read again on the next ingest. held_out: with hold_out, the
+    text is a copy of this exam source and wasn't read.
     """
     try:
         load_domain(domain_name)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    db = req.app.state.db
     return await kg.ingest(
-        req.app.state.db, domain_name, request.raw_text, request.source, request.title, request.content_status,
-        request.tier,
+        db, domain_name, request.raw_text, request.source, request.title, request.content_status,
+        request.tier, await exam.held_sketches(db, domain_name) if request.hold_out else None,
     )
 

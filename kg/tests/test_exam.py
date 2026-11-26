@@ -6,7 +6,7 @@ web and Graph RAG are stood in; db tests use a throwaway database (conftest.scra
 import httpx
 import pytest
 
-from core import charter, exam, learning
+from core import charter, exam, kg, learning
 from core import database as kgdb
 from core.exam import CoreExam, Grade, Pick, Plan, Verdict, Written
 
@@ -212,6 +212,56 @@ async def test_a_copy_of_a_page_the_graph_has_read_is_never_an_exam_source(domai
     await charter.save(db, d, CHARTER)
     e = await exam.ensure(db, d)
     assert fetched == [FDA, NIH] and {q["source"]["url"] for q in e["questions"]} == {NIH}
+
+
+@pytest.mark.db
+async def test_research_never_reads_a_copy_of_an_exam_source_under_another_address(domain, monkeypatch):
+    """A reprint found after the exam was set would teach the graph its answers: the KG refuses research a near-duplicate
+    of a held-out source (until 2026-11-26 research skipped only the source's own URL). Other pages are read."""
+    db, d = domain
+    article = " ".join(f"In cohort {i} lecanemab slowed decline by {i % 30} percent over 18 months." for i in range(80))
+
+    async def fetch(url):
+        return {"url": url, "title": "FDA approves Leqembi", "status": "ok", "markdown": article}
+    monkeypatch.setattr(exam, "_fetch", fetch)
+    await charter.save(db, d, CHARTER)
+    await exam.ensure(db, d)
+    held = await exam.held_sketches(db, d)
+    assert list(held) == [FDA]
+    monkeypatch.setattr(kg, "load_domain", lambda d: {"ontology": {"entity_types": ["entity"],
+                                                                   "relation_types": ["relates_to"]}, "config": {}})
+
+    async def read(*a, **k):
+        return {"read": True}
+    monkeypatch.setattr(kg, "_ingest", read)
+    reprint = f"Health News Today\n{article}\nShare this story"
+    assert await kg.ingest(db, d, reprint, "https://mirror.example/leqembi", held=held) == {"held_out": FDA}
+    assert not await kg.read_pages(db, d)                                     # no episode: nothing of it was stored
+    other = " ".join(f"In trial {i} donanemab cleared amyloid in {i % 40} of every 100 patients." for i in range(80))
+    assert await kg.ingest(db, d, other, "https://other.example/donanemab", held=held) == {"read": True}  # same subject
+    assert await kg.ingest(db, d, reprint, "user_input") == {"read": True}    # only research is held to it
+
+
+@pytest.mark.db
+async def test_an_exam_set_before_sketches_gets_them_at_its_next_sitting(domain, monkeypatch):
+    """Its sources are read again once; a page that can't be read now is tried the next time."""
+    db, d = domain
+    await charter.save(db, d, CHARTER)
+    await exam.ensure(db, d)
+    await exam._store(db, d, exam.SKETCHES, {})                               # as before 2026-11-26
+    fetched = []
+
+    async def fetch(url):
+        fetched.append(url)
+        if len(fetched) == 1:
+            raise httpx.ConnectError("down")
+        return {"url": url, "title": "FDA approves Leqembi", "status": "ok", "markdown": PAGE}
+    monkeypatch.setattr(exam, "_fetch", fetch)
+    await exam.ensure(db, d)
+    assert fetched == [FDA] and not await exam.held_sketches(db, d)
+    await exam.ensure(db, d)
+    await exam.ensure(db, d)
+    assert fetched == [FDA, FDA] and list(await exam.held_sketches(db, d)) == [FDA]
 
 
 @pytest.mark.db

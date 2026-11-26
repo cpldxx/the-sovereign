@@ -383,6 +383,7 @@ class Jobs:
                         r = await kg.post(f"/domains/{domain}/ingest", json={
                             "raw_text": page["markdown"], "source": url, "title": page["title"],
                             "content_status": page["status"], **({"tier": page["tier"]} if page.get("tier") else {}),
+                            "hold_out": True,   # not a copy of an exam source under another address either
                         })
                         r.raise_for_status()
                         res = r.json()
@@ -393,6 +394,9 @@ class Jobs:
                             # The KG took the call but a model step or a write failed: the text is read again.
                             reason = str(res.get("reason") or "no reason given")[:200]
                             entry["ingest"] = {"error": f"the KG could not read it: {reason}"}
+                        elif res.get("held_out"):
+                            entry["ingest"] = {"skipped": "a copy of a page the exam holds out"}
+                            ingested(url)
                         elif res.get("duplicate") and res.get("pending"):
                             entry["ingest"] = {"skipped": "being read by another call", "pending": True}
                             ingested(url)

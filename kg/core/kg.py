@@ -210,12 +210,15 @@ class Report:
 async def ingest(
     db: ArcadeDB, domain: str, raw_text: str, source: str = "user_input",
     title: str | None = None, content_status: str = "full", tier: str | None = None,
+    held: dict[str, dict] | None = None,
 ) -> dict:
     """Store a source as an Episode and grow the graph from it. Raises ValueError for unknown domains.
 
     content_status: "full" | "partial" (paywalled/truncated: facts get capped reliability).
     tier: what kind of source (core/sources.py) — read from the URL unless the caller knows (research: "paper"); it
     caps each fact's reliability too.
+    held: pages the graph must not learn from ({url: near-duplicate sketch}; research passes the exam's held-out
+    sources, core/exam.held_sketches): a copy of one isn't read, and the result is {held_out: the page it copies}.
     The result says duplicate (this text was read already, or is being read: pending) or, when a model call or a
     write failed, failed + reason — the episode is then "failed" and the same text is read again next time.
     """
@@ -225,6 +228,10 @@ async def ingest(
     await kgdb.ensure_domain_db(db, domain)
 
     text = raw_text.strip()
+    sketch = await asyncio.to_thread(_sketch, text)
+    if held and (copy := near.copy_in(sketch, held)):
+        print(f"[Ingest] {domain}: {source} not read — a copy of {copy}, held out by the exam", flush=True)
+        return {"held_out": copy}
     digest = hashlib.sha256(" ".join(text.split()).encode()).hexdigest()
     existing = await kgdb.find_episode(db, domain, digest)
     if existing and not _retry(existing):
@@ -243,8 +250,7 @@ async def ingest(
             try:
                 await kgdb.create_episode(db, domain, {
                     "uid": episode_uid, "source": source, "title": title or "", "content": text, "tier": tier,
-                    "content_status": content_status, "content_hash": digest, "created_at": now(),
-                    **await asyncio.to_thread(_sketch, text),
+                    "content_status": content_status, "content_hash": digest, "created_at": now(), **sketch,
                 }, status="pending")
             except ArcadeDBError:
                 # The same text arriving twice at once: the content_hash index lets one in.
