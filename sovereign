@@ -296,6 +296,8 @@ case "${1:-}" in
       port=$(env_get SOVEREIGN_PORT); export SOVEREIGN_TEST_BASE="http://localhost:${port:-8000}/api"
       SOVEREIGN_TOKEN=$(env_get SOVEREIGN_TOKEN); ARCADEDB_PASS=$(env_get ARCADEDB_PASS); export SOVEREIGN_TOKEN ARCADEDB_PASS
     fi
+    # Research's own unit tests (no service needed), where its venv is set up: pytest isn't one of its dependencies.
+    if [[ -d "$ROOT/research/.venv" ]]; then (cd "$ROOT/research" && uv run --with pytest python -m pytest -q tests) || exit 1; fi
     if [[ "${2:-}" == "all" ]]; then (cd "$ROOT/kg" && uv run pytest -q); else (cd "$ROOT/kg" && uv run pytest -q -m "not slow"); fi ;;
   selfcheck)
     if docker_mode; then

@@ -256,8 +256,11 @@ async def read_paper_tool(key: str, full_text: bool = True) -> str:
         full_text: Read its open-access full text too, when there is one (the default — an abstract holds little);
             false for the abstract alone.
     """
-    if (p := _found.get(key)) and await fetch.known([p.url]):
-        return f"The knowledge graph already has {p.url}: read a paper it lacks."
+    try:
+        if (p := _found.get(key)) and await fetch.known([p.url], strict=True):
+            return f"The knowledge graph already has {p.url}: read a paper it lacks."
+    except fetch.Unchecked:
+        return fetch.unchecked(p.url)
     page = await read(key, full_text)
     if page.status == "failed":
         return f"Could not read {key}: {page.error}"

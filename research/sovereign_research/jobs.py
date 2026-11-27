@@ -87,9 +87,10 @@ class NothingRead(RuntimeError):
     """A run that read no page. `offline`: each page failed for want of a network, or the agent found none to open
     (the search engines unreachable too) — worth one more run, RETRY_MINUTES later."""
 
-    def __init__(self, message: str, offline: bool) -> None:
+    def __init__(self, message: str, offline: bool, kg_silent: bool = False) -> None:
         super().__init__(message)
         self.offline = offline
+        self.kg_silent = kg_silent     # every page was left unread because the KG couldn't say whether it has it
 
 
 def now() -> str:
@@ -213,9 +214,10 @@ class Jobs:
                     self._later(job, f"{type(e).__name__} reaching the KG — trying again in {RETRY_MINUTES:g} min",
                                 retried=True)
                     continue
-                if isinstance(e, NothingRead) and e.offline and not job.get("retried"):
+                if isinstance(e, NothingRead) and (e.offline or e.kg_silent) and not job.get("retried"):
                     job["pages"] = []
-                    self._later(job, f"{e}, the network down — trying again in {RETRY_MINUTES:g} min", retried=True)
+                    self._later(job, f"{e}, {'the KG not answering' if e.kg_silent else 'the network down'} — "
+                                f"trying again in {RETRY_MINUTES:g} min", retried=True)
                     continue
                 detail = str(e) or ("no answer in time — the KG or the machine was overloaded"
                                     if isinstance(e, httpx.TimeoutException) else "")
@@ -300,7 +302,8 @@ class Jobs:
                 "no page could be read — " + ("every page failed (see pages)" if pages else
                 "the agent found nothing to open (search engines may be rate-limiting; "
                 "try later, or set TAVILY_API_KEY / BRAVE_API_KEY in research/.env)"),
-                offline=all(fetch.offline(p.error) for p in pages))
+                offline=all(fetch.offline(p.error) for p in pages),
+                kg_silent=bool(pages) and all(p.error == fetch.UNCHECKED_ERROR for p in pages))
         job["pages"] = [
             {"url": p.url, "title": p.title, "status": p.status, "error": p.error, "chars": len(p.markdown),
              **({"tier": p.tier} if p.tier else {})}
@@ -337,18 +340,22 @@ class Jobs:
         else:
             self._step(job, f"ontology generation failed ({r.status_code}); keeping the current one")
 
-    async def _known(self, kg: httpx.AsyncClient, domain: str, urls: "list[str]") -> set[str]:  # list: a method here
-        """The URLs the graph has read in full (any time — the newest 500 episodes missed older ones, which were
-        read again as new episodes). A failed or unfinished read isn't known: it is read again."""
+    async def _known(self, kg: httpx.AsyncClient, domain: str,
+                     urls: "list[str]") -> tuple[set[str], set[str]]:  # list: a method here
+        """(known, unchecked). Known: the URLs the graph has read in full (any time — the newest 500 episodes missed
+        older ones, which were read again as new episodes) or holds out for the exam. A failed or unfinished read
+        isn't known: it is read again. Unchecked: the URLs the KG couldn't answer for — they are not ingested on a
+        guess (until 2026-11-27 they were: a page that had changed became a second episode of one source)."""
         known: set[str] = set()
+        unchecked: set[str] = set()
         for i in range(0, len(urls), 500):
             try:
                 r = await kg.post(f"/domains/{domain}/sources", json={"urls": urls[i:i + 500]})
-                known.update(r.raise_for_status().json().get("known", []))
-            except (httpx.HTTPError, ValueError) as e:
-                # The KG dedupes identical text by itself; a page that changed is then read as a new episode.
+                known.update(r.raise_for_status().json()["known"])
+            except (httpx.HTTPError, ValueError, KeyError, TypeError) as e:
                 print(f"[Research] {domain}: known sources unavailable ({type(e).__name__})", flush=True)
-        return known
+                unchecked.update(urls[i:i + 500])
+        return known, unchecked
 
     async def _ingest(self, job: dict, kept: dict[str, dict]) -> None:
         """Every kept page → the KG; a page leaves the kept file once the graph has it."""
@@ -360,7 +367,7 @@ class Jobs:
         # Long pages are several chunks of LLM work on the KG side (minutes each): wait up to an hour per call.
         async with httpx.AsyncClient(base_url=KG_URL, headers=auth.headers(domain),
                                      timeout=httpx.Timeout(3600, connect=10)) as kg:
-            known = await self._known(kg, domain, list(kept))
+            known, unchecked = await self._known(kg, domain, list(kept))
             # Pages go to the KG side by side: it reads their chunks in parallel and writes them one at a time.
             gate = asyncio.Semaphore(INGEST_PAGES)
             ingest_started = time.monotonic()
@@ -375,6 +382,9 @@ class Jobs:
                 if url in known:
                     entry["ingest"] = {"skipped": "already in the graph"}
                     ingested(url)
+                    return
+                if url in unchecked:    # kept on disk: the worker tries the ingest once more
+                    entry["ingest"] = {"error": "the KG could not say whether it already has this page"}
                     return
                 async with gate:
                     self._step(job, f"ingesting {url}")

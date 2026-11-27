@@ -111,7 +111,7 @@ The ontology is the grammar of a domain's KG — which node categories and relat
 
 ## Safeguards that check themselves
 
-- **Tests** (`kg/tests`, `./sovereign test`): roles and the auth middleware, the ingest gates, the crew and its wake
+- **Tests** (`kg/tests`, and `research/tests` for its "already read" check; `./sovereign test`): roles and the auth middleware, the ingest gates, the crew and its wake
   guard, learning (schedule, forgetting), storage — and security invariants against the real pieces: sign-up /
   throttling / revocation in a throwaway accounts database, nothing answers without credentials, a domain-scoped
   connection can't leave its domain. Slow ones (`test all`) call the model and the internet

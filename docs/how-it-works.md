@@ -84,7 +84,9 @@ by itself   a learning cycle at the times you set (Settings › Learning): what'
   **held out** (research skips them, like a test set never trained on): the graph has to learn the answers elsewhere.
   And they are new to the graph when the exam is set: never a page it has read, nor a copy of one under another
   address (a reprint or a mirror, found by comparing near-duplicate sketches of the texts). Each source's sketch is
-  kept, so a copy research finds later isn't read either: the KG refuses it at ingest.
+  kept, so a copy research finds later isn't read either: the KG refuses it at ingest. While the KG can't say whether
+  a page is known or held out, research doesn't open it, and pages it already read are kept for one retry instead of
+  being ingested on a guess.
   At each sitting the examiner writes the graph's answer from the facts Graph RAG returns — without seeing the reference,
   so it can't leak in — then grades that answer against the reference apart (2 / 1 / 0) and flags a contradiction. Briefing › Growth shows the score over time, each core question's state and
   every question with what its source says and what the graph says; the open ones are the next cycle's first research.
