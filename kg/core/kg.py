@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+from urllib.parse import urldefrag
 
 from pydantic_ai import Agent
 
@@ -218,7 +219,8 @@ async def ingest(
     tier: what kind of source (core/sources.py) — read from the URL unless the caller knows (research: "paper"); it
     caps each fact's reliability too.
     held: pages the graph must not learn from ({url: near-duplicate sketch}; research passes the exam's held-out
-    sources, core/exam.held_sketches): a copy of one isn't read, and the result is {held_out: the page it copies}.
+    sources, core/exam.held_sketches): neither such a page nor a copy of one is read, and the result is {held_out:
+    the held-out page}.
     The result says duplicate (this text was read already, or is being read: pending) or, when a model call or a
     write failed, failed + reason — the episode is then "failed" and the same text is read again next time.
     """
@@ -229,8 +231,8 @@ async def ingest(
 
     text = raw_text.strip()
     sketch = await asyncio.to_thread(_sketch, text)
-    if held and (copy := near.copy_in(sketch, held)):
-        print(f"[Ingest] {domain}: {source} not read — a copy of {copy}, held out by the exam", flush=True)
+    if held and (copy := address if (address := urldefrag(source).url) in held else near.copy_in(sketch, held)):
+        print(f"[Ingest] {domain}: {source} not read — {copy} is held out by the exam", flush=True)
         return {"held_out": copy}
     digest = hashlib.sha256(" ".join(text.split()).encode()).hexdigest()
     existing = await kgdb.find_episode(db, domain, digest)

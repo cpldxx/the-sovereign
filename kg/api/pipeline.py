@@ -18,7 +18,7 @@ class IngestRequest(BaseModel):
     content_status: Literal["full", "partial"] = "full"
     # What kind of source (core/sources.py) — read from `source` when not given; it caps the facts' reliability.
     tier: Literal["paper", "official", "reference", "press", "user", "web", "blog"] | None = None
-    # Research: refuse a copy of an exam or practice source under another address (core/exam.py: held out).
+    # Research: refuse an exam or practice source, and a copy of one under another address (core/exam.py: held out).
     hold_out: bool = False
 
 
@@ -30,7 +30,7 @@ async def ingest(domain_name: str, request: IngestRequest, req: Request):
     Usually 2 LLM calls (+1 per ambiguity kind) and 1 embedding call per ~8k-char chunk.
     duplicate: the text was read already (pending: being read). failed + reason: a model call or a write failed —
     the episode is kept as failed and the same text is read again on the next ingest. held_out: with hold_out, the
-    text is a copy of this exam source and wasn't read.
+    text is this exam source or a copy of it and wasn't read.
     """
     try:
         load_domain(domain_name)

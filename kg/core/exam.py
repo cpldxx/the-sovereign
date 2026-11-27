@@ -268,11 +268,13 @@ async def held_out(db: ArcadeDB, domain: str) -> set[str]:
 
 
 async def held_sketches(db: ArcadeDB, domain: str) -> dict[str, dict]:
-    """The near-duplicate sketches of the held-out sources ({url: sketch}): research must not read a copy of one under
-    another address either — a reprint found after the exam was set would teach the graph its answers."""
+    """The held-out sources with their near-duplicate sketches ({url: sketch}): research must not read a copy of one
+    under another address either — a reprint found after the exam was set would teach the graph its answers. A source
+    not sketched yet is there with {}: it is still refused under its own address."""
     held = await held_out(db, domain)
     doc = await _setting(db, domain, SKETCHES) if held else None
-    return {u: s for u, s in ((doc or {}).get("value") or {}).items() if u in held and s}
+    sketches = (doc or {}).get("value") or {}
+    return {u: sketches.get(u) or {} for u in sorted(held)}
 
 
 def _sketch(page: dict) -> dict:

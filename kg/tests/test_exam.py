@@ -258,10 +258,20 @@ async def test_an_exam_set_before_sketches_gets_them_at_its_next_sitting(domain,
         return {"url": url, "title": "FDA approves Leqembi", "status": "ok", "markdown": PAGE}
     monkeypatch.setattr(exam, "_fetch", fetch)
     await exam.ensure(db, d)
-    assert fetched == [FDA] and not await exam.held_sketches(db, d)
+    held = await exam.held_sketches(db, d)
+    assert fetched == [FDA] and held == {FDA: {}}                             # no sketch yet: still held by its address
+
+    async def read(*a, **k):
+        return {"read": True}
+    monkeypatch.setattr(kg, "load_domain", lambda d: {"ontology": {"entity_types": ["entity"],
+                                                                   "relation_types": ["relates_to"]}, "config": {}})
+    monkeypatch.setattr(kg, "_ingest", read)
+    assert await kg.ingest(db, d, PAGE, FDA, held=held) == {"held_out": FDA}
+    assert await kg.ingest(db, d, PAGE, FDA + "#main", held=held) == {"held_out": FDA}
+    assert await kg.ingest(db, d, PAGE, "https://mirror.example/leqembi", held=held) == {"read": True}  # not known as a copy yet
     await exam.ensure(db, d)
     await exam.ensure(db, d)
-    assert fetched == [FDA, FDA] and list(await exam.held_sketches(db, d)) == [FDA]
+    assert fetched == [FDA, FDA] and (await exam.held_sketches(db, d))[FDA].get("sketch")
 
 
 @pytest.mark.db
